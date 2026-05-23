@@ -13,8 +13,10 @@ import { CategoriesTile } from './tiles/CategoriesTile';
 import { ConnectionsTile } from './tiles/ConnectionsTile';
 import { AlertsTile } from './tiles/AlertsTile';
 import { AccountSpendTile } from './tiles/AccountSpendTile';
+import { AnalysisTile } from './tiles/AnalysisTile';
 import { ConnectionsManager } from './ConnectionsManager';
 import { TransactionDrawer } from './TransactionDrawer';
+import { TransactionExplorer } from './TransactionExplorer';
 
 /** Display-only caption for a business tile, computed from the loaded transactions. */
 function captionFor(biz: Business, txns: Transaction[]): string {
@@ -38,6 +40,7 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
   const [comparisonBasis, setComparisonBasis] = useState<'month' | 'year'>('month');
   const [refreshKey, setRefreshKey] = useState(0);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [transactionsOpen, setTransactionsOpen] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<{ state: 'idle' | 'uploading' | 'processing' | 'matched' | 'pending' | 'error'; message?: string }>({ state: 'idle' });
@@ -56,9 +59,20 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
   if (loading || !data) return <StateScreen>Loading…</StateScreen>;
 
   const { businesses, transactions, categories, categoryComparisons, connections, accounts, alerts, summary } = data;
+  const selectedBusiness = businesses.find((business) => business.id === businessFilter);
   const selectedBusinessDbId = businessFilter === 'all'
     ? undefined
-    : businesses.find((business) => business.id === businessFilter)?.dbId;
+    : selectedBusiness?.dbId;
+  const heroContext = selectedAccountIds.length
+    ? `filtered to ${selectedAccountIds.length} account${selectedAccountIds.length === 1 ? '' : 's'}`
+    : selectedBusiness
+      ? `for ${selectedBusiness.name}`
+      : 'across watched accounts';
+  const watchedCount = accounts.filter((account) => account.enabled).length;
+  const ignoredCount = accounts.length - watchedCount;
+  const heroDetail = ignoredCount > 0
+    ? `${watchedCount} watched · ${ignoredCount} ignored`
+    : `${watchedCount} watched account${watchedCount === 1 ? '' : 's'}`;
 
   const handleUpload = async (file: File) => {
     setReceiptStatus({ state: 'uploading', message: file.name });
@@ -117,12 +131,13 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
           flex: 1,
           display: 'grid',
           gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
-          gridTemplateRows: 'repeat(4, minmax(0, 1fr))',
+          gridAutoRows: 'minmax(145px, auto)',
           gap: 10,
           minHeight: 0,
+          alignItems: 'stretch',
         }}
       >
-        <SpendHeroTile summary={summary} />
+        <SpendHeroTile summary={summary} contextLabel={heroContext} detailLabel={heroDetail} />
 
         {businesses.map((b) => (
           <BusinessTile
@@ -145,7 +160,19 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
           onManageAccounts={() => setConnectionsOpen(true)}
         />
         <ReceiptDropTile onFile={handleUpload} status={receiptStatus} />
-        <ActivityTile transactions={transactions} businesses={businesses} totalCount={transactions.length} onSelect={setSelectedTransaction} />
+        <ActivityTile
+          transactions={transactions}
+          businesses={businesses}
+          totalCount={transactions.length}
+          onSelect={setSelectedTransaction}
+          onViewAll={() => setTransactionsOpen(true)}
+        />
+        <AnalysisTile
+          businesses={businesses}
+          accounts={accounts}
+          transactions={transactions}
+          onOpenTransactions={() => setTransactionsOpen(true)}
+        />
         <CategoriesTile
           categories={categories}
           comparisons={categoryComparisons}
@@ -169,6 +196,19 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
         categories={categories}
         onClose={() => setSelectedTransaction(null)}
         onSaved={() => setRefreshKey((key) => key + 1)}
+      />
+      <TransactionExplorer
+        open={transactionsOpen}
+        businesses={businesses}
+        accounts={accounts}
+        categories={categories}
+        initialBusiness={businessFilter}
+        initialAccountIds={selectedAccountIds}
+        initialQuery={query}
+        onClose={() => setTransactionsOpen(false)}
+        onSelect={(transaction) => {
+          setSelectedTransaction(transaction);
+        }}
       />
     </div>
   );

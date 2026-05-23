@@ -6,9 +6,11 @@ import { Sparkline } from './Sparkline';
 
 interface Props {
   summary: SpendSummary;
+  contextLabel: string;
+  detailLabel?: string;
 }
 
-export function SpendHeroTile({ summary }: Props) {
+export function SpendHeroTile({ summary, contextLabel, detailLabel }: Props) {
   return (
     <Tile
       bg={colors.cream}
@@ -32,7 +34,7 @@ export function SpendHeroTile({ summary }: Props) {
         >
           SPEND · {summary.periodLabel}
         </span>
-        <span style={{ fontSize: 11.5, color: colors.dim }}>across all three businesses</span>
+        <span style={{ fontSize: 11.5, color: colors.dim }}>{contextLabel}</span>
         <span style={{ flex: 1 }} />
         <span
           style={{
@@ -64,6 +66,7 @@ export function SpendHeroTile({ summary }: Props) {
         <Sparkline points={summary.trailingMonths} baseColor={colors.ink} highlightColor={colors.coral} />
         <div style={{ fontSize: 11, color: colors.dim, lineHeight: 1.5 }}>
           <div style={{ color: colors.ink, fontWeight: 600 }}>Trailing 12 months</div>
+          {detailLabel && <div style={{ color: colors.ink }}>{detailLabel}</div>}
           <div>
             Last month: <span style={{ color: colors.ink }}>{fmt$k(summary.lastMonth)}</span>
           </div>

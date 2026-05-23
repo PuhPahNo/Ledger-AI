@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, getTableColumns, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
@@ -25,8 +25,16 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       q: z.string().optional(),
       limit: z.coerce.number().optional(),
       accounts: z.string().optional(),
+      categories: z.string().optional(),
+      receipts: z.string().optional(),
+      sort: z.enum(['date', 'amount', 'merchant', 'business', 'category', 'account']).default('date'),
+      dir: z.enum(['asc', 'desc']).default('desc'),
     }).parse(request.query);
     const accountIds = parseAccountIds(query.accounts);
+    const categoryNames = parseList(query.categories);
+    const receiptStatuses = parseList(query.receipts).filter(isReceiptStatus);
+    const sortColumn = transactionSortColumn(query.sort);
+    const sortDirection = query.dir === 'asc' ? asc : desc;
 
     const rows = await db
       .select({
@@ -60,6 +68,8 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         query.from ? gte(transactions.date, query.from) : sql`true`,
         query.to ? lte(transactions.date, query.to) : sql`true`,
         accountSpendFilter(accountIds),
+        categoryNames.length ? inArray(categories.name, categoryNames) : sql`true`,
+        receiptStatuses.length ? inArray(transactions.receiptStatus, receiptStatuses) : sql`true`,
         query.q ? or(
           ilike(transactions.merchant, `%${query.q}%`),
           ilike(transactions.sourceLabel, `%${query.q}%`),
@@ -67,8 +77,8 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
           ilike(categories.name, `%${query.q}%`),
         ) : sql`true`,
       ))
-      .orderBy(desc(transactions.date), desc(transactions.createdAt))
-      .limit(query.limit ?? 100);
+      .orderBy(sortDirection(sortColumn), desc(transactions.createdAt))
+      .limit(Math.min(query.limit ?? 100, 2000));
     return rows.map(toApiTransaction);
   });
 
@@ -395,6 +405,10 @@ function isoDate(date: Date): string {
 }
 
 function parseAccountIds(value?: string): string[] {
+  return parseList(value);
+}
+
+function parseList(value?: string): string[] {
   return (value ?? '')
     .split(',')
     .map((item) => item.trim())
@@ -408,4 +422,28 @@ function accountSpendFilter(accountIds: string[]) {
 
 function joinedTransactionSpendFilter(accountIds: string[]) {
   return sql`${transactions.id} IS NULL OR (${accountSpendFilter(accountIds)})`;
+}
+
+function transactionSortColumn(sort: 'date' | 'amount' | 'merchant' | 'business' | 'category' | 'account') {
+  switch (sort) {
+    case 'amount':
+      return transactions.amountCents;
+    case 'merchant':
+      return transactions.merchant;
+    case 'business':
+      return businesses.name;
+    case 'category':
+      return categories.name;
+    case 'account':
+      return transactions.sourceLabel;
+    default:
+      return transactions.date;
+  }
+}
+
+const receiptStatuses = ['matched', 'pending', 'missing', 'n/a'] as const;
+type ReceiptStatus = typeof receiptStatuses[number];
+
+function isReceiptStatus(value: string): value is ReceiptStatus {
+  return (receiptStatuses as readonly string[]).includes(value);
 }

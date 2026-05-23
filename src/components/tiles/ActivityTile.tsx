@@ -10,12 +10,13 @@ interface Props {
   /** Total count for the current API result set. */
   totalCount: number;
   onSelect?: (transaction: Transaction) => void;
+  onViewAll?: () => void;
 }
 
 const FILTERS = ['All', 'Software', 'Travel', 'Meals'] as const;
 type Filter = (typeof FILTERS)[number];
 
-export function ActivityTile({ transactions, businesses, totalCount, onSelect }: Props) {
+export function ActivityTile({ transactions, businesses, totalCount, onSelect, onViewAll }: Props) {
   const [filter, setFilter] = useState<Filter>('All');
 
   const visible = (filter === 'All' ? transactions : transactions.filter((t) => t.cat === filter)).slice(0, 7);
@@ -37,6 +38,23 @@ export function ActivityTile({ transactions, businesses, totalCount, onSelect }:
           {visible.length} of {totalCount}
         </span>
         <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={onViewAll}
+          style={{
+            border: `1px solid ${colors.ink2}`,
+            borderRadius: 99,
+            background: 'transparent',
+            color: colors.ink,
+            padding: '3px 8px',
+            fontSize: 10.5,
+            fontWeight: 900,
+            cursor: 'pointer',
+            marginRight: 6,
+          }}
+        >
+          View all
+        </button>
         <div style={{ display: 'flex', gap: 4 }}>
           {FILTERS.map((s) => (
             <button
