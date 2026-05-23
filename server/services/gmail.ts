@@ -4,6 +4,7 @@ import { getEnv } from '../config/env.js';
 import { db } from '../db/client.js';
 import { connections, receipts } from '../db/schema.js';
 import { decryptText, encryptText } from '../lib/crypto.js';
+import { serviceUnavailable } from '../lib/errors.js';
 import { storage } from './storage.js';
 
 const gmailScopes = ['https://www.googleapis.com/auth/gmail.readonly'];
@@ -18,7 +19,9 @@ export function googleOAuthClient() {
 
 export function gmailOAuthUrl(state: string): string {
   const client = googleOAuthClient();
-  if (!client) throw new Error('Google OAuth is not configured');
+  if (!client) {
+    serviceUnavailable('Google OAuth is not configured. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI in Render, then redeploy.');
+  }
   return client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
@@ -29,7 +32,9 @@ export function gmailOAuthUrl(state: string): string {
 
 export async function connectGmail(code: string, businessId?: string): Promise<string> {
   const client = googleOAuthClient();
-  if (!client) throw new Error('Google OAuth is not configured');
+  if (!client) {
+    serviceUnavailable('Google OAuth is not configured. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI in Render, then redeploy.');
+  }
   const tokenResponse = await client.getToken(code);
   client.setCredentials(tokenResponse.tokens);
   const gmail = google.gmail({ version: 'v1', auth: client });

@@ -17,12 +17,10 @@ export class ApiError extends Error {
 
 export async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const isFormData = init?.body instanceof FormData;
-  const headers = isFormData
-    ? (init?.headers ?? {})
-    : {
-        'Content-Type': 'application/json',
-        ...(init?.headers ?? {}),
-      };
+  const headers = {
+    ...(init?.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
+    ...(init?.headers ?? {}),
+  };
   const res = await fetch(`${BASE}${path}`, {
     credentials: 'include',
     headers,
@@ -31,7 +29,18 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new ApiError(res.status, `${init?.method ?? 'GET'} ${path} → ${res.status}`, body);
+    let parsed: unknown = body;
+    let message = `${init?.method ?? 'GET'} ${path} → ${res.status}`;
+    try {
+      parsed = body ? JSON.parse(body) : undefined;
+      if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+        const error = (parsed as { error?: unknown }).error;
+        if (typeof error === 'string' && error.trim()) message = error;
+      }
+    } catch {
+      if (body.trim()) message = body;
+    }
+    throw new ApiError(res.status, message, parsed);
   }
 
   // 204 = no content; let endpoints that return nothing call this as http<void>().

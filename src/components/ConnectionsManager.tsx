@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Building2, CheckCircle2, CreditCard, Mail, PlugZap, RefreshCcw, Trash2, X } from 'lucide-react';
 import { usePlaidLink } from 'react-plaid-link';
 import {
+  ApiError,
   createPlaidLinkToken,
   disconnectConnection,
   exchangePlaidPublicToken,
@@ -28,6 +29,7 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
   const [businessId, setBusinessId] = useState(firstBusiness);
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [pendingPlaidOpen, setPendingPlaidOpen] = useState(false);
+  const [busy, setBusy] = useState<'plaid' | 'gmail' | null>(null);
   const [status, setStatus] = useState('');
   const activePlaid = useMemo(() => connections.filter((c) => c.kind !== 'gmail' && c.status !== 'disconnected').length, [connections]);
   const activeGmail = useMemo(() => connections.filter((c) => c.kind === 'gmail' && c.status !== 'disconnected').length, [connections]);
@@ -37,13 +39,27 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     if (!businessId && firstBusiness) setBusinessId(firstBusiness);
   }, [businessId, firstBusiness]);
 
-  const { open: openPlaid, ready } = usePlaidLink({
+  const { open: openPlaid, ready, error: plaidLoadError } = usePlaidLink({
     token: linkToken,
     onSuccess: async (publicToken) => {
-      setStatus('Connecting Plaid...');
-      await exchangePlaidPublicToken(publicToken, businessId || undefined);
-      setStatus('Plaid connected.');
-      onRefresh();
+      try {
+        setBusy('plaid');
+        setStatus('Connecting Plaid...');
+        await exchangePlaidPublicToken(publicToken, businessId || undefined);
+        setStatus('Plaid connected.');
+        onRefresh();
+      } catch (error) {
+        setStatus(readableError(error));
+      } finally {
+        setBusy(null);
+        setLinkToken(null);
+      }
+    },
+    onExit: (error) => {
+      if (error) setStatus(error.display_message || error.error_message || 'Plaid was closed before connecting.');
+      else if (pendingPlaidOpen || busy === 'plaid') setStatus('Plaid was closed before connecting.');
+      setPendingPlaidOpen(false);
+      setBusy(null);
     },
   });
 
@@ -51,8 +67,28 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     if (pendingPlaidOpen && ready) {
       setPendingPlaidOpen(false);
       openPlaid();
+      setStatus('Plaid window opened.');
+      setBusy(null);
     }
   }, [openPlaid, pendingPlaidOpen, ready]);
+
+  useEffect(() => {
+    if (plaidLoadError) {
+      setPendingPlaidOpen(false);
+      setBusy(null);
+      setStatus('Plaid could not load in this browser. Check content blockers and try again.');
+    }
+  }, [plaidLoadError]);
+
+  useEffect(() => {
+    if (!pendingPlaidOpen) return;
+    const timeout = window.setTimeout(() => {
+      setPendingPlaidOpen(false);
+      setBusy(null);
+      setStatus('Plaid did not finish loading. Check Plaid credentials and browser content blockers, then try again.');
+    }, 15000);
+    return () => window.clearTimeout(timeout);
+  }, [pendingPlaidOpen]);
 
   if (!open) return null;
 
@@ -61,16 +97,31 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
       setStatus('Plaid limit reached. Disconnect one before adding another.');
       return;
     }
-    setStatus('Preparing Plaid...');
-    const token = await createPlaidLinkToken();
-    setLinkToken(token.link_token);
-    setPendingPlaidOpen(true);
+    try {
+      setBusy('plaid');
+      setStatus('Preparing Plaid...');
+      const token = await createPlaidLinkToken();
+      setLinkToken(token.link_token);
+      setStatus('Loading Plaid window...');
+      setPendingPlaidOpen(true);
+    } catch (error) {
+      setBusy(null);
+      setPendingPlaidOpen(false);
+      setStatus(readableError(error));
+    }
   };
 
   const startGmail = async () => {
-    setStatus('Opening Google...');
-    const result = await getGmailOAuthUrl(businessId || undefined);
-    window.location.href = result.url;
+    try {
+      setBusy('gmail');
+      setStatus('Opening Google...');
+      const result = await getGmailOAuthUrl(businessId || undefined);
+      if (!result.url) throw new Error('Google did not return an OAuth URL.');
+      window.location.assign(result.url);
+    } catch (error) {
+      setBusy(null);
+      setStatus(readableError(error));
+    }
   };
 
   const refreshConnection = async (connection: Connection) => {
@@ -106,13 +157,16 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
             icon={<CreditCard size={19} />}
             title="Plaid"
             detail={`${activePlaid}/10 active`}
-            disabled={activePlaid >= 10}
+            disabled={activePlaid >= 10 || Boolean(busy)}
+            loading={busy === 'plaid'}
             onClick={startPlaid}
           />
           <QuickAction
             icon={<Mail size={19} />}
             title="Gmail"
             detail={`${activeGmail} inboxes`}
+            disabled={Boolean(busy)}
+            loading={busy === 'gmail'}
             onClick={startGmail}
           />
           <div style={defaultBusinessStyle}>
@@ -163,13 +217,33 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
   );
 }
 
-function QuickAction({ icon, title, detail, disabled = false, onClick }: { icon: React.ReactNode; title: string; detail: string; disabled?: boolean; onClick: () => void }) {
+function readableError(error: unknown): string {
+  if (error instanceof ApiError) return error.message;
+  if (error instanceof Error && error.message) return error.message;
+  return 'Something went wrong. Try again.';
+}
+
+function QuickAction({
+  icon,
+  title,
+  detail,
+  disabled = false,
+  loading = false,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  detail: string;
+  disabled?: boolean;
+  loading?: boolean;
+  onClick: () => void;
+}) {
   return (
     <button type="button" disabled={disabled} onClick={onClick} style={{ ...quickActionStyle, opacity: disabled ? 0.45 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }}>
       <span style={quickIconStyle}>{icon}</span>
       <span style={{ display: 'grid', textAlign: 'left' }}>
         <span style={{ fontWeight: 900 }}>{title}</span>
-        <span style={{ fontSize: 11, color: colors.dim }}>{detail}</span>
+        <span style={{ fontSize: 11, color: colors.dim }}>{loading ? 'Working...' : detail}</span>
       </span>
     </button>
   );

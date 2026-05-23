@@ -24,6 +24,10 @@ export function forbidden(message = 'Forbidden'): never {
   throw new HttpError(403, message);
 }
 
+export function serviceUnavailable(message = 'Service unavailable', details?: unknown): never {
+  throw new HttpError(503, message, details);
+}
+
 export function sendError(reply: FastifyReply, error: unknown): void {
   if (error instanceof HttpError) {
     void reply.status(error.statusCode).send({ error: error.message, details: error.details });

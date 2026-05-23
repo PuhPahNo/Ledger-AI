@@ -10,6 +10,7 @@ import { getEnv } from '../config/env.js';
 import { db } from '../db/client.js';
 import { accounts, connections, transactions } from '../db/schema.js';
 import { decryptText, encryptText } from '../lib/crypto.js';
+import { serviceUnavailable } from '../lib/errors.js';
 import { resolveTransactionBusinessId } from './accountAssignment.js';
 import { categorizeTransaction } from './categorization.js';
 
@@ -30,10 +31,7 @@ export function plaidClient(): PlaidApi | null {
 export async function createPlaidLinkToken(userId: string): Promise<{ link_token: string; expiration: string }> {
   const client = plaidClient();
   if (!client) {
-    return {
-      link_token: 'development-plaid-link-token',
-      expiration: new Date(Date.now() + 30 * 60_000).toISOString(),
-    };
+    serviceUnavailable('Plaid is not configured. Add PLAID_CLIENT_ID and PLAID_SECRET in Render, then redeploy.');
   }
   const env = getEnv();
   const res = await client.linkTokenCreate({
