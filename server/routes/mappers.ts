@@ -1,0 +1,63 @@
+import type { Alert, Business, Category, Connection, Transaction } from '../db/schema.js';
+
+export function toApiBusiness(row: Business) {
+  return {
+    id: row.key,
+    dbId: row.id,
+    name: row.name,
+    short: row.short,
+    color: row.color,
+    hue: row.hue,
+  };
+}
+
+export function toApiConnection(row: Connection, businessKey?: string) {
+  return {
+    id: row.id,
+    kind: row.kind,
+    label: row.label,
+    mask: row.mask ? `•• ${row.mask.replace(/^••\s*/, '')}` : undefined,
+    status: row.status,
+    last: row.lastSyncAt ? row.lastSyncAt.toISOString() : 'never',
+    lastSyncAt: row.lastSyncAt?.toISOString() ?? null,
+    txns: row.syncedTransactionCount,
+    biz: businessKey ?? 'all',
+  };
+}
+
+export function toApiTransaction(row: Transaction & { businessKey?: string; categoryName?: string | null }) {
+  return {
+    id: row.id,
+    date: row.date,
+    merchant: row.merchant,
+    amountCents: row.amountCents,
+    biz: row.businessKey ?? row.businessId,
+    cat: row.categoryName ?? 'Uncategorized',
+    receipt: row.receiptStatus,
+    src: row.sourceLabel,
+    note: row.note ?? undefined,
+    flag: row.flag ?? undefined,
+    pending: row.pending,
+  };
+}
+
+export function toApiCategory(row: Category & { amountCents?: number; count?: number; delta?: string }) {
+  return {
+    id: row.id,
+    name: row.name,
+    amountCents: row.amountCents ?? 0,
+    delta: row.delta ?? '+0%',
+    count: row.count ?? 0,
+  };
+}
+
+export function toApiAlert(row: Alert) {
+  return {
+    id: row.id,
+    kind: row.kind,
+    title: row.title,
+    detail: row.detail,
+    severity: row.severity,
+    status: row.status,
+  };
+}

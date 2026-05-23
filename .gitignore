@@ -1,0 +1,17 @@
+node_modules
+dist
+dist-server
+.vite
+.DS_Store
+.env
+.env.local
+.env.*.local
+*.log
+*.tsbuildinfo
+coverage
+storage
+
+# Design handoff artifacts — kept locally, not in source control
+_design/
+design
+design.gz
