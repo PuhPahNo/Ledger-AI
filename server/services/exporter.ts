@@ -1,13 +1,17 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import archiver from 'archiver';
+import type archiverType from 'archiver';
 import { and, eq, gte, lte, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { businesses, categories, categoryRules, exportJobs, receipts, transactions } from '../db/schema.js';
 import { toCsv } from '../lib/csv.js';
 import { storage } from './storage.js';
+
+const require = createRequire(import.meta.url);
+const archiver = require('archiver') as typeof archiverType;
 
 export async function buildExport(exportJobId: string): Promise<void> {
   const job = await db.query.exportJobs.findFirst({ where: eq(exportJobs.id, exportJobId) });

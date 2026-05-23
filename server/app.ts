@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import fastifyCookie from '@fastify/cookie';
 import fastifyCors from '@fastify/cors';
@@ -64,7 +65,11 @@ export async function buildApp() {
     });
   }, { prefix: '/api' });
 
-  const dist = path.resolve(here, '../dist');
+  const distCandidates = [
+    path.resolve(here, '../dist'),
+    path.resolve(here, '../../dist'),
+  ];
+  const dist = distCandidates.find((candidate) => fs.existsSync(candidate)) ?? distCandidates[0];
   await app.register(fastifyStatic, {
     root: dist,
     prefix: '/',
