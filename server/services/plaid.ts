@@ -66,7 +66,6 @@ export async function exchangePlaidPublicToken(input: {
     encryptedAccessToken: encryptText(accessToken),
   }).returning();
 
-  await syncPlaidConnection(connection.id);
   return connection.id;
 }
 

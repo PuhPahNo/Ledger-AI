@@ -29,6 +29,7 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     }
     const connectionId = await exchangePlaidPublicToken({ publicToken: body.public_token, businessId: body.businessId });
     await audit(request, user, 'connect_plaid', 'connection', connectionId);
+    await enqueue('plaid.sync', { connectionId });
     const row = await db.query.connections.findFirst({ where: eq(connections.id, connectionId) });
     if (!row) notFound();
     return toApiConnection(row);

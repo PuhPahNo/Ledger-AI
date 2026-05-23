@@ -46,7 +46,7 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
         setBusy('plaid');
         setStatus('Connecting Plaid...');
         await exchangePlaidPublicToken(publicToken, businessId || undefined);
-        setStatus('Plaid connected.');
+        setStatus('Plaid connected. Initial sync is running in the background.');
         onRefresh();
       } catch (error) {
         setStatus(readableError(error));
