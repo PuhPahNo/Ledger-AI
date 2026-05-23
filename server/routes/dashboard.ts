@@ -228,41 +228,34 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
       : null;
     const rows = await db.execute(sql`
-      SELECT coalesce(${categories.name}, 'Uncategorized') AS category,
-             coalesce(abs(sum(CASE
-               WHEN ${transactions.date} >= ${window.currentFrom}
-                AND ${transactions.date} <= ${window.currentTo}
-               THEN ${transactions.amountCents}
-               ELSE 0
-             END)), 0)::int AS current_cents,
-             coalesce(abs(sum(CASE
-               WHEN ${transactions.date} >= ${window.previousFrom}
-                AND ${transactions.date} <= ${window.previousTo}
-               THEN ${transactions.amountCents}
-               ELSE 0
-             END)), 0)::int AS previous_cents
-      FROM ${transactions}
-      INNER JOIN ${businesses} ON ${transactions.businessId} = ${businesses.id}
-      LEFT JOIN ${categories} ON ${transactions.categoryId} = ${categories.id}
-      WHERE ${transactions.amountCents} < 0
-        AND ${transactions.date} >= ${window.previousFrom}
-        AND ${transactions.date} <= ${window.currentTo}
-        AND (${selectedBusiness?.id ?? null}::uuid IS NULL OR ${transactions.businessId} = ${selectedBusiness?.id ?? null}::uuid)
-        AND (${query.q ?? null}::text IS NULL OR coalesce(${categories.name}, 'Uncategorized') ILIKE ${`%${query.q ?? ''}%`})
-      GROUP BY coalesce(${categories.name}, 'Uncategorized')
-      HAVING coalesce(abs(sum(CASE
-               WHEN ${transactions.date} >= ${window.currentFrom}
-                AND ${transactions.date} <= ${window.currentTo}
-               THEN ${transactions.amountCents}
-               ELSE 0
-             END)), 0) > 0
-          OR coalesce(abs(sum(CASE
-               WHEN ${transactions.date} >= ${window.previousFrom}
-                AND ${transactions.date} <= ${window.previousTo}
-               THEN ${transactions.amountCents}
-               ELSE 0
-             END)), 0) > 0
-      ORDER BY current_cents + previous_cents DESC
+      WITH category_totals AS (
+        SELECT coalesce(${categories.name}, 'Uncategorized') AS category,
+               coalesce(abs(sum(CASE
+                 WHEN ${transactions.date} >= ${window.currentFrom}
+                  AND ${transactions.date} <= ${window.currentTo}
+                 THEN ${transactions.amountCents}
+                 ELSE 0
+               END)), 0)::int AS current_cents,
+               coalesce(abs(sum(CASE
+                 WHEN ${transactions.date} >= ${window.previousFrom}
+                  AND ${transactions.date} <= ${window.previousTo}
+                 THEN ${transactions.amountCents}
+                 ELSE 0
+               END)), 0)::int AS previous_cents
+        FROM ${transactions}
+        INNER JOIN ${businesses} ON ${transactions.businessId} = ${businesses.id}
+        LEFT JOIN ${categories} ON ${transactions.categoryId} = ${categories.id}
+        WHERE ${transactions.amountCents} < 0
+          AND ${transactions.date} >= ${window.previousFrom}
+          AND ${transactions.date} <= ${window.currentTo}
+          AND (${selectedBusiness?.id ?? null}::uuid IS NULL OR ${transactions.businessId} = ${selectedBusiness?.id ?? null}::uuid)
+          AND (${query.q ?? null}::text IS NULL OR coalesce(${categories.name}, 'Uncategorized') ILIKE ${`%${query.q ?? ''}%`})
+        GROUP BY coalesce(${categories.name}, 'Uncategorized')
+      )
+      SELECT category, current_cents, previous_cents
+      FROM category_totals
+      WHERE current_cents > 0 OR previous_cents > 0
+      ORDER BY (current_cents + previous_cents) DESC
       LIMIT 12
     `);
     return (rows.rows as Array<{ category: string; current_cents: number; previous_cents: number }>).map((row) => ({

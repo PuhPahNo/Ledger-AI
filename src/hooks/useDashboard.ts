@@ -63,7 +63,12 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
       listBusinesses(),
       listTransactions({ biz: params.business ?? 'all', q: params.query || undefined }),
       listCategories(params.period, params.business ?? 'all', params.query || undefined),
-      listCategoryComparisons({ period: params.period, biz: params.business ?? 'all', q: params.query || undefined, basis: params.comparisonBasis ?? 'month' }),
+      listCategoryComparisons({
+        period: params.period,
+        biz: params.business ?? 'all',
+        q: params.query || undefined,
+        basis: params.comparisonBasis ?? 'month',
+      }).catch(() => []),
       listConnections({ biz: params.business ?? 'all' }),
       listAccounts({ biz: params.business ?? 'all' }),
       listAlerts({ biz: params.business ?? 'all' }),
