@@ -3,7 +3,7 @@ services:
     name: ledger-ai-web
     runtime: node
     plan: starter
-    buildCommand: npm ci && npm run build && npm run db:migrate
+    buildCommand: npm ci --include=dev && npm run build && npm run db:migrate
     startCommand: npm run start
     envVars:
       - key: NODE_ENV
