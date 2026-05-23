@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
-import { receipts } from '../db/schema.js';
+import { businesses, receipts } from '../db/schema.js';
 import { enqueue } from '../jobs/queue.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
@@ -36,9 +36,18 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
     }
     const buffer = Buffer.concat(chunks);
     const safeName = sanitizeFileName(file.filename);
+    const rawBusinessId = (file.fields as Record<string, { value?: unknown }>).businessId?.value;
+    const businessId = typeof rawBusinessId === 'string' && rawBusinessId.length > 0
+      ? z.string().uuid().parse(rawBusinessId)
+      : undefined;
+    if (businessId) {
+      const business = await db.query.businesses.findFirst({ where: eq(businesses.id, businessId) });
+      if (!business) notFound('Business not found');
+    }
     const key = `receipts/upload/${new Date().toISOString().slice(0, 10)}/${cryptoRandom()}-${safeName}`;
     await storage().put({ key, body: buffer, contentType: file.mimetype });
     const [receipt] = await db.insert(receipts).values({
+      businessId,
       source: 'upload',
       status: 'pending',
       fileKey: key,

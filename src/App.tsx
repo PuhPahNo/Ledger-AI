@@ -31,6 +31,6 @@ export default function App() {
 
   if (checking) return null;
   if (!user) return <LoginPage onLogin={setUser} />;
-  if (view === 'admin') return <AdminPage onViewChange={setView} onLogout={handleLogout} />;
-  return <Dashboard onViewChange={setView} onLogout={handleLogout} />;
+  if (view === 'admin') return <AdminPage user={user} onViewChange={setView} onLogout={handleLogout} />;
+  return <Dashboard user={user} onViewChange={setView} onLogout={handleLogout} />;
 }

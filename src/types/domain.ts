@@ -12,6 +12,7 @@ export interface Business {
   /** Hex used everywhere this business is shown. */
   color: string;
   hue: number;
+  active?: boolean;
 }
 
 export type ReceiptStatus =
@@ -27,6 +28,10 @@ export type TransactionFlag =
 
 export interface Transaction {
   id: string;
+  businessId?: string;
+  accountId?: string | null;
+  categoryId?: string | null;
+  receiptId?: string | null;
   /** ISO 8601 date — UI formats it via lib/format. */
   date: string;
   /** Display string for now ("May 22"); backend should send ISO + we'll format. */
@@ -46,6 +51,7 @@ export interface Transaction {
 
 export interface Category {
   id?: string;
+  businessId?: string | null;
   name: string;
   amount: number;
   amountCents?: number;
@@ -59,6 +65,7 @@ export type ConnectionStatus = 'live' | 'reauth' | 'disconnected';
 
 export interface Connection {
   id?: string;
+  businessId?: string | null;
   kind: ConnectionKind;
   label: string;
   /** Card last-four or bank mask — undefined for gmail. */
@@ -71,7 +78,25 @@ export interface Connection {
   biz: BusinessId | 'all';
 }
 
-export type AlertKind = 'dup' | 'missing' | 'orphan' | 'spike';
+export type AccountKind = 'checking' | 'savings' | 'credit' | 'other';
+
+export interface Account {
+  id: string;
+  connectionId: string;
+  businessId?: string | null;
+  biz: BusinessId | 'all';
+  kind: AccountKind;
+  name: string;
+  officialName?: string | null;
+  mask?: string | null;
+  enabled: boolean;
+  currentBalanceCents?: number | null;
+  availableBalanceCents?: number | null;
+  connectionLabel?: string;
+  connectionStatus?: ConnectionStatus;
+}
+
+export type AlertKind = 'dup' | 'missing' | 'orphan' | 'spike' | 'reauth';
 export type AlertSeverity = 'warn' | 'todo' | 'info';
 
 export interface Alert {

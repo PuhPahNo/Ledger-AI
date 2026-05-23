@@ -32,3 +32,16 @@ export function logout(): Promise<void> {
   if (useMockApi) return Promise.resolve();
   return http<void>('/auth/logout', { method: 'POST' });
 }
+
+export function setupTotp(): Promise<{ otpauth: string; qrDataUrl: string }> {
+  if (useMockApi) return Promise.resolve({ otpauth: 'otpauth://mock', qrDataUrl: '' });
+  return http<{ otpauth: string; qrDataUrl: string }>('/auth/totp/setup', { method: 'POST' });
+}
+
+export function enableTotp(code: string): Promise<{ ok: true }> {
+  if (useMockApi) return Promise.resolve({ ok: true });
+  return http<{ ok: true }>('/auth/totp/enable', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  });
+}

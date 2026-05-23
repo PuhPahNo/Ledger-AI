@@ -6,12 +6,14 @@ import {
   listConnections,
   listTransactions,
   getSummary,
+  listAccounts,
 } from '@/api';
 import type {
   Alert,
   Business,
   Category,
   Connection,
+  Account,
   SpendSummary,
   Transaction,
 } from '@/types/domain';
@@ -21,6 +23,7 @@ export interface DashboardData {
   transactions: Transaction[];
   categories: Category[];
   connections: Connection[];
+  accounts: Account[];
   alerts: Alert[];
   summary: SpendSummary;
 }
@@ -35,7 +38,14 @@ export interface DashboardState {
  * One hook the dashboard view depends on. Behind it, the API layer decides
  * whether to fan out HTTP calls or hand back fixtures — the view doesn't care.
  */
-export function useDashboard(): DashboardState {
+export interface DashboardParams {
+  business?: string;
+  query?: string;
+  period?: string;
+  refreshKey?: number;
+}
+
+export function useDashboard(params: DashboardParams = {}): DashboardState {
   const [state, setState] = useState<DashboardState>({
     data: null,
     loading: true,
@@ -47,16 +57,17 @@ export function useDashboard(): DashboardState {
 
     Promise.all([
       listBusinesses(),
-      listTransactions(),
-      listCategories(),
-      listConnections(),
-      listAlerts(),
-      getSummary(),
+      listTransactions({ biz: params.business ?? 'all', q: params.query || undefined }),
+      listCategories(params.period, params.business ?? 'all', params.query || undefined),
+      listConnections({ biz: params.business ?? 'all' }),
+      listAccounts({ biz: params.business ?? 'all' }),
+      listAlerts({ biz: params.business ?? 'all' }),
+      getSummary(params.period, params.business ?? 'all'),
     ])
-      .then(([businesses, transactions, categories, connections, alerts, summary]) => {
+      .then(([businesses, transactions, categories, connections, accounts, alerts, summary]) => {
         if (cancelled) return;
         setState({
-          data: { businesses, transactions, categories, connections, alerts, summary },
+          data: { businesses, transactions, categories, connections, accounts, alerts, summary },
           loading: false,
           error: null,
         });
@@ -69,7 +80,7 @@ export function useDashboard(): DashboardState {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [params.business, params.period, params.query, params.refreshKey]);
 
   return state;
 }

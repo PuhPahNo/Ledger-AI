@@ -24,7 +24,12 @@ export function listTransactions(params: ListTransactionsParams = {}): Promise<T
     if (params.biz && params.biz !== 'all') rows = rows.filter((t) => t.biz === params.biz);
     if (params.q) {
       const q = params.q.toLowerCase();
-      rows = rows.filter((t) => t.merchant.toLowerCase().includes(q) || t.cat.toLowerCase().includes(q));
+      rows = rows.filter((t) => (
+        t.merchant.toLowerCase().includes(q) ||
+        t.cat.toLowerCase().includes(q) ||
+        t.src.toLowerCase().includes(q) ||
+        (t.note ?? '').toLowerCase().includes(q)
+      ));
     }
     if (params.limit) rows = rows.slice(0, params.limit);
     return Promise.resolve(rows);
@@ -45,5 +50,23 @@ export function attachReceipt(transactionId: string, receiptId: string): Promise
   return http<ApiTransaction>(`/transactions/${transactionId}/receipt`, {
     method: 'POST',
     body: JSON.stringify({ receiptId }),
+  }).then(mapTransaction);
+}
+
+export function updateTransaction(
+  transactionId: string,
+  body: { businessId?: string; categoryId?: string | null; note?: string | null },
+): Promise<Transaction> {
+  if (useMockApi) {
+    const row = TRANSACTIONS.find((t) => t.id === transactionId);
+    return Promise.resolve(row ? {
+      ...row,
+      ...body,
+      note: body.note === null ? undefined : body.note ?? row.note,
+    } : TRANSACTIONS[0]);
+  }
+  return http<ApiTransaction>(`/transactions/${transactionId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
   }).then(mapTransaction);
 }

@@ -4,9 +4,13 @@ import { Tile } from './Tile';
 
 interface Props {
   onFile: (file: File) => void;
+  status?: {
+    state: 'idle' | 'uploading' | 'processing' | 'matched' | 'pending' | 'error';
+    message?: string;
+  };
 }
 
-export function ReceiptDropTile({ onFile }: Props) {
+export function ReceiptDropTile({ onFile, status = { state: 'idle' } }: Props) {
   const [dragOver, setDragOver] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const cameraInput = useRef<HTMLInputElement>(null);
@@ -56,10 +60,10 @@ export function ReceiptDropTile({ onFile }: Props) {
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontFamily: fonts.display, fontSize: 16, fontWeight: 600, letterSpacing: -0.3 }}>
-          Snap or drop a receipt
+          {titleFor(status.state)}
         </div>
         <div style={{ fontSize: 11, opacity: 0.7, marginTop: 2 }}>
-          We'll OCR it and try to match the transaction automatically.
+          {status.message ?? "We'll OCR it and try to match the transaction automatically."}
         </div>
       </div>
 
@@ -94,6 +98,23 @@ export function ReceiptDropTile({ onFile }: Props) {
       </div>
     </Tile>
   );
+}
+
+function titleFor(state: NonNullable<Props['status']>['state']) {
+  switch (state) {
+    case 'uploading':
+      return 'Uploading receipt...';
+    case 'processing':
+      return 'Receipt is processing';
+    case 'matched':
+      return 'Receipt matched';
+    case 'pending':
+      return 'Needs match review';
+    case 'error':
+      return 'Receipt upload failed';
+    default:
+      return 'Snap or drop a receipt';
+  }
 }
 
 function PrimaryButton({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {

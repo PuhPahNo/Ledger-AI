@@ -1,10 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, getTableColumns, gte, ilike, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, gte, ilike, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
 import { alerts, businesses, categories, connections, transactions } from '../db/schema.js';
 import { notFound } from '../lib/errors.js';
+import { audit } from '../services/audit.js';
+import { normalizeTransactionOverride } from '../services/transactionOverrides.js';
 import { toApiAlert, toApiBusiness, toApiCategory, toApiConnection, toApiTransaction } from './mappers.js';
 
 export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
@@ -54,11 +56,47 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         query.biz && query.biz !== 'all' ? eq(businesses.key, query.biz) : sql`true`,
         query.from ? gte(transactions.date, query.from) : sql`true`,
         query.to ? lte(transactions.date, query.to) : sql`true`,
-        query.q ? ilike(transactions.merchant, `%${query.q}%`) : sql`true`,
+        query.q ? or(
+          ilike(transactions.merchant, `%${query.q}%`),
+          ilike(transactions.sourceLabel, `%${query.q}%`),
+          ilike(transactions.note, `%${query.q}%`),
+          ilike(categories.name, `%${query.q}%`),
+        ) : sql`true`,
       ))
       .orderBy(desc(transactions.date), desc(transactions.createdAt))
       .limit(query.limit ?? 100);
     return rows.map(toApiTransaction);
+  });
+
+  app.patch('/transactions/:id', async (request) => {
+    const user = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = normalizeTransactionOverride(z.object({
+      businessId: z.string().uuid().optional(),
+      categoryId: z.string().uuid().nullable().optional(),
+      note: z.string().nullable().optional(),
+    }).parse(request.body));
+
+    if (body.businessId) {
+      const business = await db.query.businesses.findFirst({ where: eq(businesses.id, body.businessId) });
+      if (!business) notFound('Business not found');
+    }
+    if (body.categoryId) {
+      const category = await db.query.categories.findFirst({ where: eq(categories.id, body.categoryId) });
+      if (!category) notFound('Category not found');
+    }
+
+    const [updated] = await db
+      .update(transactions)
+      .set({ ...body, updatedAt: new Date() })
+      .where(eq(transactions.id, params.id))
+      .returning();
+    if (!updated) notFound('Transaction not found');
+    await audit(request, user, 'update_transaction', 'transaction', params.id, { ...body });
+
+    const row = await transactionById(params.id);
+    if (!row) notFound('Transaction not found');
+    return toApiTransaction(row as any);
   });
 
   app.post('/transactions/:id/receipt', async (request) => {
@@ -84,10 +122,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/categories', async (request) => {
     await requireUser(request);
-    const query = z.object({ period: z.string().optional() }).parse(request.query);
+    const query = z.object({ period: z.string().optional(), biz: z.string().optional(), q: z.string().optional() }).parse(request.query);
     const period = query.period ?? new Date().toISOString().slice(0, 7);
     const from = `${period}-01`;
     const to = `${period}-31`;
+    const selectedBusiness = query.biz && query.biz !== 'all'
+      ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
+      : null;
     const rows = await db
       .select({
         id: categories.id,
@@ -107,8 +148,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         gte(transactions.date, from),
         lte(transactions.date, to),
         sql`${transactions.amountCents} < 0`,
+        selectedBusiness ? eq(transactions.businessId, selectedBusiness.id) : sql`true`,
       ))
-      .where(eq(categories.active, true))
+      .where(and(
+        eq(categories.active, true),
+        selectedBusiness ? or(eq(categories.businessId, selectedBusiness.id), sql`${categories.businessId} IS NULL`) : sql`true`,
+        query.q ? ilike(categories.name, `%${query.q}%`) : sql`true`,
+      ))
       .groupBy(categories.id)
       .orderBy(sql`coalesce(abs(sum(${transactions.amountCents})), 0) desc`);
     return rows.map((row) => toApiCategory({ ...row, delta: '+0%' }));
@@ -116,19 +162,32 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/connections', async (request) => {
     await requireUser(request);
+    const query = z.object({ biz: z.string().optional() }).parse(request.query);
     const rows = await db
       .select({ connection: connections, businessKey: businesses.key })
       .from(connections)
       .leftJoin(businesses, eq(connections.businessId, businesses.id))
+      .where(and(
+        query.biz && query.biz !== 'all' ? eq(businesses.key, query.biz) : sql`true`,
+        sql`${connections.status} <> 'disconnected'`,
+      ))
       .orderBy(connections.kind, connections.label);
     return rows.map((row) => toApiConnection(row.connection, row.businessKey ?? undefined));
   });
 
   app.get('/alerts', async (request) => {
     await requireUser(request);
-    const query = z.object({ status: z.enum(['open', 'dismissed']).optional() }).parse(request.query);
-    const rows = await db.select().from(alerts).where(eq(alerts.status, query.status ?? 'open')).orderBy(desc(alerts.createdAt));
-    return rows.map(toApiAlert);
+    const query = z.object({ status: z.enum(['open', 'dismissed']).optional(), biz: z.string().optional() }).parse(request.query);
+    const rows = await db
+      .select({ alert: alerts })
+      .from(alerts)
+      .leftJoin(businesses, eq(alerts.businessId, businesses.id))
+      .where(and(
+        eq(alerts.status, query.status ?? 'open'),
+        query.biz && query.biz !== 'all' ? eq(businesses.key, query.biz) : sql`true`,
+      ))
+      .orderBy(desc(alerts.createdAt));
+    return rows.map((row) => toApiAlert(row.alert));
   });
 
   app.post('/alerts/:id/dismiss', async (request, reply) => {
@@ -140,20 +199,76 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/summary', async (request) => {
     await requireUser(request);
-    const query = z.object({ period: z.string().optional() }).parse(request.query);
+    const query = z.object({ period: z.string().optional(), biz: z.string().optional() }).parse(request.query);
     const period = query.period ?? new Date().toISOString().slice(0, 7);
-    const from = `${period}-01`;
-    const to = `${period}-31`;
+    const { from, to, priorFrom, priorTo, labels } = monthWindow(period);
+    const selectedBusiness = query.biz && query.biz !== 'all'
+      ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
+      : null;
+    const businessFilter = selectedBusiness ? eq(transactions.businessId, selectedBusiness.id) : sql`true`;
     const [current] = await db.select({
       totalCents: sql<number>`coalesce(abs(sum(amount_cents)), 0)::int`,
-    }).from(transactions).where(and(gte(transactions.date, from), lte(transactions.date, to), sql`${transactions.amountCents} < 0`));
+    }).from(transactions).where(and(gte(transactions.date, from), lte(transactions.date, to), sql`${transactions.amountCents} < 0`, businessFilter));
+    const [prior] = await db.select({
+      totalCents: sql<number>`coalesce(abs(sum(amount_cents)), 0)::int`,
+    }).from(transactions).where(and(gte(transactions.date, priorFrom), lte(transactions.date, priorTo), sql`${transactions.amountCents} < 0`, businessFilter));
+    const trailingRows = await Promise.all(labels.map(async ({ from: monthFrom, to: monthTo }) => {
+      const [row] = await db.select({
+        totalCents: sql<number>`coalesce(abs(sum(amount_cents)), 0)::int`,
+      }).from(transactions).where(and(gte(transactions.date, monthFrom), lte(transactions.date, monthTo), sql`${transactions.amountCents} < 0`, businessFilter));
+      return row?.totalCents ?? 0;
+    }));
+    const max = Math.max(...trailingRows, 1);
+    const avg = Math.round(trailingRows.reduce((sum, value) => sum + value, 0) / Math.max(trailingRows.length, 1));
+    const currentTotal = current?.totalCents ?? 0;
+    const priorTotal = prior?.totalCents ?? 0;
     return {
-      totalCents: current?.totalCents ?? 0,
-      periodLabel: period.slice(5, 7),
-      deltaPct: 0,
-      trailingMonths: [0.42, 0.38, 0.51, 0.46, 0.55, 0.61, 0.58, 0.66, 0.71, 0.68, 0.78, 0.82],
-      lastMonthCents: 0,
-      avgMonthCents: 0,
+      totalCents: currentTotal,
+      periodLabel: new Date(`${period}-01T00:00:00`).toLocaleString('en-US', { month: 'short' }).toUpperCase(),
+      deltaPct: priorTotal > 0 ? Math.round(((currentTotal - priorTotal) / priorTotal) * 100) : 0,
+      trailingMonths: trailingRows.map((value) => Number((value / max).toFixed(3))),
+      lastMonthCents: priorTotal,
+      avgMonthCents: avg,
     };
   });
+}
+
+async function transactionById(id: string) {
+  const [row] = await db
+    .select({
+      ...getTableColumns(transactions),
+      businessKey: businesses.key,
+      categoryName: categories.name,
+    })
+    .from(transactions)
+    .innerJoin(businesses, eq(transactions.businessId, businesses.id))
+    .leftJoin(categories, eq(transactions.categoryId, categories.id))
+    .where(eq(transactions.id, id))
+    .limit(1);
+  return row;
+}
+
+function monthWindow(period: string) {
+  const start = new Date(`${period}-01T00:00:00`);
+  const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  const priorStart = new Date(start.getFullYear(), start.getMonth() - 1, 1);
+  const priorEnd = new Date(start.getFullYear(), start.getMonth(), 0);
+  const labels = Array.from({ length: 12 }, (_, index) => {
+    const date = new Date(start.getFullYear(), start.getMonth() - (11 - index), 1);
+    return {
+      from: isoDate(date),
+      to: isoDate(new Date(date.getFullYear(), date.getMonth() + 1, 0)),
+    };
+  });
+  return {
+    from: isoDate(start),
+    to: isoDate(end),
+    priorFrom: isoDate(priorStart),
+    priorTo: isoDate(priorEnd),
+    labels,
+  };
+}
+
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }

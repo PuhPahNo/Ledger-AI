@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import {
   Configuration,
   CountryCode,
@@ -10,6 +10,7 @@ import { getEnv } from '../config/env.js';
 import { db } from '../db/client.js';
 import { accounts, connections, transactions } from '../db/schema.js';
 import { decryptText, encryptText } from '../lib/crypto.js';
+import { resolveTransactionBusinessId } from './accountAssignment.js';
 import { categorizeTransaction } from './categorization.js';
 
 export function plaidClient(): PlaidApi | null {
@@ -129,7 +130,7 @@ async function upsertAccounts(connectionId: string, businessId: string | undefin
     }).onConflictDoUpdate({
       target: accounts.plaidAccountId,
       set: {
-        businessId,
+        businessId: sql`coalesce(${accounts.businessId}, excluded.business_id)`,
         name: raw.name ?? raw.official_name ?? 'Account',
         officialName: raw.official_name,
         mask: raw.mask,
@@ -142,7 +143,7 @@ async function upsertAccounts(connectionId: string, businessId: string | undefin
 
 async function upsertTransaction(connectionId: string, fallbackBusinessId: string | undefined, raw: Record<string, any>): Promise<void> {
   const account = await db.query.accounts.findFirst({ where: eq(accounts.plaidAccountId, raw.account_id) });
-  const businessId = account?.businessId ?? fallbackBusinessId;
+  const businessId = resolveTransactionBusinessId(account?.businessId, fallbackBusinessId);
   if (!businessId) return;
   const amountCents = -Math.round(Number(raw.amount) * 100);
   const categoryId = await categorizeTransaction({

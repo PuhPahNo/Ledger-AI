@@ -1,15 +1,23 @@
-import type { SpendSummary } from '@/types/domain';
+import type { BusinessId, SpendSummary } from '@/types/domain';
 import { http, useMockApi } from './client';
 import { mapSummary, type ApiSpendSummary } from './mapper';
-import { SUMMARY } from './mocks';
+import { SUMMARY, TRANSACTIONS } from './mocks';
 
 /**
  * GET /api/summary?period=YYYY-MM
  * Returns the dashboard hero summary: this period's outflow, MoM delta,
  * trailing-12 sparkline points, last month and avg month for comparison.
  */
-export function getSummary(period?: string): Promise<SpendSummary> {
-  if (useMockApi) return Promise.resolve(SUMMARY);
-  const q = period ? `?period=${encodeURIComponent(period)}` : '';
-  return http<ApiSpendSummary>(`/summary${q}`).then(mapSummary);
+export function getSummary(period?: string, biz?: BusinessId | 'all'): Promise<SpendSummary> {
+  if (useMockApi) {
+    const rows = biz && biz !== 'all' ? TRANSACTIONS.filter((txn) => txn.biz === biz) : TRANSACTIONS;
+    return Promise.resolve({
+      ...SUMMARY,
+      total: Math.abs(rows.filter((txn) => txn.amount < 0).reduce((sum, txn) => sum + txn.amount, 0)),
+    });
+  }
+  const query = new URLSearchParams();
+  if (period) query.set('period', period);
+  if (biz && biz !== 'all') query.set('biz', biz);
+  return http<ApiSpendSummary>(`/summary?${query.toString()}`).then(mapSummary);
 }

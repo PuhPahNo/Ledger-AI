@@ -8,12 +8,14 @@ export function toApiBusiness(row: Business) {
     short: row.short,
     color: row.color,
     hue: row.hue,
+    active: row.active,
   };
 }
 
 export function toApiConnection(row: Connection, businessKey?: string) {
   return {
     id: row.id,
+    businessId: row.businessId,
     kind: row.kind,
     label: row.label,
     mask: row.mask ? `•• ${row.mask.replace(/^••\s*/, '')}` : undefined,
@@ -28,6 +30,10 @@ export function toApiConnection(row: Connection, businessKey?: string) {
 export function toApiTransaction(row: Transaction & { businessKey?: string; categoryName?: string | null }) {
   return {
     id: row.id,
+    businessId: row.businessId,
+    accountId: row.accountId,
+    categoryId: row.categoryId,
+    receiptId: row.receiptId,
     date: row.date,
     merchant: row.merchant,
     amountCents: row.amountCents,

@@ -12,6 +12,7 @@ import Fastify from 'fastify';
 import { getEnv } from './config/env.js';
 import { sendError } from './lib/errors.js';
 import { authRoutes } from './routes/auth.js';
+import { accountRoutes } from './routes/accounts.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { connectionRoutes } from './routes/connections.js';
 import { receiptRoutes } from './routes/receipts.js';
@@ -51,6 +52,7 @@ export async function buildApp() {
 
   await app.register(async (api) => {
     await authRoutes(api);
+    await accountRoutes(api);
     await dashboardRoutes(api);
     await connectionRoutes(api);
     await receiptRoutes(api);

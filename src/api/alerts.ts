@@ -1,4 +1,4 @@
-import type { Alert } from '@/types/domain';
+import type { Alert, BusinessId } from '@/types/domain';
 import { http, useMockApi } from './client';
 import { ALERTS } from './mocks';
 
@@ -7,9 +7,11 @@ import { ALERTS } from './mocks';
  * Returns insight/anomaly flags from the backend: duplicate subscriptions,
  * missing receipts, orphan receipts, spend spikes, etc.
  */
-export function listAlerts(): Promise<Alert[]> {
-  if (useMockApi) return Promise.resolve(ALERTS);
-  return http<Alert[]>('/alerts?status=open');
+export function listAlerts(params: { biz?: BusinessId | 'all' } = {}): Promise<Alert[]> {
+  if (useMockApi) return Promise.resolve(params.biz && params.biz !== 'all' ? ALERTS.filter((a) => a.detail.toLowerCase().includes(params.biz!.replace('-', ' '))) : ALERTS);
+  const query = new URLSearchParams({ status: 'open' });
+  if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
+  return http<Alert[]>(`/alerts?${query.toString()}`);
 }
 
 /**

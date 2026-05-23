@@ -1,13 +1,13 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { hashPassword } from '../auth/password.js';
 import { getEnv } from '../config/env.js';
 import { db, closeDb } from './client.js';
-import { businesses, categories, categoryRules, connections, transactions, users } from './schema.js';
+import { businesses, categories, categoryRules, users } from './schema.js';
 
 const seedBusinesses = [
-  { key: 'aurora', name: 'Aurora Studio', short: 'AS', color: '#D97757', hue: 24 },
-  { key: 'meridian', name: 'Meridian Holdings', short: 'MH', color: '#2A6FDB', hue: 230 },
-  { key: 'kiln', name: 'Kiln Coffee Co.', short: 'KC', color: '#1F8A5B', hue: 155 },
+  { key: 'draft-sharks', name: 'Draft Sharks', short: 'DS', color: '#D97757', hue: 24 },
+  { key: 'pointsnav', name: 'PointsNav', short: 'PN', color: '#2A6FDB', hue: 230 },
+  { key: 'womens-net', name: 'Womens Net', short: 'WN', color: '#1F8A5B', hue: 155 },
 ];
 
 const seedCategories = [
@@ -41,53 +41,35 @@ export async function seed(): Promise<void> {
   }
 
   for (const name of seedCategories) {
-    await db.insert(categories).values({ name }).onConflictDoNothing();
+    const existing = await db.query.categories.findFirst({
+      where: and(eq(categories.name, name), isNull(categories.businessId)),
+    });
+    if (!existing) await db.insert(categories).values({ name });
   }
 
-  await seedDemoRows();
-}
-
-async function seedDemoRows(): Promise<void> {
-  const aurora = await db.query.businesses.findFirst({ where: eq(businesses.key, 'aurora') });
-  const meridian = await db.query.businesses.findFirst({ where: eq(businesses.key, 'meridian') });
-  const kiln = await db.query.businesses.findFirst({ where: eq(businesses.key, 'kiln') });
   const software = await db.query.categories.findFirst({ where: eq(categories.name, 'Software') });
   const meals = await db.query.categories.findFirst({ where: eq(categories.name, 'Meals') });
   const inventory = await db.query.categories.findFirst({ where: eq(categories.name, 'Inventory') });
   const cloud = await db.query.categories.findFirst({ where: eq(categories.name, 'Cloud') });
-  if (!aurora || !meridian || !kiln || !software || !meals || !inventory || !cloud) return;
+  const womensNet = await db.query.businesses.findFirst({ where: eq(businesses.key, 'womens-net') });
+  if (!software || !meals || !inventory || !cloud) return;
 
-  const existing = await db.query.transactions.findFirst();
-  if (existing) return;
-
-  const [chase] = await db.insert(connections).values({
-    kind: 'bank',
-    label: 'Chase Business',
-    mask: '9981',
-    status: 'live',
-    syncedTransactionCount: 3,
-  }).returning();
-
-  const txns = [
-    { businessId: aurora.id, date: '2026-05-22', merchant: 'Figma', amountCents: -4500, categoryId: software.id, receiptStatus: 'matched' as const, sourceLabel: 'Amex 4002' },
-    { businessId: meridian.id, date: '2026-05-22', merchant: 'AWS', amountCents: -128413, categoryId: cloud.id, receiptStatus: 'matched' as const, sourceLabel: 'Chase 9981' },
-    { businessId: aurora.id, date: '2026-05-22', merchant: 'Sweetgreen', amountCents: -3821, categoryId: meals.id, receiptStatus: 'missing' as const, sourceLabel: 'Amex 4002', flag: 'no-receipt' },
-    { businessId: kiln.id, date: '2026-05-21', merchant: 'Whole Bean Roasters', amountCents: -210400, categoryId: inventory.id, receiptStatus: 'matched' as const, sourceLabel: 'Chase 9981' },
-    { businessId: aurora.id, date: '2026-05-21', merchant: 'Notion', amountCents: -1600, categoryId: software.id, receiptStatus: 'matched' as const, sourceLabel: 'Amex 4002', flag: 'dup-sub' },
-    { businessId: meridian.id, date: '2026-05-21', merchant: 'Notion (annual)', amountCents: -19200, categoryId: software.id, receiptStatus: 'matched' as const, sourceLabel: 'Chase 9981', flag: 'dup-sub' },
-  ];
-  await db.insert(transactions).values(txns.map((txn) => ({ ...txn, accountId: null })));
-
-  await db.insert(categoryRules).values([
+  const rules = [
     { categoryId: software.id, matchKind: 'merchant_contains', pattern: 'figma', priority: 10 },
     { categoryId: software.id, matchKind: 'merchant_contains', pattern: 'notion', priority: 10 },
     { categoryId: cloud.id, matchKind: 'merchant_contains', pattern: 'aws', priority: 10 },
     { categoryId: meals.id, matchKind: 'merchant_contains', pattern: 'sweetgreen', priority: 10 },
-    { categoryId: inventory.id, businessId: kiln.id, matchKind: 'merchant_contains', pattern: 'roasters', priority: 10 },
-  ]).onConflictDoNothing();
-
-  if (chase) {
-    await db.update(connections).set({ lastSyncAt: new Date() }).where(eq(connections.id, chase.id));
+    ...(womensNet ? [{ categoryId: inventory.id, businessId: womensNet.id, matchKind: 'merchant_contains' as const, pattern: 'equipment', priority: 10 }] : []),
+  ];
+  for (const rule of rules) {
+    const existing = await db.query.categoryRules.findFirst({
+      where: and(
+        eq(categoryRules.categoryId, rule.categoryId),
+        eq(categoryRules.matchKind, rule.matchKind),
+        eq(categoryRules.pattern, rule.pattern),
+      ),
+    });
+    if (!existing) await db.insert(categoryRules).values(rule);
   }
 }
 

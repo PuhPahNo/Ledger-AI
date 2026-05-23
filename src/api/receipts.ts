@@ -20,12 +20,13 @@ export interface UploadReceiptResult {
  * Uploads a photo/PDF of a receipt; backend OCRs it and tries to match
  * the transaction. Returns the match suggestion so the UI can confirm.
  */
-export function uploadReceipt(file: File): Promise<UploadReceiptResult> {
+export function uploadReceipt(file: File, businessId?: string): Promise<UploadReceiptResult> {
   if (useMockApi) {
     return Promise.reject(new Error('uploadReceipt requires the real backend'));
   }
   const form = new FormData();
   form.append('file', file);
+  if (businessId) form.append('businessId', businessId);
   return http<Omit<UploadReceiptResult, 'matched'> & { matched?: ApiTransaction }>('/receipts', {
     method: 'POST',
     body: form,

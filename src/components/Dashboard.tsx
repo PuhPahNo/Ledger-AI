@@ -1,4 +1,5 @@
-import type { Business, Transaction } from '@/types/domain';
+import { useState } from 'react';
+import type { Business, CurrentUser, Transaction } from '@/types/domain';
 import { colors, fonts } from '@/theme/tokens';
 import { countDuplicateSubs, countNeedsReceipt } from '@/lib/calc';
 import { useDashboard } from '@/hooks/useDashboard';
@@ -11,6 +12,8 @@ import { ActivityTile } from './tiles/ActivityTile';
 import { CategoriesTile } from './tiles/CategoriesTile';
 import { ConnectionsTile } from './tiles/ConnectionsTile';
 import { AlertsTile } from './tiles/AlertsTile';
+import { ConnectionsManager } from './ConnectionsManager';
+import { TransactionDrawer } from './TransactionDrawer';
 
 /** Display-only caption for a business tile, computed from the loaded transactions. */
 function captionFor(biz: Business, txns: Transaction[]): string {
@@ -22,32 +25,41 @@ function captionFor(biz: Business, txns: Transaction[]): string {
   return `${total} txns`;
 }
 
-/** Tile background per business. Pure presentation — palette lives in tokens. */
-const businessPalette: Record<string, { bg: string; ink: string }> = {
-  aurora:   { bg: colors.coral, ink: colors.coralInk },
-  meridian: { bg: colors.sky,   ink: colors.skyInk },
-  kiln:     { bg: colors.sage,  ink: colors.sageInk },
-};
-
 interface DashboardProps {
   onViewChange?: (view: 'dashboard' | 'admin') => void;
   onLogout?: () => void;
+  user?: CurrentUser;
 }
 
-export function Dashboard({ onViewChange, onLogout }: DashboardProps) {
-  const { data, loading, error } = useDashboard();
+export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
+  const [businessFilter, setBusinessFilter] = useState('all');
+  const [query, setQuery] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [receiptStatus, setReceiptStatus] = useState<{ state: 'idle' | 'uploading' | 'processing' | 'matched' | 'pending' | 'error'; message?: string }>({ state: 'idle' });
+  const { data, loading, error } = useDashboard({ business: businessFilter, query, refreshKey });
 
   if (error) return <StateScreen tone="error">Couldn't load: {error.message}</StateScreen>;
   if (loading || !data) return <StateScreen>Loading…</StateScreen>;
 
-  const { businesses, transactions, categories, connections, alerts, summary } = data;
+  const { businesses, transactions, categories, connections, accounts, alerts, summary } = data;
+  const selectedBusinessDbId = businessFilter === 'all'
+    ? undefined
+    : businesses.find((business) => business.id === businessFilter)?.dbId;
 
-  const handleUpload = (file: File) => {
-    uploadReceipt(file).catch((e: Error) => {
-      // Mock backend rejects; in real backend this fires the OCR + match flow.
-      // Leaving this as a console signal until the toast system lands.
-      console.warn('Receipt upload not yet available:', e.message);
-    });
+  const handleUpload = async (file: File) => {
+    setReceiptStatus({ state: 'uploading', message: file.name });
+    try {
+      const result = await uploadReceipt(file, selectedBusinessDbId);
+      setReceiptStatus({
+        state: result.matched ? 'matched' : result.processing ? 'processing' : 'pending',
+        message: result.matched ? `Matched ${result.matched.merchant}` : 'OCR and matching job queued.',
+      });
+      setRefreshKey((key) => key + 1);
+    } catch (error) {
+      setReceiptStatus({ state: 'error', message: error instanceof Error ? error.message : 'Upload failed.' });
+    }
   };
 
   return (
@@ -64,7 +76,18 @@ export function Dashboard({ onViewChange, onLogout }: DashboardProps) {
         gap: 10,
       }}
     >
-      <HeaderBar onUploadReceipt={handleUpload} currentView="dashboard" onViewChange={onViewChange} onLogout={onLogout} />
+      <HeaderBar
+        onUploadReceipt={handleUpload}
+        currentView="dashboard"
+        onViewChange={onViewChange}
+        onLogout={onLogout}
+        user={user}
+        businesses={businesses}
+        selectedBusiness={businessFilter}
+        onBusinessChange={setBusinessFilter}
+        query={query}
+        onQueryChange={setQuery}
+      />
 
       <div
         style={{
@@ -82,19 +105,34 @@ export function Dashboard({ onViewChange, onLogout }: DashboardProps) {
           <BusinessTile
             key={b.id}
             business={b}
-            bg={businessPalette[b.id]?.bg ?? colors.paper}
-            ink={businessPalette[b.id]?.ink ?? colors.ink}
+            bg={`${b.color}33`}
+            ink={b.color}
             transactions={transactions}
             caption={captionFor(b, transactions)}
           />
         ))}
 
-        <ReceiptDropTile onFile={handleUpload} />
-        <ActivityTile transactions={transactions} businesses={businesses} totalCount={482} />
+        <ReceiptDropTile onFile={handleUpload} status={receiptStatus} />
+        <ActivityTile transactions={transactions} businesses={businesses} totalCount={transactions.length} onSelect={setSelectedTransaction} />
         <CategoriesTile categories={categories} />
-        <ConnectionsTile connections={connections} />
+        <ConnectionsTile connections={connections} onAdd={() => setConnectionsOpen(true)} />
         <AlertsTile alerts={alerts} />
       </div>
+      <ConnectionsManager
+        open={connectionsOpen}
+        businesses={businesses}
+        connections={connections}
+        accounts={accounts}
+        onClose={() => setConnectionsOpen(false)}
+        onRefresh={() => setRefreshKey((key) => key + 1)}
+      />
+      <TransactionDrawer
+        transaction={selectedTransaction}
+        businesses={businesses}
+        categories={categories}
+        onClose={() => setSelectedTransaction(null)}
+        onSaved={() => setRefreshKey((key) => key + 1)}
+      />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import type { Connection } from '@/types/domain';
+import type { BusinessId, Connection } from '@/types/domain';
 import { http, useMockApi } from './client';
 import { CONNECTIONS } from './mocks';
 
@@ -6,9 +6,15 @@ import { CONNECTIONS } from './mocks';
  * GET /api/connections
  * Returns Plaid (bank/card) and Gmail connections plus their health.
  */
-export function listConnections(): Promise<Connection[]> {
-  if (useMockApi) return Promise.resolve(CONNECTIONS);
-  return http<Connection[]>('/connections');
+export function listConnections(params: { biz?: BusinessId | 'all' } = {}): Promise<Connection[]> {
+  if (useMockApi) {
+    return Promise.resolve(params.biz && params.biz !== 'all'
+      ? CONNECTIONS.filter((c) => c.biz === params.biz || c.biz === 'all')
+      : CONNECTIONS);
+  }
+  const query = new URLSearchParams();
+  if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
+  return http<Connection[]>(`/connections?${query.toString()}`);
 }
 
 /**
@@ -28,13 +34,13 @@ export function createPlaidLinkToken(): Promise<{ link_token: string; expiration
  * Frontend hands back the public_token Plaid Link produced;
  * backend exchanges for an access_token and persists the item.
  */
-export function exchangePlaidPublicToken(publicToken: string): Promise<Connection> {
+export function exchangePlaidPublicToken(publicToken: string, businessId?: string): Promise<Connection> {
   if (useMockApi) {
     return Promise.reject(new Error('exchangePlaidPublicToken requires the real backend'));
   }
   return http<Connection>('/connections/plaid/exchange', {
     method: 'POST',
-    body: JSON.stringify({ public_token: publicToken }),
+    body: JSON.stringify({ public_token: publicToken, businessId }),
   });
 }
 
@@ -42,9 +48,29 @@ export function exchangePlaidPublicToken(publicToken: string): Promise<Connectio
  * GET /api/connections/gmail/oauth-url
  * Backend returns a Google OAuth consent URL; frontend redirects to it.
  */
-export function getGmailOAuthUrl(): Promise<{ url: string }> {
+export function getGmailOAuthUrl(businessId?: string): Promise<{ url: string }> {
   if (useMockApi) {
     return Promise.reject(new Error('getGmailOAuthUrl requires the real backend'));
   }
-  return http('/connections/gmail/oauth-url');
+  const query = new URLSearchParams();
+  if (businessId) query.set('businessId', businessId);
+  return http(`/connections/gmail/oauth-url?${query.toString()}`);
+}
+
+export function syncConnection(connectionId: string): Promise<{ queued: boolean }> {
+  if (useMockApi) return Promise.resolve({ queued: true });
+  return http<{ queued: boolean }>(`/connections/${connectionId}/sync`, { method: 'POST' });
+}
+
+export function updateConnectionBusiness(connectionId: string, businessId: string | null): Promise<Connection> {
+  if (useMockApi) return Promise.resolve(CONNECTIONS.find((c) => c.id === connectionId) ?? CONNECTIONS[0]);
+  return http<Connection>(`/connections/${connectionId}/business`, {
+    method: 'PATCH',
+    body: JSON.stringify({ businessId }),
+  });
+}
+
+export function disconnectConnection(connectionId: string): Promise<void> {
+  if (useMockApi) return Promise.resolve();
+  return http<void>(`/connections/${connectionId}`, { method: 'DELETE' });
 }

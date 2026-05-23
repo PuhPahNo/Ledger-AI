@@ -7,14 +7,15 @@ import { Tile } from './Tile';
 interface Props {
   transactions: Transaction[];
   businesses: Business[];
-  /** Total count across the entire dataset (so the header can show "7 of 482"). */
+  /** Total count for the current API result set. */
   totalCount: number;
+  onSelect?: (transaction: Transaction) => void;
 }
 
 const FILTERS = ['All', 'Software', 'Travel', 'Meals'] as const;
 type Filter = (typeof FILTERS)[number];
 
-export function ActivityTile({ transactions, businesses, totalCount }: Props) {
+export function ActivityTile({ transactions, businesses, totalCount, onSelect }: Props) {
   const [filter, setFilter] = useState<Filter>('All');
 
   const visible = (filter === 'All' ? transactions : transactions.filter((t) => t.cat === filter)).slice(0, 7);
@@ -60,7 +61,7 @@ export function ActivityTile({ transactions, businesses, totalCount }: Props) {
       </div>
       <div style={{ flex: 1, overflow: 'hidden', padding: '0 6px 8px' }}>
         {visible.map((t, i) => (
-          <ActivityRow key={t.id} transaction={t} businesses={businesses} striped={i % 2 === 1} />
+          <ActivityRow key={t.id} transaction={t} businesses={businesses} striped={i % 2 === 1} onSelect={onSelect} />
         ))}
       </div>
     </Tile>
@@ -71,10 +72,12 @@ function ActivityRow({
   transaction: t,
   businesses,
   striped,
+  onSelect,
 }: {
   transaction: Transaction;
   businesses: Business[];
   striped: boolean;
+  onSelect?: (transaction: Transaction) => void;
 }) {
   const b = businesses.find((x) => x.id === t.biz);
   const rcpt = receiptBadge(t.receipt);
@@ -82,6 +85,12 @@ function ActivityRow({
 
   return (
     <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onSelect?.(t)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') onSelect?.(t);
+      }}
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -89,6 +98,7 @@ function ActivityRow({
         padding: '6px 10px',
         borderRadius: 10,
         background: striped ? '#fafaf6' : 'transparent',
+        cursor: onSelect ? 'pointer' : 'default',
       }}
     >
       <div
