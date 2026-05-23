@@ -20,21 +20,21 @@ export const BUSINESSES: Business[] = [
 ];
 
 export const TRANSACTIONS: Transaction[] = [
-  { id:'t01', date:'2026-05-22', dateLabel:'May 22', merchant:'Figma', amount: -45.00, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002', note:'Design seats' },
-  { id:'t02', date:'2026-05-22', dateLabel:'May 22', merchant:'AWS', amount:-1284.13, biz:'pointsnav', cat:'Cloud', receipt:'matched', src:'Chase ** 9981' },
-  { id:'t03', date:'2026-05-22', dateLabel:'May 22', merchant:'Sweetgreen', amount: -38.21, biz:'draft-sharks', cat:'Meals', receipt:'missing', src:'Amex ** 4002', flag:'no-receipt' },
-  { id:'t04', date:'2026-05-21', dateLabel:'May 21', merchant:'Tournament Gear', amount:-2104.00, biz:'womens-net', cat:'Inventory', receipt:'matched', src:'Chase ** 9981' },
-  { id:'t05', date:'2026-05-21', dateLabel:'May 21', merchant:'Notion', amount: -16.00, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002', flag:'dup-sub' },
-  { id:'t06', date:'2026-05-21', dateLabel:'May 21', merchant:'Notion (annual)', amount:-192.00, biz:'pointsnav', cat:'Software', receipt:'matched', src:'Chase ** 9981', flag:'dup-sub' },
-  { id:'t07', date:'2026-05-20', dateLabel:'May 20', merchant:'Lyft', amount: -27.80, biz:'draft-sharks', cat:'Travel', receipt:'missing', src:'Amex ** 4002', flag:'no-receipt' },
-  { id:'t08', date:'2026-05-20', dateLabel:'May 20', merchant:'United Airlines', amount:-612.40, biz:'pointsnav', cat:'Travel', receipt:'matched', src:'Chase ** 9981' },
-  { id:'t09', date:'2026-05-20', dateLabel:'May 20', merchant:'Hotel Yountville', amount:-489.00, biz:'pointsnav', cat:'Travel', receipt:'matched', src:'Chase ** 9981' },
-  { id:'t10', date:'2026-05-19', dateLabel:'May 19', merchant:'Costco Business', amount:-318.74, biz:'womens-net', cat:'Supplies', receipt:'matched', src:'Amex ** 4002' },
-  { id:'t11', date:'2026-05-19', dateLabel:'May 19', merchant:'Adobe', amount: -54.99, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002' },
-  { id:'t12', date:'2026-05-18', dateLabel:'May 18', merchant:'Stripe payout', amount: 8421.10, biz:'draft-sharks', cat:'Revenue', receipt:'n/a', src:'Chase ** 9981' },
-  { id:'t13', date:'2026-05-18', dateLabel:'May 18', merchant:'Linear', amount: -10.00, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002' },
-  { id:'t14', date:'2026-05-17', dateLabel:'May 17', merchant:'Square hardware', amount:-187.00, biz:'womens-net', cat:'Equipment', receipt:'pending', src:'Chase ** 9981' },
-  { id:'t15', date:'2026-05-17', dateLabel:'May 17', merchant:'Comcast Business', amount:-129.95, biz:'womens-net', cat:'Utilities', receipt:'matched', src:'Chase ** 9981' },
+  { id:'t01', accountId:'acct-1', date:'2026-05-22', dateLabel:'May 22', merchant:'Figma', amount: -45.00, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002', note:'Design seats' },
+  { id:'t02', accountId:'acct-2', date:'2026-05-22', dateLabel:'May 22', merchant:'AWS', amount:-1284.13, biz:'pointsnav', cat:'Cloud', receipt:'matched', src:'Chase ** 6711' },
+  { id:'t03', accountId:'acct-1', date:'2026-05-22', dateLabel:'May 22', merchant:'Sweetgreen', amount: -38.21, biz:'draft-sharks', cat:'Meals', receipt:'missing', src:'Amex ** 4002', flag:'no-receipt' },
+  { id:'t04', accountId:'acct-3', date:'2026-05-21', dateLabel:'May 21', merchant:'Tournament Gear', amount:-2104.00, biz:'womens-net', cat:'Inventory', receipt:'matched', src:'Chase ** 9981' },
+  { id:'t05', accountId:'acct-1', date:'2026-05-21', dateLabel:'May 21', merchant:'Notion', amount: -16.00, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002', flag:'dup-sub' },
+  { id:'t06', accountId:'acct-2', date:'2026-05-21', dateLabel:'May 21', merchant:'Notion (annual)', amount:-192.00, biz:'pointsnav', cat:'Software', receipt:'matched', src:'Chase ** 6711', flag:'dup-sub' },
+  { id:'t07', accountId:'acct-1', date:'2026-05-20', dateLabel:'May 20', merchant:'Lyft', amount: -27.80, biz:'draft-sharks', cat:'Travel', receipt:'missing', src:'Amex ** 4002', flag:'no-receipt' },
+  { id:'t08', accountId:'acct-2', date:'2026-05-20', dateLabel:'May 20', merchant:'United Airlines', amount:-612.40, biz:'pointsnav', cat:'Travel', receipt:'matched', src:'Chase ** 6711' },
+  { id:'t09', accountId:'acct-2', date:'2026-05-20', dateLabel:'May 20', merchant:'Hotel Yountville', amount:-489.00, biz:'pointsnav', cat:'Travel', receipt:'matched', src:'Chase ** 6711' },
+  { id:'t10', accountId:'acct-3', date:'2026-05-19', dateLabel:'May 19', merchant:'Costco Business', amount:-318.74, biz:'womens-net', cat:'Supplies', receipt:'matched', src:'Chase ** 9981' },
+  { id:'t11', accountId:'acct-1', date:'2026-05-19', dateLabel:'May 19', merchant:'Adobe', amount: -54.99, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002' },
+  { id:'t12', date:'2026-05-18', dateLabel:'May 18', merchant:'Stripe payout', amount: 8421.10, biz:'draft-sharks', cat:'Revenue', receipt:'n/a', src:'Stripe' },
+  { id:'t13', accountId:'acct-1', date:'2026-05-18', dateLabel:'May 18', merchant:'Linear', amount: -10.00, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002' },
+  { id:'t14', accountId:'acct-3', date:'2026-05-17', dateLabel:'May 17', merchant:'Square hardware', amount:-187.00, biz:'womens-net', cat:'Equipment', receipt:'pending', src:'Chase ** 9981' },
+  { id:'t15', accountId:'acct-3', date:'2026-05-17', dateLabel:'May 17', merchant:'Comcast Business', amount:-129.95, biz:'womens-net', cat:'Utilities', receipt:'matched', src:'Chase ** 9981' },
 ];
 
 export const CATEGORIES: Category[] = [
@@ -62,6 +62,13 @@ export const ACCOUNTS: Account[] = [
   { id: 'acct-3', connectionId: 'conn-3', name: 'Operations Checking', mask: '** 9981', kind: 'checking', enabled: true, biz: 'womens-net', businessId: 'womens-net', connectionLabel: 'Chase Business', connectionStatus: 'live' },
 ];
 
+export function visibleMockTransactions(rows: Transaction[] = TRANSACTIONS, accountIds: string[] = []): Transaction[] {
+  const watched = new Set(ACCOUNTS.filter((account) => account.enabled).map((account) => account.id));
+  return rows
+    .filter((txn) => !txn.accountId || watched.has(txn.accountId))
+    .filter((txn) => accountIds.length === 0 || Boolean(txn.accountId && accountIds.includes(txn.accountId)));
+}
+
 export const ALERTS: Alert[] = [
   { id:'a1', kind:'dup',     title:'Possible duplicate subscription', detail:'Notion is billed on both Draft Sharks ($16/mo) and PointsNav ($192/yr).',  severity:'warn' },
   { id:'a2', kind:'missing', title:'3 transactions need receipts',     detail:'Sweetgreen, Lyft, and one Amex charge from May 19.',               severity:'todo' },
@@ -77,4 +84,4 @@ export const SUMMARY: SpendSummary = {
   lastMonth: 10213,
   avgMonth: 9418,
 };
-SUMMARY.total = Math.abs(TRANSACTIONS.filter((t) => t.amount < 0).reduce((a, t) => a + t.amount, 0));
+SUMMARY.total = Math.abs(visibleMockTransactions(TRANSACTIONS).filter((t) => t.amount < 0).reduce((a, t) => a + t.amount, 0));

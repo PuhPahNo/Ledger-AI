@@ -1,12 +1,13 @@
 import type { BusinessId, CategoryComparison } from '@/types/domain';
 import { http, useMockApi } from './client';
-import { TRANSACTIONS } from './mocks';
+import { TRANSACTIONS, visibleMockTransactions } from './mocks';
 
 export function listCategoryComparisons(params: {
   period?: string;
   biz?: BusinessId | 'all';
   basis?: 'month' | 'year';
   q?: string;
+  accountIds?: string[];
 } = {}): Promise<CategoryComparison[]> {
   if (useMockApi) return Promise.resolve(mockComparisons(params));
   const query = new URLSearchParams();
@@ -14,6 +15,7 @@ export function listCategoryComparisons(params: {
   if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
   if (params.basis) query.set('basis', params.basis);
   if (params.q) query.set('q', params.q);
+  if (params.accountIds?.length) query.set('accounts', params.accountIds.join(','));
   return http<Array<Omit<CategoryComparison, 'current' | 'previous'> & { currentCents: number; previousCents: number }>>(
     `/insights/category-comparison?${query.toString()}`,
   ).then((rows) => rows.map((row) => ({
@@ -27,10 +29,11 @@ function mockComparisons(params: {
   biz?: BusinessId | 'all';
   basis?: 'month' | 'year';
   q?: string;
+  accountIds?: string[];
 }): CategoryComparison[] {
   const currentMultiplier = params.basis === 'year' ? 7.4 : 1;
   const previousMultiplier = params.basis === 'year' ? 6.6 : 0.72;
-  const rows = TRANSACTIONS
+  const rows = visibleMockTransactions(TRANSACTIONS, params.accountIds)
     .filter((txn) => txn.amount < 0)
     .filter((txn) => !params.biz || params.biz === 'all' || txn.biz === params.biz)
     .reduce<Record<string, number>>((acc, txn) => {

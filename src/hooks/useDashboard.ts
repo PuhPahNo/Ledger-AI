@@ -47,6 +47,7 @@ export interface DashboardParams {
   period?: string;
   refreshKey?: number;
   comparisonBasis?: 'month' | 'year';
+  accountIds?: string[];
 }
 
 export function useDashboard(params: DashboardParams = {}): DashboardState {
@@ -58,21 +59,23 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
 
   useEffect(() => {
     let cancelled = false;
+    const accountIds = params.accountIds ?? [];
 
     Promise.all([
       listBusinesses(),
-      listTransactions({ biz: params.business ?? 'all', q: params.query || undefined }),
-      listCategories(params.period, params.business ?? 'all', params.query || undefined),
+      listTransactions({ biz: params.business ?? 'all', q: params.query || undefined, accountIds }),
+      listCategories(params.period, params.business ?? 'all', params.query || undefined, accountIds),
       listCategoryComparisons({
         period: params.period,
         biz: params.business ?? 'all',
         q: params.query || undefined,
         basis: params.comparisonBasis ?? 'month',
+        accountIds,
       }).catch(() => []),
       listConnections({ biz: params.business ?? 'all' }),
       listAccounts({ biz: params.business ?? 'all' }),
       listAlerts({ biz: params.business ?? 'all' }),
-      getSummary(params.period, params.business ?? 'all'),
+      getSummary(params.period, params.business ?? 'all', accountIds),
     ])
       .then(([businesses, transactions, categories, categoryComparisons, connections, accounts, alerts, summary]) => {
         if (cancelled) return;
@@ -90,7 +93,7 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
     return () => {
       cancelled = true;
     };
-  }, [params.business, params.comparisonBasis, params.period, params.query, params.refreshKey]);
+  }, [params.accountIds?.join(','), params.business, params.comparisonBasis, params.period, params.query, params.refreshKey]);
 
   return state;
 }

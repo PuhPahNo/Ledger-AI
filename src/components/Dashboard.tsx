@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Business, CurrentUser, Transaction } from '@/types/domain';
 import { colors, fonts } from '@/theme/tokens';
 import { countDuplicateSubs, countNeedsReceipt } from '@/lib/calc';
@@ -12,6 +12,7 @@ import { ActivityTile } from './tiles/ActivityTile';
 import { CategoriesTile } from './tiles/CategoriesTile';
 import { ConnectionsTile } from './tiles/ConnectionsTile';
 import { AlertsTile } from './tiles/AlertsTile';
+import { AccountSpendTile } from './tiles/AccountSpendTile';
 import { ConnectionsManager } from './ConnectionsManager';
 import { TransactionDrawer } from './TransactionDrawer';
 
@@ -37,9 +38,19 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
   const [comparisonBasis, setComparisonBasis] = useState<'month' | 'year'>('month');
   const [refreshKey, setRefreshKey] = useState(0);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<{ state: 'idle' | 'uploading' | 'processing' | 'matched' | 'pending' | 'error'; message?: string }>({ state: 'idle' });
-  const { data, loading, error } = useDashboard({ business: businessFilter, query, refreshKey, comparisonBasis });
+  const { data, loading, error } = useDashboard({ business: businessFilter, query, refreshKey, comparisonBasis, accountIds: selectedAccountIds });
+
+  useEffect(() => {
+    if (!data) return;
+    const available = new Set(data.accounts.map((account) => account.id));
+    setSelectedAccountIds((current) => {
+      const next = current.filter((accountId) => available.has(accountId));
+      return next.length === current.length ? current : next;
+    });
+  }, [data]);
 
   if (error) return <StateScreen tone="error">Couldn't load: {error.message}</StateScreen>;
   if (loading || !data) return <StateScreen>Loading…</StateScreen>;
@@ -61,6 +72,17 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
     } catch (error) {
       setReceiptStatus({ state: 'error', message: error instanceof Error ? error.message : 'Upload failed.' });
     }
+  };
+  const handleBusinessChange = (business: string) => {
+    setBusinessFilter(business);
+    setSelectedAccountIds([]);
+  };
+  const toggleAccountFilter = (accountId: string) => {
+    setSelectedAccountIds((current) => (
+      current.includes(accountId)
+        ? current.filter((id) => id !== accountId)
+        : [...current, accountId]
+    ));
   };
 
   return (
@@ -85,7 +107,7 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
         user={user}
         businesses={businesses}
         selectedBusiness={businessFilter}
-        onBusinessChange={setBusinessFilter}
+        onBusinessChange={handleBusinessChange}
         query={query}
         onQueryChange={setQuery}
       />
@@ -113,6 +135,15 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
           />
         ))}
 
+        <AccountSpendTile
+          accounts={accounts}
+          businesses={businesses}
+          transactions={transactions}
+          selectedAccountIds={selectedAccountIds}
+          onToggleAccount={toggleAccountFilter}
+          onClearAccounts={() => setSelectedAccountIds([])}
+          onManageAccounts={() => setConnectionsOpen(true)}
+        />
         <ReceiptDropTile onFile={handleUpload} status={receiptStatus} />
         <ActivityTile transactions={transactions} businesses={businesses} totalCount={transactions.length} onSelect={setSelectedTransaction} />
         <CategoriesTile

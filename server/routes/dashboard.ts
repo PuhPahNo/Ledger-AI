@@ -1,9 +1,9 @@
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, getTableColumns, gte, ilike, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
-import { alerts, businesses, categories, connections, transactions } from '../db/schema.js';
+import { accounts, alerts, businesses, categories, connections, transactions } from '../db/schema.js';
 import { notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
 import { normalizeTransactionOverride } from '../services/transactionOverrides.js';
@@ -24,7 +24,9 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       to: z.string().optional(),
       q: z.string().optional(),
       limit: z.coerce.number().optional(),
+      accounts: z.string().optional(),
     }).parse(request.query);
+    const accountIds = parseAccountIds(query.accounts);
 
     const rows = await db
       .select({
@@ -52,10 +54,12 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       .from(transactions)
       .innerJoin(businesses, eq(transactions.businessId, businesses.id))
       .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
       .where(and(
         query.biz && query.biz !== 'all' ? eq(businesses.key, query.biz) : sql`true`,
         query.from ? gte(transactions.date, query.from) : sql`true`,
         query.to ? lte(transactions.date, query.to) : sql`true`,
+        accountSpendFilter(accountIds),
         query.q ? or(
           ilike(transactions.merchant, `%${query.q}%`),
           ilike(transactions.sourceLabel, `%${query.q}%`),
@@ -122,7 +126,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/categories', async (request) => {
     await requireUser(request);
-    const query = z.object({ period: z.string().optional(), biz: z.string().optional(), q: z.string().optional() }).parse(request.query);
+    const query = z.object({
+      period: z.string().optional(),
+      biz: z.string().optional(),
+      q: z.string().optional(),
+      accounts: z.string().optional(),
+    }).parse(request.query);
+    const accountIds = parseAccountIds(query.accounts);
     const period = query.period ?? new Date().toISOString().slice(0, 7);
     const from = `${period}-01`;
     const to = `${period}-31`;
@@ -150,9 +160,11 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         sql`${transactions.amountCents} < 0`,
         selectedBusiness ? eq(transactions.businessId, selectedBusiness.id) : sql`true`,
       ))
+      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
       .where(and(
         eq(categories.active, true),
         selectedBusiness ? or(eq(categories.businessId, selectedBusiness.id), sql`${categories.businessId} IS NULL`) : sql`true`,
+        joinedTransactionSpendFilter(accountIds),
         query.q ? ilike(categories.name, `%${query.q}%`) : sql`true`,
       ))
       .groupBy(categories.id)
@@ -221,7 +233,9 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       biz: z.string().optional(),
       basis: z.enum(['month', 'year']).default('month'),
       q: z.string().optional(),
+      accounts: z.string().optional(),
     }).parse(request.query);
+    const accountIds = parseAccountIds(query.accounts);
     const period = query.period ?? new Date().toISOString().slice(0, 7);
     const window = comparisonWindow(period, query.basis);
     const selectedBusiness = query.biz && query.biz !== 'all'
@@ -245,9 +259,11 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         FROM ${transactions}
         INNER JOIN ${businesses} ON ${transactions.businessId} = ${businesses.id}
         LEFT JOIN ${categories} ON ${transactions.categoryId} = ${categories.id}
+        LEFT JOIN ${accounts} ON ${transactions.accountId} = ${accounts.id}
         WHERE ${transactions.amountCents} < 0
           AND ${transactions.date} >= ${window.previousFrom}
           AND ${transactions.date} <= ${window.currentTo}
+          AND ${accountSpendFilter(accountIds)}
           AND (${selectedBusiness?.id ?? null}::uuid IS NULL OR ${transactions.businessId} = ${selectedBusiness?.id ?? null}::uuid)
           AND (${query.q ?? null}::text IS NULL OR coalesce(${categories.name}, 'Uncategorized') ILIKE ${`%${query.q ?? ''}%`})
         GROUP BY coalesce(${categories.name}, 'Uncategorized')
@@ -270,23 +286,39 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/summary', async (request) => {
     await requireUser(request);
-    const query = z.object({ period: z.string().optional(), biz: z.string().optional() }).parse(request.query);
+    const query = z.object({
+      period: z.string().optional(),
+      biz: z.string().optional(),
+      accounts: z.string().optional(),
+    }).parse(request.query);
+    const accountIds = parseAccountIds(query.accounts);
     const period = query.period ?? new Date().toISOString().slice(0, 7);
     const { from, to, priorFrom, priorTo, labels } = monthWindow(period);
     const selectedBusiness = query.biz && query.biz !== 'all'
       ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
       : null;
     const businessFilter = selectedBusiness ? eq(transactions.businessId, selectedBusiness.id) : sql`true`;
+    const spendFilters = [
+      sql`${transactions.amountCents} < 0`,
+      businessFilter,
+      accountSpendFilter(accountIds),
+    ] as const;
     const [current] = await db.select({
-      totalCents: sql<number>`coalesce(abs(sum(amount_cents)), 0)::int`,
-    }).from(transactions).where(and(gte(transactions.date, from), lte(transactions.date, to), sql`${transactions.amountCents} < 0`, businessFilter));
+      totalCents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
+    }).from(transactions)
+      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+      .where(and(gte(transactions.date, from), lte(transactions.date, to), ...spendFilters));
     const [prior] = await db.select({
-      totalCents: sql<number>`coalesce(abs(sum(amount_cents)), 0)::int`,
-    }).from(transactions).where(and(gte(transactions.date, priorFrom), lte(transactions.date, priorTo), sql`${transactions.amountCents} < 0`, businessFilter));
+      totalCents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
+    }).from(transactions)
+      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+      .where(and(gte(transactions.date, priorFrom), lte(transactions.date, priorTo), ...spendFilters));
     const trailingRows = await Promise.all(labels.map(async ({ from: monthFrom, to: monthTo }) => {
       const [row] = await db.select({
-        totalCents: sql<number>`coalesce(abs(sum(amount_cents)), 0)::int`,
-      }).from(transactions).where(and(gte(transactions.date, monthFrom), lte(transactions.date, monthTo), sql`${transactions.amountCents} < 0`, businessFilter));
+        totalCents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
+      }).from(transactions)
+        .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+        .where(and(gte(transactions.date, monthFrom), lte(transactions.date, monthTo), ...spendFilters));
       return row?.totalCents ?? 0;
     }));
     const max = Math.max(...trailingRows, 1);
@@ -360,4 +392,20 @@ function monthWindow(period: string) {
 
 function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
+}
+
+function parseAccountIds(value?: string): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function accountSpendFilter(accountIds: string[]) {
+  return sql`(${transactions.accountId} IS NULL OR ${accounts.id} IS NULL OR ${accounts.enabled} = true)
+    AND ${accountIds.length ? inArray(transactions.accountId, accountIds) : sql`true`}`;
+}
+
+function joinedTransactionSpendFilter(accountIds: string[]) {
+  return sql`${transactions.id} IS NULL OR (${accountSpendFilter(accountIds)})`;
 }

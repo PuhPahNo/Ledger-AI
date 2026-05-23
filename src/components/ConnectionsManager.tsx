@@ -138,6 +138,26 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     onRefresh();
   };
 
+  const changeConnectionBusiness = async (connection: Connection, next: string) => {
+    if (!connection.id) return;
+    setStatus(`Updated default business for ${connection.label}.`);
+    await updateConnectionBusiness(connection.id, next || null);
+    onRefresh();
+  };
+
+  const changeAccountBusiness = async (account: Account, next: string, applyToExisting = false) => {
+    setStatus(applyToExisting ? `Reassigning existing transactions for ${account.name}...` : `Updated default business for ${account.name}.`);
+    await updateAccountBusiness(account.id, next || null, applyToExisting);
+    setStatus(applyToExisting ? `Existing transactions reassigned for ${account.name}.` : `Future transactions for ${account.name} will use the selected business.`);
+    onRefresh();
+  };
+
+  const changeAccountWatch = async (account: Account, enabled: boolean) => {
+    setStatus(enabled ? `${account.name} is now watched.` : `${account.name} is ignored in spend results.`);
+    await updateAccountEnabled(account.id, enabled);
+    onRefresh();
+  };
+
   return (
     <div style={backdropStyle}>
       <section style={modalStyle}>
@@ -189,7 +209,7 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
                   key={connection.id ?? connection.label}
                   connection={connection}
                   businesses={businesses}
-                  onBusiness={(next) => connection.id && updateConnectionBusiness(connection.id, next || null).then(onRefresh)}
+                  onBusiness={(next) => changeConnectionBusiness(connection, next)}
                   onSync={() => refreshConnection(connection)}
                   onDisconnect={() => removeConnection(connection)}
                 />
@@ -205,8 +225,8 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
                   key={account.id}
                   account={account}
                   businesses={businesses}
-                  onBusiness={(next, applyToExisting = false) => updateAccountBusiness(account.id, next || null, applyToExisting).then(onRefresh)}
-                  onEnabled={(enabled) => updateAccountEnabled(account.id, enabled).then(onRefresh)}
+                  onBusiness={(next, applyToExisting = false) => changeAccountBusiness(account, next, applyToExisting)}
+                  onEnabled={(enabled) => changeAccountWatch(account, enabled)}
                 />
               )) : <Empty label="Plaid accounts appear after the first sync." />}
             </div>
@@ -289,17 +309,26 @@ function AccountRow({
   onEnabled: (enabled: boolean) => void;
 }) {
   return (
-    <div style={accountRowStyle}>
+    <div style={{ ...accountRowStyle, opacity: account.enabled ? 1 : 0.62 }}>
       <KindIcon kind={account.kind === 'credit' ? 'card' : 'bank'} />
       <div style={{ minWidth: 0 }}>
         <div style={{ fontWeight: 900, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{account.name}</div>
-        <div style={{ color: colors.dim, fontSize: 11 }}>{account.kind}{account.mask ? ` · ${account.mask}` : ''}</div>
+        <div style={{ color: colors.dim, fontSize: 11 }}>
+          {account.kind}{account.mask ? ` · ${account.mask}` : ''} · {account.enabled ? 'included in spend' : 'ignored in spend'}
+        </div>
       </div>
       <BusinessSelect value={account.businessId ?? ''} businesses={businesses} onChange={(next) => onBusiness(next)} />
-      <button type="button" style={smallButtonStyle} onClick={() => onBusiness(account.businessId ?? '', true)}>Apply existing</button>
+      <button
+        type="button"
+        disabled={!account.businessId}
+        style={{ ...smallButtonStyle, opacity: account.businessId ? 1 : 0.45, cursor: account.businessId ? 'pointer' : 'not-allowed' }}
+        onClick={() => onBusiness(account.businessId ?? '', true)}
+      >
+        Reassign existing
+      </button>
       <label style={toggleStyle}>
         <input type="checkbox" checked={account.enabled} onChange={(event) => onEnabled(event.target.checked)} />
-        Enabled
+        {account.enabled ? 'Watched' : 'Ignored'}
       </label>
     </div>
   );
@@ -461,7 +490,7 @@ const providerRowStyle: React.CSSProperties = {
 
 const accountRowStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '38px minmax(140px, 1fr) 180px auto auto',
+  gridTemplateColumns: '38px minmax(140px, 1fr) 180px auto 96px',
   gap: 8,
   alignItems: 'center',
   padding: 10,

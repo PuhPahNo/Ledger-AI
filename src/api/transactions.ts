@@ -1,7 +1,7 @@
 import type { BusinessId, Transaction } from '@/types/domain';
 import { http, useMockApi } from './client';
 import { mapTransaction, type ApiTransaction } from './mapper';
-import { TRANSACTIONS } from './mocks';
+import { TRANSACTIONS, visibleMockTransactions } from './mocks';
 
 export interface ListTransactionsParams {
   biz?: BusinessId | 'all';
@@ -12,6 +12,7 @@ export interface ListTransactionsParams {
   /** Free-text search across merchant/category/note. */
   q?: string;
   limit?: number;
+  accountIds?: string[];
 }
 
 /**
@@ -20,7 +21,7 @@ export interface ListTransactionsParams {
  */
 export function listTransactions(params: ListTransactionsParams = {}): Promise<Transaction[]> {
   if (useMockApi) {
-    let rows = [...TRANSACTIONS];
+    let rows = visibleMockTransactions(TRANSACTIONS, params.accountIds);
     if (params.biz && params.biz !== 'all') rows = rows.filter((t) => t.biz === params.biz);
     if (params.q) {
       const q = params.q.toLowerCase();
@@ -35,7 +36,11 @@ export function listTransactions(params: ListTransactionsParams = {}): Promise<T
     return Promise.resolve(rows);
   }
   const query = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v != null) query.set(k, String(v));
+  for (const [k, v] of Object.entries(params)) {
+    if (v == null || k === 'accountIds') continue;
+    query.set(k, String(v));
+  }
+  if (params.accountIds?.length) query.set('accounts', params.accountIds.join(','));
   return http<ApiTransaction[]>(`/transactions?${query.toString()}`).then((rows) => rows.map(mapTransaction));
 }
 
