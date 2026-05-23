@@ -40,9 +40,13 @@ export function HeaderBar({
       setStatus('Password must be at least 12 characters.');
       return;
     }
-    await resetAdminUserPassword(user.id, newPassword);
-    setNewPassword('');
-    setStatus('Password updated.');
+    try {
+      await resetAdminUserPassword(user.id, newPassword);
+      setNewPassword('');
+      setStatus('Password updated. Use it the next time you log in.');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Password update failed.');
+    }
   };
 
   const startTotp = async () => {

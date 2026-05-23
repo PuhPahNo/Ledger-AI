@@ -76,9 +76,14 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const actor = await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({ password: z.string().min(12) }).parse(request.body);
-    await db.update(users).set({ passwordHash: await hashPassword(body.password), updatedAt: new Date() }).where(eq(users.id, params.id));
+    const [row] = await db
+      .update(users)
+      .set({ passwordHash: await hashPassword(body.password), updatedAt: new Date() })
+      .where(eq(users.id, params.id))
+      .returning(userPublicColumns);
+    if (!row) notFound('User not found');
     await audit(request, actor, 'change_user_password', 'user', params.id);
-    return { ok: true };
+    return row;
   });
 
   app.patch('/admin/users/:id/active', async (request) => {

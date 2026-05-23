@@ -73,9 +73,9 @@ export function updateAdminUser(id: string, body: { username?: string; displayNa
   return http<AdminUser>(`/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
 }
 
-export function resetAdminUserPassword(id: string, password: string): Promise<{ ok: true }> {
-  if (useMockApi) return Promise.resolve({ ok: true });
-  return http<{ ok: true }>(`/admin/users/${id}/password`, { method: 'PATCH', body: JSON.stringify({ password }) });
+export function resetAdminUserPassword(id: string, password: string): Promise<AdminUser> {
+  if (useMockApi) return Promise.resolve({ id, username: 'admin', displayName: 'Ledger Admin', active: true, totpEnabled: false });
+  return http<AdminUser>(`/admin/users/${id}/password`, { method: 'PATCH', body: JSON.stringify({ password }) });
 }
 
 export function setAdminUserActive(id: string, active: boolean): Promise<AdminUser> {

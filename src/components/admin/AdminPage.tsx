@@ -81,11 +81,17 @@ export function AdminPage({ onViewChange, onLogout, user }: Props) {
     active: business.active,
   })), [data]);
 
-  const saveAndRefresh = async (work: () => Promise<unknown>, message: string) => {
-    setStatus('Saving...');
-    await work();
-    await refresh();
-    setStatus(message);
+  const saveAndRefresh = async (work: () => Promise<unknown>, message: string): Promise<boolean> => {
+    try {
+      setStatus('Saving...');
+      await work();
+      await refresh();
+      setStatus(message);
+      return true;
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Save failed.');
+      return false;
+    }
   };
 
   const filteredAudit = auditRows.filter((row) => !query || `${row.action} ${row.entityType} ${row.entityId ?? ''}`.toLowerCase().includes(query.toLowerCase()));
@@ -155,7 +161,18 @@ export function AdminPage({ onViewChange, onLogout, user }: Props) {
                   key={admin.id}
                   user={admin}
                   onSave={(body) => saveAndRefresh(() => updateAdminUser(admin.id, body), 'Admin saved.')}
-                  onPassword={(password) => saveAndRefresh(() => resetAdminUserPassword(admin.id, password), 'Password reset.')}
+                  onPassword={(password) => {
+                    if (password.length < 12) {
+                      setStatus('Password must be at least 12 characters.');
+                      return Promise.resolve(false);
+                    }
+                    return saveAndRefresh(
+                      () => resetAdminUserPassword(admin.id, password),
+                      admin.id === user?.id
+                        ? 'Password reset. Use the new password next time you log in.'
+                        : 'Password reset.',
+                    );
+                  }}
                   onActive={(active) => saveAndRefresh(() => setAdminUserActive(admin.id, active), active ? 'Admin activated.' : 'Admin deactivated.')}
                 />
               ))}
@@ -276,12 +293,16 @@ function EditableUser({
 }: {
   user: AdminOverview['users'][number];
   onSave: (body: { username?: string; displayName?: string }) => void;
-  onPassword: (password: string) => void;
+  onPassword: (password: string) => Promise<boolean> | boolean | void;
   onActive: (active: boolean) => void;
 }) {
   const [draft, setDraft] = useState(user);
   const [password, setPassword] = useState('');
   useEffect(() => setDraft(user), [user]);
+  const resetPassword = async () => {
+    const ok = await onPassword(password);
+    if (ok !== false) setPassword('');
+  };
   return (
     <div style={editableRowStyle}>
       <Input label="Username" value={draft.username} onChange={(username) => setDraft({ ...draft, username })} />
@@ -289,7 +310,7 @@ function EditableUser({
       <Input label="New Password" type="password" value={password} onChange={setPassword} />
       <label style={toggleStyle}><input type="checkbox" checked={draft.active} onChange={(event) => onActive(event.target.checked)} /> Active</label>
       <Action compact onClick={() => onSave({ username: draft.username, displayName: draft.displayName })}>Save</Action>
-      <Action compact onClick={() => onPassword(password)}>Reset</Action>
+      <Action compact onClick={resetPassword}>Reset</Action>
     </div>
   );
 }
