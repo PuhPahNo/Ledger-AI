@@ -60,6 +60,15 @@ export interface Category {
   count: number;
 }
 
+export interface CategoryComparison {
+  category: string;
+  current: number;
+  currentCents?: number;
+  previous: number;
+  previousCents?: number;
+  deltaPct: number;
+}
+
 export type ConnectionKind = 'bank' | 'card' | 'gmail';
 export type ConnectionStatus = 'live' | 'reauth' | 'disconnected';
 

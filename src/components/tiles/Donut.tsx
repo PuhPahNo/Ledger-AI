@@ -8,18 +8,22 @@ interface Props {
   strokeColor: string;
   /** Color of the center total label. */
   labelColor: string;
+  size?: number;
 }
 
 /** SVG donut chart for the Categories tile. */
-export function Donut({ categories, strokeColor, labelColor }: Props) {
+export function Donut({ categories, strokeColor, labelColor, size = 112 }: Props) {
   const total = categories.reduce((a, c) => a + c.amount, 0);
   let acc = 0;
   const r = 42;
   const ri = 26;
 
   return (
-    <svg width="112" height="112" viewBox="0 0 100 100">
-      {categories.map((c, i) => {
+    <svg width={size} height={size} viewBox="0 0 100 100">
+      {total <= 0 && (
+        <circle cx={50} cy={50} r={36} fill="none" stroke={labelColor} strokeWidth={10} opacity={0.16} />
+      )}
+      {total > 0 && categories.map((c, i) => {
         const frac = c.amount / total;
         const a0 = acc * 2 * Math.PI - Math.PI / 2;
         const a1 = (acc + frac) * 2 * Math.PI - Math.PI / 2;

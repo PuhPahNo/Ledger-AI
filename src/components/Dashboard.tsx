@@ -34,16 +34,17 @@ interface DashboardProps {
 export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
   const [businessFilter, setBusinessFilter] = useState('all');
   const [query, setQuery] = useState('');
+  const [comparisonBasis, setComparisonBasis] = useState<'month' | 'year'>('month');
   const [refreshKey, setRefreshKey] = useState(0);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<{ state: 'idle' | 'uploading' | 'processing' | 'matched' | 'pending' | 'error'; message?: string }>({ state: 'idle' });
-  const { data, loading, error } = useDashboard({ business: businessFilter, query, refreshKey });
+  const { data, loading, error } = useDashboard({ business: businessFilter, query, refreshKey, comparisonBasis });
 
   if (error) return <StateScreen tone="error">Couldn't load: {error.message}</StateScreen>;
   if (loading || !data) return <StateScreen>Loading…</StateScreen>;
 
-  const { businesses, transactions, categories, connections, accounts, alerts, summary } = data;
+  const { businesses, transactions, categories, categoryComparisons, connections, accounts, alerts, summary } = data;
   const selectedBusinessDbId = businessFilter === 'all'
     ? undefined
     : businesses.find((business) => business.id === businessFilter)?.dbId;
@@ -114,7 +115,12 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
 
         <ReceiptDropTile onFile={handleUpload} status={receiptStatus} />
         <ActivityTile transactions={transactions} businesses={businesses} totalCount={transactions.length} onSelect={setSelectedTransaction} />
-        <CategoriesTile categories={categories} />
+        <CategoriesTile
+          categories={categories}
+          comparisons={categoryComparisons}
+          comparisonBasis={comparisonBasis}
+          onComparisonBasisChange={setComparisonBasis}
+        />
         <ConnectionsTile connections={connections} onAdd={() => setConnectionsOpen(true)} />
         <AlertsTile alerts={alerts} />
       </div>

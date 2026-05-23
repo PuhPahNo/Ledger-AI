@@ -44,6 +44,8 @@ services:
         sync: false
       - key: OPENAI_RECEIPT_MODEL
         value: gpt-5.5
+      - key: OPENAI_CATEGORIZATION_MODEL
+        value: gpt-4.1-mini
       - key: PLAID_ENV
         value: production
       - key: PLAID_CLIENT_ID

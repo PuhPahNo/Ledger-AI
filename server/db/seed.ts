@@ -11,15 +11,31 @@ const seedBusinesses = [
 ];
 
 const seedCategories = [
-  'Software',
-  'Cloud',
-  'Travel',
-  'Inventory',
-  'Meals',
-  'Supplies',
-  'Utilities',
-  'Equipment',
-  'Revenue',
+  { name: 'Advertising & Marketing', taxCode: 'schedule_c_line_8', color: '#ff8b6b' },
+  { name: 'Car & Truck', taxCode: 'schedule_c_line_9', color: '#9fc6e8' },
+  { name: 'Commissions & Fees', taxCode: 'schedule_c_line_10', color: '#caa6f0' },
+  { name: 'Contract Labor', taxCode: 'schedule_c_line_11', color: '#abc89a' },
+  { name: 'Depreciation & Section 179', taxCode: 'schedule_c_line_13', color: '#ecd95a' },
+  { name: 'Employee Benefits', taxCode: 'schedule_c_line_14', color: '#f1b6c5' },
+  { name: 'Insurance', taxCode: 'schedule_c_line_15', color: '#9fc6e8' },
+  { name: 'Interest', taxCode: 'schedule_c_line_16', color: '#3e2a3e' },
+  { name: 'Legal & Professional', taxCode: 'schedule_c_line_17', color: '#ff8b6b' },
+  { name: 'Office Expense', taxCode: 'schedule_c_line_18', color: '#f7f3e6' },
+  { name: 'Rent Or Lease', taxCode: 'schedule_c_line_20', color: '#abc89a' },
+  { name: 'Repairs & Maintenance', taxCode: 'schedule_c_line_21', color: '#caa6f0' },
+  { name: 'Supplies', taxCode: 'schedule_c_line_22', color: '#caa6f0' },
+  { name: 'Taxes & Licenses', taxCode: 'schedule_c_line_23', color: '#ecd95a' },
+  { name: 'Travel', taxCode: 'schedule_c_line_24a', color: '#3e2a3e' },
+  { name: 'Meals', taxCode: 'schedule_c_line_24b', color: '#f1b6c5' },
+  { name: 'Utilities', taxCode: 'schedule_c_line_25', color: '#9fc6e8' },
+  { name: 'Wages', taxCode: 'schedule_c_line_26', color: '#abc89a' },
+  { name: 'Inventory', taxCode: 'cogs_inventory', color: '#abc89a' },
+  { name: 'Software', taxCode: 'other_expense_software', color: '#ff8b6b' },
+  { name: 'Cloud', taxCode: 'other_expense_software', color: '#9fc6e8' },
+  { name: 'Equipment', taxCode: 'schedule_c_line_13_review', color: '#ecd95a' },
+  { name: 'Entertainment', taxCode: 'non_deductible_review', color: '#3e2a3e' },
+  { name: 'Revenue', taxCode: 'income', color: '#ffffff' },
+  { name: 'Uncategorized', taxCode: 'review_required', color: '#ffffff' },
 ];
 
 export async function seed(): Promise<void> {
@@ -40,11 +56,11 @@ export async function seed(): Promise<void> {
     await db.insert(businesses).values(business).onConflictDoNothing({ target: businesses.key });
   }
 
-  for (const name of seedCategories) {
+  for (const category of seedCategories) {
     const existing = await db.query.categories.findFirst({
-      where: and(eq(categories.name, name), isNull(categories.businessId)),
+      where: and(eq(categories.name, category.name), isNull(categories.businessId)),
     });
-    if (!existing) await db.insert(categories).values({ name });
+    if (!existing) await db.insert(categories).values(category);
   }
 
   const software = await db.query.categories.findFirst({ where: eq(categories.name, 'Software') });

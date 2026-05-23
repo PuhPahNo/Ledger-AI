@@ -157,7 +157,24 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       ))
       .groupBy(categories.id)
       .orderBy(sql`coalesce(abs(sum(${transactions.amountCents})), 0) desc`);
-    return rows.map((row) => toApiCategory({ ...row, delta: '+0%' }));
+    const merged = new Map<string, typeof rows[number] & { amountCents: number; count: number; delta: string }>();
+    for (const row of rows) {
+      const existing = merged.get(row.name);
+      if (existing) {
+        existing.amountCents += Number(row.amountCents ?? 0);
+        existing.count += Number(row.count ?? 0);
+      } else {
+        merged.set(row.name, {
+          ...row,
+          amountCents: Number(row.amountCents ?? 0),
+          count: Number(row.count ?? 0),
+          delta: '+0%',
+        });
+      }
+    }
+    return Array.from(merged.values())
+      .sort((a, b) => b.amountCents - a.amountCents)
+      .map((row) => toApiCategory(row));
   });
 
   app.get('/connections', async (request) => {
@@ -197,6 +214,67 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(204).send();
   });
 
+  app.get('/insights/category-comparison', async (request) => {
+    await requireUser(request);
+    const query = z.object({
+      period: z.string().optional(),
+      biz: z.string().optional(),
+      basis: z.enum(['month', 'year']).default('month'),
+      q: z.string().optional(),
+    }).parse(request.query);
+    const period = query.period ?? new Date().toISOString().slice(0, 7);
+    const window = comparisonWindow(period, query.basis);
+    const selectedBusiness = query.biz && query.biz !== 'all'
+      ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
+      : null;
+    const rows = await db.execute(sql`
+      SELECT coalesce(${categories.name}, 'Uncategorized') AS category,
+             coalesce(abs(sum(CASE
+               WHEN ${transactions.date} >= ${window.currentFrom}
+                AND ${transactions.date} <= ${window.currentTo}
+               THEN ${transactions.amountCents}
+               ELSE 0
+             END)), 0)::int AS current_cents,
+             coalesce(abs(sum(CASE
+               WHEN ${transactions.date} >= ${window.previousFrom}
+                AND ${transactions.date} <= ${window.previousTo}
+               THEN ${transactions.amountCents}
+               ELSE 0
+             END)), 0)::int AS previous_cents
+      FROM ${transactions}
+      INNER JOIN ${businesses} ON ${transactions.businessId} = ${businesses.id}
+      LEFT JOIN ${categories} ON ${transactions.categoryId} = ${categories.id}
+      WHERE ${transactions.amountCents} < 0
+        AND ${transactions.date} >= ${window.previousFrom}
+        AND ${transactions.date} <= ${window.currentTo}
+        AND (${selectedBusiness?.id ?? null}::uuid IS NULL OR ${transactions.businessId} = ${selectedBusiness?.id ?? null}::uuid)
+        AND (${query.q ?? null}::text IS NULL OR coalesce(${categories.name}, 'Uncategorized') ILIKE ${`%${query.q ?? ''}%`})
+      GROUP BY coalesce(${categories.name}, 'Uncategorized')
+      HAVING coalesce(abs(sum(CASE
+               WHEN ${transactions.date} >= ${window.currentFrom}
+                AND ${transactions.date} <= ${window.currentTo}
+               THEN ${transactions.amountCents}
+               ELSE 0
+             END)), 0) > 0
+          OR coalesce(abs(sum(CASE
+               WHEN ${transactions.date} >= ${window.previousFrom}
+                AND ${transactions.date} <= ${window.previousTo}
+               THEN ${transactions.amountCents}
+               ELSE 0
+             END)), 0) > 0
+      ORDER BY current_cents + previous_cents DESC
+      LIMIT 12
+    `);
+    return (rows.rows as Array<{ category: string; current_cents: number; previous_cents: number }>).map((row) => ({
+      category: row.category,
+      currentCents: Number(row.current_cents),
+      previousCents: Number(row.previous_cents),
+      deltaPct: Number(row.previous_cents) > 0
+        ? Math.round(((Number(row.current_cents) - Number(row.previous_cents)) / Number(row.previous_cents)) * 100)
+        : 0,
+    }));
+  });
+
   app.get('/summary', async (request) => {
     await requireUser(request);
     const query = z.object({ period: z.string().optional(), biz: z.string().optional() }).parse(request.query);
@@ -231,6 +309,24 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       avgMonthCents: avg,
     };
   });
+}
+
+function comparisonWindow(period: string, basis: 'month' | 'year') {
+  const start = new Date(`${period}-01T00:00:00`);
+  if (basis === 'year') {
+    return {
+      currentFrom: isoDate(new Date(start.getFullYear(), 0, 1)),
+      currentTo: isoDate(new Date(start.getFullYear(), 11, 31)),
+      previousFrom: isoDate(new Date(start.getFullYear() - 1, 0, 1)),
+      previousTo: isoDate(new Date(start.getFullYear() - 1, 11, 31)),
+    };
+  }
+  return {
+    currentFrom: isoDate(start),
+    currentTo: isoDate(new Date(start.getFullYear(), start.getMonth() + 1, 0)),
+    previousFrom: isoDate(new Date(start.getFullYear(), start.getMonth() - 1, 1)),
+    previousTo: isoDate(new Date(start.getFullYear(), start.getMonth(), 0)),
+  };
 }
 
 async function transactionById(id: string) {

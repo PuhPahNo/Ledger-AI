@@ -10,3 +10,4 @@ export * from './transactions';
 export * from './auth';
 export * from './admin';
 export * from './accounts';
+export * from './insights';

@@ -7,11 +7,13 @@ import {
   listTransactions,
   getSummary,
   listAccounts,
+  listCategoryComparisons,
 } from '@/api';
 import type {
   Alert,
   Business,
   Category,
+  CategoryComparison,
   Connection,
   Account,
   SpendSummary,
@@ -22,6 +24,7 @@ export interface DashboardData {
   businesses: Business[];
   transactions: Transaction[];
   categories: Category[];
+  categoryComparisons: CategoryComparison[];
   connections: Connection[];
   accounts: Account[];
   alerts: Alert[];
@@ -43,6 +46,7 @@ export interface DashboardParams {
   query?: string;
   period?: string;
   refreshKey?: number;
+  comparisonBasis?: 'month' | 'year';
 }
 
 export function useDashboard(params: DashboardParams = {}): DashboardState {
@@ -59,15 +63,16 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
       listBusinesses(),
       listTransactions({ biz: params.business ?? 'all', q: params.query || undefined }),
       listCategories(params.period, params.business ?? 'all', params.query || undefined),
+      listCategoryComparisons({ period: params.period, biz: params.business ?? 'all', q: params.query || undefined, basis: params.comparisonBasis ?? 'month' }),
       listConnections({ biz: params.business ?? 'all' }),
       listAccounts({ biz: params.business ?? 'all' }),
       listAlerts({ biz: params.business ?? 'all' }),
       getSummary(params.period, params.business ?? 'all'),
     ])
-      .then(([businesses, transactions, categories, connections, accounts, alerts, summary]) => {
+      .then(([businesses, transactions, categories, categoryComparisons, connections, accounts, alerts, summary]) => {
         if (cancelled) return;
         setState({
-          data: { businesses, transactions, categories, connections, accounts, alerts, summary },
+          data: { businesses, transactions, categories, categoryComparisons, connections, accounts, alerts, summary },
           loading: false,
           error: null,
         });
@@ -80,7 +85,7 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
     return () => {
       cancelled = true;
     };
-  }, [params.business, params.period, params.query, params.refreshKey]);
+  }, [params.business, params.comparisonBasis, params.period, params.query, params.refreshKey]);
 
   return state;
 }
