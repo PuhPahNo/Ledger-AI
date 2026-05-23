@@ -73,7 +73,6 @@ export async function buildApp() {
   await app.register(fastifyStatic, {
     root: dist,
     prefix: '/',
-    decorateReply: false,
   });
   app.setNotFoundHandler((request, reply) => {
     if (request.raw.url?.startsWith('/api')) {
