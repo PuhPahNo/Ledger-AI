@@ -1,13 +1,13 @@
 # Render Deployment Runbook
 
 ## Services
-- `ledger-ai-web`: builds the frontend and backend, serves `/api/*` and static assets.
-- `ledger-ai-worker`: processes Postgres-backed background jobs.
+- `ledger-ai-web`: builds the frontend and backend, serves `/api/*` and static assets, and
+  processes Postgres-backed background jobs when `RUN_WORKER_IN_WEB=true`.
 - `ledger-ai-postgres`: managed Postgres database.
 
 ## First Deploy
 1. Create the Render Blueprint from `render.yaml`.
-2. Add the variables from `.env.example` to Render. `VITE_*` is needed only on `ledger-ai-web`; the runtime/provider secrets should be present on both web and worker.
+2. Add the variables from `.env.example` to the Render web service.
 3. Run `npm run db:seed` from the web service shell.
 4. Reset the admin password with `npm run admin:reset -- --username admin --password <strong-password>`.
 

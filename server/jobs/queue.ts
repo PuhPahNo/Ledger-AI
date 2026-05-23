@@ -16,25 +16,28 @@ export async function enqueue(type: JobType, payload: Record<string, unknown> = 
 }
 
 export async function claimNextJob() {
-  const [job] = await db
-    .select()
-    .from(jobs)
-    .where(and(
-      or(eq(jobs.status, 'queued'), eq(jobs.status, 'failed')),
-      lte(jobs.runAfter, new Date()),
-      sql`${jobs.attempts} < ${jobs.maxAttempts}`,
-    ))
-    .orderBy(asc(jobs.runAfter), asc(jobs.createdAt))
-    .limit(1);
+  return db.transaction(async (tx) => {
+    const [job] = await tx
+      .select()
+      .from(jobs)
+      .where(and(
+        or(eq(jobs.status, 'queued'), eq(jobs.status, 'failed')),
+        lte(jobs.runAfter, new Date()),
+        sql`${jobs.attempts} < ${jobs.maxAttempts}`,
+      ))
+      .orderBy(asc(jobs.runAfter), asc(jobs.createdAt))
+      .limit(1)
+      .for('update', { skipLocked: true });
 
-  if (!job) return null;
+    if (!job) return null;
 
-  const [claimed] = await db
-    .update(jobs)
-    .set({ status: 'running', lockedAt: new Date(), attempts: job.attempts + 1, updatedAt: new Date() })
-    .where(eq(jobs.id, job.id))
-    .returning();
-  return claimed;
+    const [claimed] = await tx
+      .update(jobs)
+      .set({ status: 'running', lockedAt: new Date(), attempts: job.attempts + 1, updatedAt: new Date() })
+      .where(eq(jobs.id, job.id))
+      .returning();
+    return claimed ?? null;
+  });
 }
 
 export async function markJobSucceeded(jobId: string): Promise<void> {

@@ -9,6 +9,7 @@ const envSchema = z.object({
   APP_ENCRYPTION_KEY: z.string().min(16),
   FRONTEND_ORIGIN: z.string().default('http://localhost:5173'),
   PUBLIC_APP_URL: z.string().default('http://localhost:8787'),
+  RUN_WORKER_IN_WEB: z.enum(['true', 'false']).default('false'),
   STORAGE_DRIVER: z.enum(['local', 'r2']).default('local'),
   LOCAL_STORAGE_DIR: z.string().default('./storage'),
   R2_ENDPOINT: z.string().optional().default(''),

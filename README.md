@@ -3,7 +3,7 @@
 Internal spend tool for three businesses (Aurora Studio, Meridian Holdings, Kiln Coffee Co.) —
 a stripped-down Ramp built around the **Bento Color** direction from the design handoff.
 
-This repo now contains the Ledger AI frontend, Fastify backend, Postgres schema, worker, and
+This repo now contains the Ledger AI frontend, Fastify backend, Postgres schema, jobs, and
 deployment blueprint. The UI still supports mock mode for design/dev work, and switches to the
 real backend by setting `VITE_USE_MOCK_API=false`.
 
@@ -23,7 +23,7 @@ Backend dev:
 npm run db:migrate
 npm run db:seed
 npm run dev:backend        # http://localhost:8787
-npm run dev:worker
+npm run dev:worker         # optional: local background job loop
 ```
 
 Type-check without building:
@@ -114,7 +114,9 @@ don't move.
 
 Read **[BACKEND.md](./BACKEND.md)** for API contracts and integration notes. The backend includes
 real routes, migrations, provider adapters, a Postgres-backed job queue, auth, audit exports, and
-storage abstraction. Live Plaid, Gmail, OpenAI, and R2 behavior requires production credentials.
+storage abstraction. Production runs the job loop inside the web service with
+`RUN_WORKER_IN_WEB=true`. Live Plaid, Gmail, OpenAI, and R2 behavior requires production
+credentials.
 
 Phase PRDs live in `docs/prd/`; deployment and audit runbooks live in `docs/runbooks/`.
 

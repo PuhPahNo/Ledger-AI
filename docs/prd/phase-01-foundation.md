@@ -14,4 +14,5 @@ Turn Ledger AI from a frontend prototype into a deployable full-stack app with a
 - `npm run typecheck`, `npm test`, and `npm run build` pass.
 - `npm run db:migrate && npm run db:seed` prepares a fresh database.
 - `npm run dev:backend` starts the API on port 8787.
-- `render.yaml` defines web, worker, and Postgres services.
+- `render.yaml` defines the web service and Postgres database; the web service can run the
+  background job loop with `RUN_WORKER_IN_WEB=true` for a simpler internal deployment.
