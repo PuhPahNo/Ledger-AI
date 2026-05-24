@@ -63,7 +63,7 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
 
     Promise.all([
       listBusinesses(),
-      listTransactions({ biz: params.business ?? 'all', q: params.query || undefined, accountIds }),
+      listTransactions({ biz: params.business ?? 'all', q: params.query || undefined, accountIds, limit: 2000 }),
       listCategories(params.period, params.business ?? 'all', params.query || undefined, accountIds),
       listCategoryComparisons({
         period: params.period,

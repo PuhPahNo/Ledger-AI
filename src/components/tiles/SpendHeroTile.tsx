@@ -62,9 +62,18 @@ export function SpendHeroTile({ summary, contextLabel, detailLabel }: Props) {
       >
         {fmt$k(summary.total)}
       </div>
-      <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'flex-end', gap: 14, minHeight: 0 }}>
-        <Sparkline points={summary.trailingMonths} baseColor={colors.ink} highlightColor={colors.coral} />
-        <div style={{ fontSize: 11, color: colors.dim, lineHeight: 1.5 }}>
+      <div
+        style={{
+          marginTop: 'auto',
+          display: 'grid',
+          gridTemplateColumns: 'minmax(260px, 1fr) auto',
+          alignItems: 'end',
+          gap: 18,
+          minHeight: 0,
+        }}
+      >
+        <Sparkline points={summary.trailingMonths} baseColor={colors.ink} highlightColor={colors.coral} height={112} />
+        <div style={{ fontSize: 11.5, color: colors.dim, lineHeight: 1.55, minWidth: 150 }}>
           <div style={{ color: colors.ink, fontWeight: 600 }}>Trailing 12 months</div>
           {detailLabel && <div style={{ color: colors.ink }}>{detailLabel}</div>}
           <div>

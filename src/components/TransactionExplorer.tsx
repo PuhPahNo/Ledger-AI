@@ -66,7 +66,7 @@ export function TransactionExplorer({
       to: to || undefined,
       sort,
       dir,
-      limit: 1000,
+      limit: 2000,
     })
       .then(setRows)
       .catch((err: Error) => setError(err.message))
