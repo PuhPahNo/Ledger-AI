@@ -13,6 +13,8 @@ export interface ApiSpendSummary extends Omit<SpendSummary, 'total' | 'lastMonth
   totalCents: number;
   lastMonthCents?: number;
   avgMonthCents?: number;
+  trailingMonthCents?: number[];
+  trailingMonthLabels?: string[];
 }
 
 export function mapTransaction(row: ApiTransaction): Transaction {

@@ -81,6 +81,14 @@ export function updateConnectionBusiness(connectionId: string, businessId: strin
   });
 }
 
+export function updateConnectionLabel(connectionId: string, label: string): Promise<Connection> {
+  if (useMockApi) return Promise.resolve({ ...(CONNECTIONS.find((c) => c.id === connectionId) ?? CONNECTIONS[0]), label });
+  return http<Connection>(`/connections/${connectionId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ label }),
+  });
+}
+
 export function disconnectConnection(connectionId: string): Promise<void> {
   if (useMockApi) return Promise.resolve();
   return http<void>(`/connections/${connectionId}`, { method: 'DELETE' });

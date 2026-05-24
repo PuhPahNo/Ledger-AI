@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Business, CurrentUser, Transaction } from '@/types/domain';
-import { colors, fonts } from '@/theme/tokens';
+import { colors, fonts, radii } from '@/theme/tokens';
 import { countDuplicateSubs, countNeedsReceipt } from '@/lib/calc';
 import { useDashboard } from '@/hooks/useDashboard';
 import { uploadReceipt } from '@/api';
@@ -17,6 +17,8 @@ import { AnalysisTile } from './tiles/AnalysisTile';
 import { ConnectionsManager } from './ConnectionsManager';
 import { TransactionDrawer } from './TransactionDrawer';
 import { TransactionExplorer } from './TransactionExplorer';
+
+type TimePreset = 'month' | 'last3' | 'last12' | 'ytd';
 
 /** Display-only caption for a business tile, computed from the loaded transactions. */
 function captionFor(biz: Business, txns: Transaction[]): string {
@@ -37,6 +39,8 @@ interface DashboardProps {
 export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
   const [businessFilter, setBusinessFilter] = useState('all');
   const [query, setQuery] = useState('');
+  const [anchorMonth, setAnchorMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [timePreset, setTimePreset] = useState<TimePreset>('month');
   const [comparisonBasis, setComparisonBasis] = useState<'month' | 'year'>('month');
   const [refreshKey, setRefreshKey] = useState(0);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
@@ -44,7 +48,18 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<{ state: 'idle' | 'uploading' | 'processing' | 'matched' | 'pending' | 'error'; message?: string }>({ state: 'idle' });
-  const { data, loading, error } = useDashboard({ business: businessFilter, query, refreshKey, comparisonBasis, accountIds: selectedAccountIds });
+  const timeWindow = buildTimeWindow(anchorMonth, timePreset);
+  const { data, loading, error } = useDashboard({
+    business: businessFilter,
+    query,
+    refreshKey,
+    comparisonBasis,
+    accountIds: selectedAccountIds,
+    period: anchorMonth,
+    from: timeWindow.from,
+    to: timeWindow.to,
+    label: timeWindow.label,
+  });
 
   useEffect(() => {
     if (!data) return;
@@ -126,6 +141,14 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
         onQueryChange={setQuery}
       />
 
+      <TimeframeControls
+        month={anchorMonth}
+        preset={timePreset}
+        label={timeWindow.display}
+        onMonthChange={setAnchorMonth}
+        onPresetChange={setTimePreset}
+      />
+
       <div
         style={{
           flex: 1,
@@ -159,13 +182,11 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
           onClearAccounts={() => setSelectedAccountIds([])}
           onManageAccounts={() => setConnectionsOpen(true)}
         />
-        <ReceiptDropTile onFile={handleUpload} status={receiptStatus} />
-        <ActivityTile
-          transactions={transactions}
-          businesses={businesses}
-          totalCount={transactions.length}
-          onSelect={setSelectedTransaction}
-          onViewAll={() => setTransactionsOpen(true)}
+        <CategoriesTile
+          categories={categories}
+          comparisons={categoryComparisons}
+          comparisonBasis={comparisonBasis}
+          onComparisonBasisChange={setComparisonBasis}
         />
         <AnalysisTile
           businesses={businesses}
@@ -173,11 +194,13 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
           transactions={transactions}
           onOpenTransactions={() => setTransactionsOpen(true)}
         />
-        <CategoriesTile
-          categories={categories}
-          comparisons={categoryComparisons}
-          comparisonBasis={comparisonBasis}
-          onComparisonBasisChange={setComparisonBasis}
+        <ReceiptDropTile onFile={handleUpload} status={receiptStatus} />
+        <ActivityTile
+          transactions={transactions}
+          businesses={businesses}
+          totalCount={transactions.length}
+          onSelect={setSelectedTransaction}
+          onViewAll={() => setTransactionsOpen(true)}
         />
         <ConnectionsTile connections={connections} onAdd={() => setConnectionsOpen(true)} />
         <AlertsTile alerts={alerts} />
@@ -214,6 +237,106 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
   );
 }
 
+function TimeframeControls({
+  month,
+  preset,
+  label,
+  onMonthChange,
+  onPresetChange,
+}: {
+  month: string;
+  preset: TimePreset;
+  label: string;
+  onMonthChange: (month: string) => void;
+  onPresetChange: (preset: TimePreset) => void;
+}) {
+  const shiftMonth = (delta: number) => {
+    const current = new Date(`${month}-01T00:00:00`);
+    current.setMonth(current.getMonth() + delta);
+    onMonthChange(current.toISOString().slice(0, 7));
+  };
+
+  return (
+    <div style={timeframeBarStyle}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <button type="button" onClick={() => shiftMonth(-1)} style={timeIconButtonStyle} title="Previous month">‹</button>
+        <input
+          type="month"
+          value={month}
+          onChange={(event) => onMonthChange(event.target.value)}
+          style={monthInputStyle}
+        />
+        <button type="button" onClick={() => shiftMonth(1)} style={timeIconButtonStyle} title="Next month">›</button>
+      </div>
+      <div style={timePresetGroupStyle}>
+        <PresetButton active={preset === 'month'} onClick={() => onPresetChange('month')}>Month</PresetButton>
+        <PresetButton active={preset === 'last3'} onClick={() => onPresetChange('last3')}>Last 3m</PresetButton>
+        <PresetButton active={preset === 'last12'} onClick={() => onPresetChange('last12')}>Last 12m</PresetButton>
+        <PresetButton active={preset === 'ytd'} onClick={() => onPresetChange('ytd')}>YTD</PresetButton>
+      </div>
+      <span style={{ color: colors.dim, fontSize: 12 }}>{label}</span>
+    </div>
+  );
+}
+
+function PresetButton({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        border: 'none',
+        borderRadius: radii.pill,
+        background: active ? colors.ink : 'transparent',
+        color: active ? colors.lemon : colors.dim,
+        cursor: 'pointer',
+        fontSize: 11,
+        fontWeight: 900,
+        padding: '5px 9px',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function buildTimeWindow(month: string, preset: TimePreset) {
+  const start = new Date(`${month}-01T00:00:00`);
+  const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  let fromDate = new Date(start);
+  let label = start.toLocaleString('en-US', { month: 'short' }).toUpperCase();
+  let display = start.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+
+  if (preset === 'last3') {
+    fromDate = new Date(start.getFullYear(), start.getMonth() - 2, 1);
+    label = 'LAST 3M';
+    display = `${formatRangeMonth(fromDate)} - ${formatRangeMonth(end)}`;
+  } else if (preset === 'last12') {
+    fromDate = new Date(start.getFullYear(), start.getMonth() - 11, 1);
+    label = 'LAST 12M';
+    display = `${formatRangeMonth(fromDate)} - ${formatRangeMonth(end)}`;
+  } else if (preset === 'ytd') {
+    fromDate = new Date(start.getFullYear(), 0, 1);
+    label = 'YTD';
+    display = `${start.getFullYear()} year to date`;
+  }
+
+  return {
+    from: isoDate(fromDate),
+    to: isoDate(end),
+    label,
+    display,
+  };
+}
+
+function formatRangeMonth(date: Date): string {
+  return date.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+}
+
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
 function StateScreen({ children, tone }: { children: React.ReactNode; tone?: 'error' }) {
   return (
     <div
@@ -232,3 +355,41 @@ function StateScreen({ children, tone }: { children: React.ReactNode; tone?: 'er
     </div>
   );
 }
+
+const timeframeBarStyle: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  padding: '0 8px',
+  minHeight: 34,
+};
+
+const timePresetGroupStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 4,
+  background: colors.paper,
+  borderRadius: radii.pill,
+  padding: 3,
+};
+
+const timeIconButtonStyle: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  border: `1px solid ${colors.ink2}`,
+  borderRadius: '50%',
+  background: colors.paper,
+  color: colors.ink,
+  cursor: 'pointer',
+  fontWeight: 900,
+};
+
+const monthInputStyle: React.CSSProperties = {
+  border: `1px solid ${colors.ink2}`,
+  borderRadius: radii.pill,
+  background: colors.paper,
+  color: colors.ink,
+  padding: '5px 9px',
+  fontSize: 12,
+  fontWeight: 900,
+  fontFamily: fonts.sans,
+};

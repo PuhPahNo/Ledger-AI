@@ -1,5 +1,7 @@
 interface Props {
   points: number[];
+  values?: number[];
+  labels?: string[];
   /** Colors for prior and current (highlighted) bars. */
   baseColor: string;
   highlightColor: string;
@@ -7,7 +9,7 @@ interface Props {
 }
 
 /** Trailing-12 sparkline: matches the design's bar chart at the bottom of the hero tile. */
-export function Sparkline({ points, baseColor, highlightColor, height = 96 }: Props) {
+export function Sparkline({ points, values = [], labels = [], baseColor, highlightColor, height = 96 }: Props) {
   const viewWidth = 420;
   const viewHeight = 120;
   const gap = 8;
@@ -25,6 +27,8 @@ export function Sparkline({ points, baseColor, highlightColor, height = 96 }: Pr
     >
       {points.map((p, i) => {
         const h = Math.max(4, p * (viewHeight - 12));
+        const label = labels[i] ?? `Month ${i + 1}`;
+        const value = values[i] != null ? formatDollars(values[i] / 100) : `${Math.round(p * 100)}%`;
         return (
           <rect
             key={i}
@@ -35,9 +39,19 @@ export function Sparkline({ points, baseColor, highlightColor, height = 96 }: Pr
             rx={6}
             fill={i === last ? highlightColor : baseColor}
             opacity={i === last ? 1 : 0.85}
-          />
+          >
+            <title>{`${label}: ${value}`}</title>
+          </rect>
         );
       })}
     </svg>
   );
+}
+
+function formatDollars(value: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  }).format(value);
 }

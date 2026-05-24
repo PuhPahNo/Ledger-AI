@@ -124,6 +124,8 @@ export interface SpendSummary {
   periodLabel: string;        // "MAY"
   deltaPct: number;           // +12 = up 12% vs prior period
   trailingMonths: number[];   // 0..1 normalized sparkline points
+  trailingMonthLabels?: string[];
+  trailingMonthCents?: number[];
   lastMonth: number;
   lastMonthCents?: number;
   avgMonth: number;

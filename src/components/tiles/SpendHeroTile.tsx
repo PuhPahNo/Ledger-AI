@@ -72,7 +72,14 @@ export function SpendHeroTile({ summary, contextLabel, detailLabel }: Props) {
           minHeight: 0,
         }}
       >
-        <Sparkline points={summary.trailingMonths} baseColor={colors.ink} highlightColor={colors.coral} height={112} />
+        <Sparkline
+          points={summary.trailingMonths}
+          values={summary.trailingMonthCents}
+          labels={summary.trailingMonthLabels}
+          baseColor={colors.ink}
+          highlightColor={colors.coral}
+          height={112}
+        />
         <div style={{ fontSize: 11.5, color: colors.dim, lineHeight: 1.55, minWidth: 150 }}>
           <div style={{ color: colors.ink, fontWeight: 600 }}>Trailing 12 months</div>
           {detailLabel && <div style={{ color: colors.ink }}>{detailLabel}</div>}

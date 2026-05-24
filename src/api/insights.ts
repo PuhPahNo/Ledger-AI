@@ -4,6 +4,8 @@ import { TRANSACTIONS, visibleMockTransactions } from './mocks';
 
 export function listCategoryComparisons(params: {
   period?: string;
+  from?: string;
+  to?: string;
   biz?: BusinessId | 'all';
   basis?: 'month' | 'year';
   q?: string;
@@ -12,6 +14,8 @@ export function listCategoryComparisons(params: {
   if (useMockApi) return Promise.resolve(mockComparisons(params));
   const query = new URLSearchParams();
   if (params.period) query.set('period', params.period);
+  if (params.from) query.set('from', params.from);
+  if (params.to) query.set('to', params.to);
   if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
   if (params.basis) query.set('basis', params.basis);
   if (params.q) query.set('q', params.q);

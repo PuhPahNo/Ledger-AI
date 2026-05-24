@@ -8,20 +8,29 @@ import { CATEGORIES, TRANSACTIONS, visibleMockTransactions } from './mocks';
  * Returns categorized spend totals for the period.
  * Backend is responsible for the categorization (rules + ML); UI only displays.
  */
-export function listCategories(period?: string, biz?: BusinessId | 'all', q?: string, accountIds: string[] = []): Promise<Category[]> {
+export function listCategories(params: {
+  period?: string;
+  from?: string;
+  to?: string;
+  biz?: BusinessId | 'all';
+  q?: string;
+  accountIds?: string[];
+} = {}): Promise<Category[]> {
   if (useMockApi) {
-    const visibleTransactions = visibleMockTransactions(TRANSACTIONS, accountIds);
+    const visibleTransactions = visibleMockTransactions(TRANSACTIONS, params.accountIds)
+      .filter((txn) => !params.from || txn.date >= params.from)
+      .filter((txn) => !params.to || txn.date <= params.to);
     let rows = [...CATEGORIES];
-    if (biz && biz !== 'all') {
+    if (params.biz && params.biz !== 'all') {
       rows = rows.map((category) => {
-        const txns = visibleTransactions.filter((txn) => txn.biz === biz && txn.cat === category.name && txn.amount < 0);
+        const txns = visibleTransactions.filter((txn) => txn.biz === params.biz && txn.cat === category.name && txn.amount < 0);
         return {
           ...category,
           amount: Math.abs(txns.reduce((sum, txn) => sum + txn.amount, 0)),
           count: txns.length,
         };
       }).filter((category) => category.count > 0);
-    } else if (accountIds.length) {
+    } else if (params.accountIds?.length) {
       rows = rows.map((category) => {
         const txns = visibleTransactions.filter((txn) => txn.cat === category.name && txn.amount < 0);
         return {
@@ -31,13 +40,15 @@ export function listCategories(period?: string, biz?: BusinessId | 'all', q?: st
         };
       }).filter((category) => category.count > 0);
     }
-    if (q) rows = rows.filter((c) => c.name.toLowerCase().includes(q.toLowerCase()));
+    if (params.q) rows = rows.filter((c) => c.name.toLowerCase().includes(params.q!.toLowerCase()));
     return Promise.resolve(rows);
   }
   const query = new URLSearchParams();
-  if (period) query.set('period', period);
-  if (biz && biz !== 'all') query.set('biz', biz);
-  if (q) query.set('q', q);
-  if (accountIds.length) query.set('accounts', accountIds.join(','));
+  if (params.period) query.set('period', params.period);
+  if (params.from) query.set('from', params.from);
+  if (params.to) query.set('to', params.to);
+  if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
+  if (params.q) query.set('q', params.q);
+  if (params.accountIds?.length) query.set('accounts', params.accountIds.join(','));
   return http<ApiCategory[]>(`/categories?${query.toString()}`).then((rows) => rows.map(mapCategory));
 }

@@ -146,14 +146,14 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
     await requireUser(request);
     const query = z.object({
       period: z.string().optional(),
+      from: z.string().optional(),
+      to: z.string().optional(),
       biz: z.string().optional(),
       q: z.string().optional(),
       accounts: z.string().optional(),
     }).parse(request.query);
     const accountIds = parseAccountIds(query.accounts);
-    const period = query.period ?? new Date().toISOString().slice(0, 7);
-    const from = `${period}-01`;
-    const to = `${period}-31`;
+    const { from, to } = dateWindow(query.period, query.from, query.to);
     const selectedBusiness = query.biz && query.biz !== 'all'
       ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
       : null;
@@ -248,6 +248,8 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
     await requireUser(request);
     const query = z.object({
       period: z.string().optional(),
+      from: z.string().optional(),
+      to: z.string().optional(),
       biz: z.string().optional(),
       basis: z.enum(['month', 'year']).default('month'),
       q: z.string().optional(),
@@ -255,7 +257,9 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
     }).parse(request.query);
     const accountIds = parseAccountIds(query.accounts);
     const period = query.period ?? new Date().toISOString().slice(0, 7);
-    const window = comparisonWindow(period, query.basis);
+    const window = query.from && query.to
+      ? comparisonWindowForRange(query.from, query.to, query.basis)
+      : comparisonWindow(period, query.basis);
     const selectedBusiness = query.biz && query.biz !== 'all'
       ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
       : null;
@@ -306,12 +310,17 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
     await requireUser(request);
     const query = z.object({
       period: z.string().optional(),
+      from: z.string().optional(),
+      to: z.string().optional(),
+      label: z.string().optional(),
       biz: z.string().optional(),
       accounts: z.string().optional(),
     }).parse(request.query);
     const accountIds = parseAccountIds(query.accounts);
     const period = query.period ?? new Date().toISOString().slice(0, 7);
-    const { from, to, priorFrom, priorTo, labels } = monthWindow(period);
+    const { from, to, label } = dateWindow(period, query.from, query.to);
+    const { priorFrom, priorTo } = previousDateWindow(from, to);
+    const labels = trailingMonthWindows(to);
     const selectedBusiness = query.biz && query.biz !== 'all'
       ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
       : null;
@@ -345,13 +354,26 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
     const priorTotal = prior?.totalCents ?? 0;
     return {
       totalCents: currentTotal,
-      periodLabel: new Date(`${period}-01T00:00:00`).toLocaleString('en-US', { month: 'short' }).toUpperCase(),
+      periodLabel: query.label ?? label,
       deltaPct: priorTotal > 0 ? Math.round(((currentTotal - priorTotal) / priorTotal) * 100) : 0,
       trailingMonths: trailingRows.map((value) => Number((value / max).toFixed(3))),
+      trailingMonthCents: trailingRows.map((value) => Number(value ?? 0)),
+      trailingMonthLabels: labels.map((item) => item.label),
       lastMonthCents: priorTotal,
       avgMonthCents: avg,
     };
   });
+}
+
+function dateWindow(period?: string, from?: string, to?: string) {
+  if (from && to) {
+    return {
+      from,
+      to,
+      label: rangeLabel(from, to),
+    };
+  }
+  return monthWindow(period ?? new Date().toISOString().slice(0, 7));
 }
 
 function comparisonWindow(period: string, basis: 'month' | 'year') {
@@ -369,6 +391,26 @@ function comparisonWindow(period: string, basis: 'month' | 'year') {
     currentTo: isoDate(new Date(start.getFullYear(), start.getMonth() + 1, 0)),
     previousFrom: isoDate(new Date(start.getFullYear(), start.getMonth() - 1, 1)),
     previousTo: isoDate(new Date(start.getFullYear(), start.getMonth(), 0)),
+  };
+}
+
+function comparisonWindowForRange(from: string, to: string, basis: 'month' | 'year') {
+  if (basis === 'year') {
+    const start = dateFromIso(from);
+    const end = dateFromIso(to);
+    return {
+      currentFrom: from,
+      currentTo: to,
+      previousFrom: isoDate(new Date(start.getFullYear() - 1, start.getMonth(), start.getDate())),
+      previousTo: isoDate(new Date(end.getFullYear() - 1, end.getMonth(), end.getDate())),
+    };
+  }
+  const previous = previousDateWindow(from, to);
+  return {
+    currentFrom: from,
+    currentTo: to,
+    previousFrom: previous.priorFrom,
+    previousTo: previous.priorTo,
   };
 }
 
@@ -392,20 +434,51 @@ function monthWindow(period: string) {
   const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
   const priorStart = new Date(start.getFullYear(), start.getMonth() - 1, 1);
   const priorEnd = new Date(start.getFullYear(), start.getMonth(), 0);
-  const labels = Array.from({ length: 12 }, (_, index) => {
-    const date = new Date(start.getFullYear(), start.getMonth() - (11 - index), 1);
-    return {
-      from: isoDate(date),
-      to: isoDate(new Date(date.getFullYear(), date.getMonth() + 1, 0)),
-    };
-  });
   return {
     from: isoDate(start),
     to: isoDate(end),
     priorFrom: isoDate(priorStart),
     priorTo: isoDate(priorEnd),
-    labels,
+    label: start.toLocaleString('en-US', { month: 'short' }).toUpperCase(),
   };
+}
+
+function previousDateWindow(from: string, to: string) {
+  const start = dateFromIso(from);
+  const end = dateFromIso(to);
+  const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1);
+  const priorEnd = new Date(start);
+  priorEnd.setDate(priorEnd.getDate() - 1);
+  const priorStart = new Date(priorEnd);
+  priorStart.setDate(priorStart.getDate() - (days - 1));
+  return {
+    priorFrom: isoDate(priorStart),
+    priorTo: isoDate(priorEnd),
+  };
+}
+
+function trailingMonthWindows(to: string) {
+  const end = dateFromIso(to);
+  return Array.from({ length: 12 }, (_, index) => {
+    const date = new Date(end.getFullYear(), end.getMonth() - (11 - index), 1);
+    return {
+      from: isoDate(date),
+      to: isoDate(new Date(date.getFullYear(), date.getMonth() + 1, 0)),
+      label: date.toLocaleString('en-US', { month: 'short', year: '2-digit' }),
+    };
+  });
+}
+
+function rangeLabel(from: string, to: string): string {
+  const start = dateFromIso(from);
+  const end = dateFromIso(to);
+  const sameMonth = start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth();
+  if (sameMonth) return start.toLocaleString('en-US', { month: 'short' }).toUpperCase();
+  return `${start.toLocaleString('en-US', { month: 'short' }).toUpperCase()}-${end.toLocaleString('en-US', { month: 'short' }).toUpperCase()}`;
+}
+
+function dateFromIso(value: string): Date {
+  return new Date(`${value}T00:00:00`);
 }
 
 function isoDate(date: Date): string {

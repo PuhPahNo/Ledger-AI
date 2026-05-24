@@ -103,6 +103,20 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     return toApiConnection(row);
   });
 
+  app.patch('/connections/:id', async (request) => {
+    const user = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({ label: z.string().trim().min(1).max(80) }).parse(request.body);
+    const [row] = await db
+      .update(connections)
+      .set({ label: body.label, updatedAt: new Date() })
+      .where(eq(connections.id, params.id))
+      .returning();
+    if (!row) notFound('Connection not found');
+    await audit(request, user, 'rename_connection', 'connection', params.id, { label: body.label });
+    return toApiConnection(row);
+  });
+
   app.delete('/connections/:id', async (request, reply) => {
     const user = await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);

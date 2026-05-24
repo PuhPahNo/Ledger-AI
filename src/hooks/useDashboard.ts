@@ -45,6 +45,9 @@ export interface DashboardParams {
   business?: string;
   query?: string;
   period?: string;
+  from?: string;
+  to?: string;
+  label?: string;
   refreshKey?: number;
   comparisonBasis?: 'month' | 'year';
   accountIds?: string[];
@@ -60,7 +63,9 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
   useEffect(() => {
     let cancelled = false;
     const accountIds = params.accountIds ?? [];
-    const window = monthBounds(params.period);
+    const window = params.from && params.to
+      ? { from: params.from, to: params.to }
+      : monthBounds(params.period);
 
     Promise.all([
       listBusinesses(),
@@ -72,9 +77,18 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
         to: window.to,
         limit: 2000,
       }),
-      listCategories(params.period, params.business ?? 'all', params.query || undefined, accountIds),
+      listCategories({
+        period: params.period,
+        from: window.from,
+        to: window.to,
+        biz: params.business ?? 'all',
+        q: params.query || undefined,
+        accountIds,
+      }),
       listCategoryComparisons({
         period: params.period,
+        from: window.from,
+        to: window.to,
         biz: params.business ?? 'all',
         q: params.query || undefined,
         basis: params.comparisonBasis ?? 'month',
@@ -83,7 +97,14 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
       listConnections({ biz: params.business ?? 'all' }),
       listAccounts({ biz: params.business ?? 'all' }),
       listAlerts({ biz: params.business ?? 'all' }),
-      getSummary(params.period, params.business ?? 'all', accountIds),
+      getSummary({
+        period: params.period,
+        from: window.from,
+        to: window.to,
+        label: params.label,
+        biz: params.business ?? 'all',
+        accountIds,
+      }),
     ])
       .then(([businesses, transactions, categories, categoryComparisons, connections, accounts, alerts, summary]) => {
         if (cancelled) return;
@@ -101,7 +122,17 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
     return () => {
       cancelled = true;
     };
-  }, [params.accountIds?.join(','), params.business, params.comparisonBasis, params.period, params.query, params.refreshKey]);
+  }, [
+    params.accountIds?.join(','),
+    params.business,
+    params.comparisonBasis,
+    params.from,
+    params.label,
+    params.period,
+    params.query,
+    params.refreshKey,
+    params.to,
+  ]);
 
   return state;
 }

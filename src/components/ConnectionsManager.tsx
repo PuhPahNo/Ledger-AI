@@ -12,6 +12,7 @@ import {
   updateAccountBusiness,
   updateAccountEnabled,
   updateConnectionBusiness,
+  updateConnectionLabel,
 } from '@/api';
 import type { Account, Business, Connection, ConnectionKind, ConnectionStatus } from '@/types/domain';
 import { colors, fonts, radii } from '@/theme/tokens';
@@ -154,6 +155,13 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     onRefresh();
   };
 
+  const renameConnection = async (connection: Connection, label: string) => {
+    if (!connection.id) return;
+    setStatus(`Renamed ${connection.label}.`);
+    await updateConnectionLabel(connection.id, label);
+    onRefresh();
+  };
+
   const changeAccountBusiness = async (account: Account, next: string, applyToExisting = false) => {
     setStatus(applyToExisting ? `Reassigning existing transactions for ${account.name}...` : `Updated default business for ${account.name}.`);
     await updateAccountBusiness(account.id, next || null, applyToExisting);
@@ -219,6 +227,7 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
                   connection={connection}
                   businesses={businesses}
                   onBusiness={(next) => changeConnectionBusiness(connection, next)}
+                  onRename={(label) => renameConnection(connection, label)}
                   onSync={() => refreshConnection(connection)}
                   onBackfill={connection.kind === 'gmail' ? undefined : () => backfillConnection(connection)}
                   onDisconnect={() => removeConnection(connection)}
@@ -283,6 +292,7 @@ function ProviderRow({
   connection,
   businesses,
   onBusiness,
+  onRename,
   onSync,
   onBackfill,
   onDisconnect,
@@ -290,15 +300,51 @@ function ProviderRow({
   connection: Connection;
   businesses: Business[];
   onBusiness: (businessId: string) => void;
+  onRename: (label: string) => void;
   onSync: () => void;
   onBackfill?: () => void;
   onDisconnect: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [label, setLabel] = useState(connection.label);
+  useEffect(() => {
+    setLabel(connection.label);
+  }, [connection.label]);
+  const saveLabel = () => {
+    const next = label.trim();
+    if (!next || next === connection.label) {
+      setEditing(false);
+      setLabel(connection.label);
+      return;
+    }
+    onRename(next);
+    setEditing(false);
+  };
+
   return (
     <div style={providerRowStyle}>
       <KindIcon kind={connection.kind} />
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 900, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{connection.label}</div>
+        {editing ? (
+          <input
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            onBlur={saveLabel}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') saveLabel();
+              if (event.key === 'Escape') {
+                setLabel(connection.label);
+                setEditing(false);
+              }
+            }}
+            autoFocus
+            style={renameInputStyle}
+          />
+        ) : (
+          <button type="button" onClick={() => setEditing(true)} style={connectionNameButtonStyle} title="Rename connection">
+            {connection.label}
+          </button>
+        )}
         <div style={{ color: colors.dim, fontSize: 11 }}>{connection.last}</div>
       </div>
       <StatusPill status={connection.status} />
@@ -330,7 +376,7 @@ function AccountRow({
           {account.kind}{account.mask ? ` · ${account.mask}` : ''} · {account.enabled ? 'included in spend' : 'ignored in spend'}
         </div>
       </div>
-      <BusinessSelect value={account.businessId ?? ''} businesses={businesses} onChange={(next) => onBusiness(next)} />
+      <BusinessSelect value={account.businessId ?? ''} businesses={businesses} onChange={(next) => onBusiness(next, true)} />
       <button
         type="button"
         disabled={!account.businessId}
@@ -542,6 +588,32 @@ const selectStyle: React.CSSProperties = {
   color: colors.ink,
   padding: '8px 9px',
   fontSize: 12,
+};
+
+const connectionNameButtonStyle: React.CSSProperties = {
+  border: 'none',
+  background: 'transparent',
+  color: colors.ink,
+  padding: 0,
+  maxWidth: '100%',
+  fontWeight: 900,
+  fontSize: 13,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  textAlign: 'left',
+  cursor: 'text',
+};
+
+const renameInputStyle: React.CSSProperties = {
+  width: '100%',
+  border: `1px solid ${colors.ink2}`,
+  borderRadius: 8,
+  background: colors.paper,
+  color: colors.ink,
+  padding: '4px 6px',
+  fontSize: 12,
+  fontWeight: 900,
 };
 
 const smallButtonStyle: React.CSSProperties = {

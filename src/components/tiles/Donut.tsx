@@ -44,7 +44,9 @@ export function Donut({ categories, strokeColor, labelColor, size = 112 }: Props
             fill={accentRamp[i % accentRamp.length]}
             stroke={strokeColor}
             strokeWidth={1.5}
-          />
+          >
+            <title>{`${c.name}: ${fmt$k(c.amount)}`}</title>
+          </path>
         );
       })}
       <text

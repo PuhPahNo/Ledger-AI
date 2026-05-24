@@ -81,6 +81,8 @@ export const SUMMARY: SpendSummary = {
   periodLabel: 'MAY',
   deltaPct: 12,
   trailingMonths: [0.42, 0.38, 0.51, 0.46, 0.55, 0.61, 0.58, 0.66, 0.71, 0.68, 0.78, 0.82],
+  trailingMonthLabels: ['Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May'],
+  trailingMonthCents: [420000, 380000, 510000, 460000, 550000, 610000, 580000, 660000, 710000, 680000, 780000, 820000],
   lastMonth: 10213,
   avgMonth: 9418,
 };
