@@ -131,8 +131,8 @@ async function upsertAccounts(connectionId: string, businessId: string | undefin
       officialName: raw.official_name,
       mask: raw.mask,
       kind: mapAccountKind(raw.type, raw.subtype),
-      currentBalanceCents: raw.balances?.current != null ? Math.round(Number(raw.balances.current) * 100) : null,
-      availableBalanceCents: raw.balances?.available != null ? Math.round(Number(raw.balances.available) * 100) : null,
+      currentBalanceCents: plaidBalanceCents(raw.balances?.current),
+      availableBalanceCents: plaidBalanceCents(raw.balances?.available),
     }).onConflictDoUpdate({
       target: accounts.plaidAccountId,
       set: {
@@ -141,6 +141,8 @@ async function upsertAccounts(connectionId: string, businessId: string | undefin
         officialName: raw.official_name,
         mask: raw.mask,
         kind: mapAccountKind(raw.type, raw.subtype),
+        currentBalanceCents: plaidBalanceCents(raw.balances?.current),
+        availableBalanceCents: plaidBalanceCents(raw.balances?.available),
         updatedAt: new Date(),
       },
     });
@@ -196,6 +198,13 @@ function plaidCategoryHints(raw: Record<string, any>): string[] {
     personalFinanceCategory.detailed,
     personalFinanceCategory.confidence_level,
   ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+}
+
+export function plaidBalanceCents(value: unknown): number | null {
+  if (value == null) return null;
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return null;
+  return Math.round(amount * 100);
 }
 
 function mapAccountKind(type?: string, subtype?: string): 'checking' | 'savings' | 'credit' | 'other' {

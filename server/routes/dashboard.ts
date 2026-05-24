@@ -6,7 +6,7 @@ import { db } from '../db/client.js';
 import { accounts, alerts, businesses, categories, connections, transactions } from '../db/schema.js';
 import { notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
-import { learnMerchantCategoryRule } from '../services/categorization.js';
+import { isIncomeCategory, learnMerchantCategoryRule } from '../services/categorization.js';
 import { normalizeTransactionOverride } from '../services/transactionOverrides.js';
 import { toApiAlert, toApiBusiness, toApiCategory, toApiConnection, toApiTransaction } from './mappers.js';
 
@@ -96,9 +96,10 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       const business = await db.query.businesses.findFirst({ where: eq(businesses.id, body.businessId) });
       if (!business) notFound('Business not found');
     }
+    let selectedCategory: typeof categories.$inferSelect | undefined;
     if (body.categoryId) {
-      const category = await db.query.categories.findFirst({ where: eq(categories.id, body.categoryId) });
-      if (!category) notFound('Category not found');
+      selectedCategory = await db.query.categories.findFirst({ where: eq(categories.id, body.categoryId) });
+      if (!selectedCategory) notFound('Category not found');
     }
 
     const [updated] = await db
@@ -107,7 +108,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(transactions.id, params.id))
       .returning();
     if (!updated) notFound('Transaction not found');
-    if (body.categoryId && updated.categoryId) {
+    if (
+      body.categoryId
+      && updated.categoryId
+      && updated.amountCents < 0
+      && selectedCategory
+      && !isIncomeCategory(selectedCategory)
+    ) {
       await learnMerchantCategoryRule({
         businessId: updated.businessId,
         merchant: updated.merchant,

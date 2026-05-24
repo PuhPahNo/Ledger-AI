@@ -1,6 +1,7 @@
 import { closeDb } from '../db/client.js';
 import { claimNextJob, markJobFailed, markJobSucceeded } from './queue.js';
 import { handleJob } from './handlers.js';
+import { enqueueDuePlaidSyncs } from './scheduler.js';
 
 type WorkerLogger = Pick<typeof console, 'error' | 'log'>;
 
@@ -8,6 +9,8 @@ export interface WorkerLoop {
   done: Promise<void>;
   stop: () => Promise<void>;
 }
+
+const SCHEDULE_CHECK_MS = 60 * 60 * 1000;
 
 async function tick(logger: WorkerLogger): Promise<void> {
   const job = await claimNextJob();
@@ -26,11 +29,17 @@ export function startWorkerLoop(options: { pollMs?: number; logger?: WorkerLogge
   const pollMs = options.pollMs ?? Number(process.env.JOB_POLL_MS ?? 5000);
   const logger = options.logger ?? console;
   let stopping = false;
+  let nextScheduleCheckAt = 0;
 
   const done = (async () => {
     logger.log('Ledger AI worker started');
     while (!stopping) {
       try {
+        if (Date.now() >= nextScheduleCheckAt) {
+          nextScheduleCheckAt = Date.now() + SCHEDULE_CHECK_MS;
+          const queued = await enqueueDuePlaidSyncs();
+          if (queued > 0) logger.log(`Queued ${queued} daily Plaid sync job${queued === 1 ? '' : 's'}`);
+        }
         await tick(logger);
       } catch (error) {
         logger.error('Ledger AI worker tick failed', error);

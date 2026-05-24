@@ -13,6 +13,13 @@ export interface CategorizeInput {
   plaidCategory?: string[];
 }
 
+interface CategoryCandidate {
+  id: string;
+  businessId: string | null;
+  name: string;
+  taxCode: string | null;
+}
+
 const categorySuggestionSchema = z.object({
   categoryId: z.string().uuid().nullable(),
   confidence: z.number().min(0).max(1),
@@ -47,10 +54,16 @@ export async function categorizeTransaction(input: CategorizeInput): Promise<str
       .orderBy(asc(categories.name)),
   ]);
 
+  const incomeCategory = preferredIncomeCategory(availableCategories, input.businessId);
+  if (input.amountCents > 0) return incomeCategory?.id ?? (await fallbackUncategorizedCategory());
+
+  const categoryById = new Map(availableCategories.map((category) => [category.id, category]));
   const merchant = normalize(input.merchant);
   const plaidCategory = normalize(input.plaidCategory?.join(' ') ?? '');
 
   for (const rule of rules) {
+    const targetCategory = categoryById.get(rule.categoryId);
+    if (!targetCategory || !categoryMatchesTransactionDirection(targetCategory, input.amountCents)) continue;
     if (ruleMatches({
       matchKind: rule.matchKind,
       pattern: rule.pattern,
@@ -62,9 +75,16 @@ export async function categorizeTransaction(input: CategorizeInput): Promise<str
     }
   }
 
-  const aiSuggestion = await suggestCategoryWithAi(input, availableCategories);
+  const aiEligibleCategories = availableCategories.filter((category) => (
+    categoryMatchesTransactionDirection(category, input.amountCents)
+  ));
+  const aiSuggestion = await suggestCategoryWithAi(input, aiEligibleCategories);
   if (aiSuggestion) return aiSuggestion;
 
+  return fallbackUncategorizedCategory();
+}
+
+async function fallbackUncategorizedCategory(): Promise<string | null> {
   const uncategorized = await db.query.categories.findFirst({
     where: and(isNull(categories.businessId), eq(categories.name, 'Uncategorized')),
   });
@@ -127,13 +147,33 @@ function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
+export function isIncomeCategory(category: CategoryCandidate): boolean {
+  const name = normalize(category.name);
+  return category.taxCode === 'income' || name === 'income' || name === 'revenue';
+}
+
+export function categoryMatchesTransactionDirection(category: CategoryCandidate, amountCents: number): boolean {
+  if (amountCents < 0) return !isIncomeCategory(category);
+  if (amountCents > 0) return isIncomeCategory(category);
+  return true;
+}
+
+export function preferredIncomeCategory(categories: CategoryCandidate[], businessId: string): CategoryCandidate | null {
+  const incomeCategories = categories.filter(isIncomeCategory);
+  return incomeCategories.find((category) => category.businessId === businessId)
+    ?? incomeCategories.find((category) => category.businessId === null)
+    ?? incomeCategories[0]
+    ?? null;
+}
+
 async function suggestCategoryWithAi(
   input: CategorizeInput,
-  availableCategories: Array<{ id: string; name: string; taxCode: string | null; businessId: string | null }>,
+  availableCategories: CategoryCandidate[],
 ): Promise<string | null> {
   const env = getEnv();
   if (!env.OPENAI_API_KEY || availableCategories.length === 0) return null;
   try {
+    const direction = input.amountCents > 0 ? 'inflow/income' : input.amountCents < 0 ? 'outflow/expense' : 'zero amount';
     const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
     const response = await client.responses.parse({
       model: env.OPENAI_CATEGORIZATION_MODEL,
@@ -144,6 +184,7 @@ async function suggestCategoryWithAi(
           text: [
             'You are categorizing a business transaction for Ledger AI.',
             'Choose exactly one categoryId from the provided category list, or null if none fit.',
+            `Transaction direction: ${direction}. Never contradict the direction.`,
             'Prefer tax-oriented Schedule C categories over miscellaneous internal categories.',
             'Do not create new categories or tax codes.',
             `Transaction: ${JSON.stringify({

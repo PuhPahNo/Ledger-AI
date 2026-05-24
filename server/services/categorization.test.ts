@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { ruleMatches } from './categorization.js';
+import {
+  categoryMatchesTransactionDirection,
+  preferredIncomeCategory,
+  ruleMatches,
+} from './categorization.js';
 
 describe('ruleMatches', () => {
   it('matches merchant contains rules case-insensitively', () => {
@@ -37,5 +41,31 @@ describe('ruleMatches', () => {
       merchant: 'United',
       amountCents: -61240,
     })).toBe(true);
+  });
+});
+
+describe('categoryMatchesTransactionDirection', () => {
+  const revenue = { id: 'revenue', businessId: null, name: 'Revenue', taxCode: 'income' };
+  const commissions = { id: 'fees', businessId: null, name: 'Commissions & Fees', taxCode: 'schedule_c_line_10' };
+
+  it('keeps inflows in income categories only', () => {
+    expect(categoryMatchesTransactionDirection(revenue, 125000)).toBe(true);
+    expect(categoryMatchesTransactionDirection(commissions, 125000)).toBe(false);
+  });
+
+  it('keeps outflows out of income categories', () => {
+    expect(categoryMatchesTransactionDirection(revenue, -2500)).toBe(false);
+    expect(categoryMatchesTransactionDirection(commissions, -2500)).toBe(true);
+  });
+});
+
+describe('preferredIncomeCategory', () => {
+  it('prefers the business-specific income category before the global one', () => {
+    const categories = [
+      { id: 'global-revenue', businessId: null, name: 'Revenue', taxCode: 'income' },
+      { id: 'business-income', businessId: 'business-1', name: 'Income', taxCode: null },
+    ];
+
+    expect(preferredIncomeCategory(categories, 'business-1')?.id).toBe('business-income');
   });
 });
