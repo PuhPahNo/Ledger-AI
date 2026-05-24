@@ -128,10 +128,18 @@ export interface SpendSummary {
   trailingMonths: number[];   // 0..1 normalized sparkline points
   trailingMonthLabels?: string[];
   trailingMonthCents?: number[];
+  trailingMonthBusinessCents?: TrailingMonthBusinessSpend[][];
   lastMonth: number;
   lastMonthCents?: number;
   avgMonth: number;
   avgMonthCents?: number;
+}
+
+export interface TrailingMonthBusinessSpend {
+  businessId: BusinessId;
+  businessName: string;
+  color: string;
+  cents: number;
 }
 
 export interface CurrentUser {

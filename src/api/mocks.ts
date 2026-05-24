@@ -86,4 +86,14 @@ export const SUMMARY: SpendSummary = {
   lastMonth: 10213,
   avgMonth: 9418,
 };
+SUMMARY.trailingMonthBusinessCents = SUMMARY.trailingMonthCents?.map((total, index) => {
+  const draft = Math.round(total * (0.42 + (index % 3) * 0.04));
+  const points = Math.round(total * (0.28 + (index % 2) * 0.03));
+  const womens = Math.max(0, total - draft - points);
+  return [
+    { businessId: 'draft-sharks', businessName: 'Draft Sharks', color: BUSINESSES[0].color, cents: draft },
+    { businessId: 'pointsnav', businessName: 'PointsNav', color: BUSINESSES[1].color, cents: points },
+    { businessId: 'womens-net', businessName: 'Womens Net', color: BUSINESSES[2].color, cents: womens },
+  ];
+});
 SUMMARY.total = Math.abs(visibleMockTransactions(TRANSACTIONS).filter((t) => t.amount < 0).reduce((a, t) => a + t.amount, 0));

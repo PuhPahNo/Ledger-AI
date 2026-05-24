@@ -355,6 +355,27 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         .where(and(gte(transactions.date, monthFrom), lte(transactions.date, monthTo), ...spendFilters));
       return row?.totalCents ?? 0;
     }));
+    const trailingBusinessRows = await Promise.all(labels.map(async ({ from: monthFrom, to: monthTo }) => {
+      const rows = await db.select({
+        businessId: businesses.key,
+        businessName: businesses.name,
+        color: businesses.color,
+        cents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
+      }).from(transactions)
+        .innerJoin(businesses, eq(transactions.businessId, businesses.id))
+        .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+        .where(and(gte(transactions.date, monthFrom), lte(transactions.date, monthTo), ...spendFilters))
+        .groupBy(businesses.key, businesses.name, businesses.color);
+      return rows
+        .map((row) => ({
+          businessId: row.businessId,
+          businessName: row.businessName,
+          color: row.color,
+          cents: Number(row.cents ?? 0),
+        }))
+        .filter((row) => row.cents > 0)
+        .sort((a, b) => b.cents - a.cents);
+    }));
     const max = Math.max(...trailingRows, 1);
     const avg = Math.round(trailingRows.reduce((sum, value) => sum + value, 0) / Math.max(trailingRows.length, 1));
     const currentTotal = current?.totalCents ?? 0;
@@ -365,6 +386,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       deltaPct: priorTotal > 0 ? Math.round(((currentTotal - priorTotal) / priorTotal) * 100) : 0,
       trailingMonths: trailingRows.map((value) => Number((value / max).toFixed(3))),
       trailingMonthCents: trailingRows.map((value) => Number(value ?? 0)),
+      trailingMonthBusinessCents: trailingBusinessRows,
       trailingMonthLabels: labels.map((item) => item.label),
       lastMonthCents: priorTotal,
       avgMonthCents: avg,

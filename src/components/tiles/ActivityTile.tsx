@@ -74,6 +74,7 @@ function ActivityRow({
 }) {
   const business = businesses.find((x) => x.id === t.biz);
   const rcpt = receiptBadge(t.receipt);
+  const merchant = limitMerchant(t.merchant);
   if (!business) return null;
 
   return (
@@ -100,24 +101,26 @@ function ActivityRow({
         {t.merchant[0]}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-bold text-ink">{t.merchant}</span>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="block min-w-0 flex-1 truncate text-sm font-bold text-ink" title={t.merchant}>
+            {merchant}
+          </span>
           {t.flag === 'dup-sub' && <Badge variant="danger" className="px-1.5 py-0 text-[9px]">DUP</Badge>}
         </div>
-        <div className="text-xs text-dim">
+        <div className="truncate text-xs text-dim">
           {t.dateLabel} · {business.name} · {t.cat}
         </div>
       </div>
       <span
         title={rcpt.title}
-        className="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold"
+        className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold"
         style={{ background: rcpt.bg, color: rcpt.fg }}
       >
         {rcpt.glyph}
       </span>
       <div
         className={cn(
-          'w-24 text-right font-display text-sm font-bold tabular-nums',
+          'w-24 shrink-0 text-right font-display text-sm font-bold tabular-nums',
           t.amount > 0 ? 'text-sage-ink' : 'text-ink',
         )}
       >
@@ -125,6 +128,11 @@ function ActivityRow({
       </div>
     </div>
   );
+}
+
+function limitMerchant(value: string, max = 58): string {
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 1)}…`;
 }
 
 function receiptBadge(status: Transaction['receipt']) {

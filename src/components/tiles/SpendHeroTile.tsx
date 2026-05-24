@@ -36,6 +36,7 @@ export function SpendHeroTile({ summary, contextLabel, detailLabel }: Props) {
             points={summary.trailingMonths}
             values={summary.trailingMonthCents}
             labels={summary.trailingMonthLabels}
+            segments={summary.trailingMonthBusinessCents}
             baseColor={colors.ink}
             highlightColor={colors.coral}
             height={120}
