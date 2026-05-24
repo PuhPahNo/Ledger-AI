@@ -11,7 +11,10 @@ import { buildExport } from '../services/exporter.js';
 
 export async function handleJob(type: string, payload: Record<string, unknown>): Promise<void> {
   if (type === 'plaid.sync') {
-    await syncPlaidConnection(String(payload.connectionId));
+    await syncPlaidConnection(String(payload.connectionId), {
+      resetCursor: Boolean(payload.resetCursor),
+      daysRequested: typeof payload.daysRequested === 'number' ? payload.daysRequested : undefined,
+    });
     return;
   }
   if (type === 'gmail.sync') {

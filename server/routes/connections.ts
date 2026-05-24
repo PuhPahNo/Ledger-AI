@@ -7,7 +7,7 @@ import { accounts, businesses, connections } from '../db/schema.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { enqueue } from '../jobs/queue.js';
 import { audit } from '../services/audit.js';
-import { createPlaidLinkToken, exchangePlaidPublicToken } from '../services/plaid.js';
+import { PLAID_TRANSACTION_HISTORY_DAYS, createPlaidLinkToken, exchangePlaidPublicToken } from '../services/plaid.js';
 import { connectGmail, gmailOAuthUrl } from '../services/gmail.js';
 import { toApiConnection } from './mappers.js';
 
@@ -43,6 +43,28 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     await enqueue(row.kind === 'gmail' ? 'gmail.sync' : 'plaid.sync', { connectionId: params.id });
     await audit(request, user, 'sync_connection', 'connection', params.id);
     return { queued: true };
+  });
+
+  app.post('/connections/:id/backfill', async (request) => {
+    const user = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({ months: z.coerce.number().int().min(1).max(24).default(12) }).parse(request.body ?? {});
+    const row = await db.query.connections.findFirst({ where: eq(connections.id, params.id) });
+    if (!row) notFound('Connection not found');
+    if (row.kind === 'gmail') badRequest('Backfill is only available for Plaid connections');
+
+    const daysRequested = Math.min(body.months * 31, 730);
+    await enqueue('plaid.sync', {
+      connectionId: params.id,
+      resetCursor: true,
+      daysRequested,
+    });
+    await audit(request, user, 'backfill_plaid', 'connection', params.id, { daysRequested });
+    return {
+      queued: true,
+      daysRequested,
+      newLinkDaysRequested: PLAID_TRANSACTION_HISTORY_DAYS,
+    };
   });
 
   app.get('/connections/gmail/oauth-url', async (request) => {

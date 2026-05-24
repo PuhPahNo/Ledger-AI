@@ -14,6 +14,8 @@ import { serviceUnavailable } from '../lib/errors.js';
 import { resolveTransactionBusinessId } from './accountAssignment.js';
 import { categorizeTransaction } from './categorization.js';
 
+export const PLAID_TRANSACTION_HISTORY_DAYS = 365;
+
 export function plaidClient(): PlaidApi | null {
   const env = getEnv();
   if (!env.PLAID_CLIENT_ID || !env.PLAID_SECRET) return null;
@@ -41,6 +43,9 @@ export async function createPlaidLinkToken(userId: string): Promise<{ link_token
     country_codes: [CountryCode.Us],
     language: 'en',
     webhook: env.PLAID_WEBHOOK_URL || undefined,
+    transactions: {
+      days_requested: PLAID_TRANSACTION_HISTORY_DAYS,
+    },
   });
   return res.data;
 }
@@ -69,14 +74,17 @@ export async function exchangePlaidPublicToken(input: {
   return connection.id;
 }
 
-export async function syncPlaidConnection(connectionId: string): Promise<number> {
+export async function syncPlaidConnection(
+  connectionId: string,
+  options: { resetCursor?: boolean; daysRequested?: number } = {},
+): Promise<number> {
   const client = plaidClient();
   if (!client) return 0;
   const connection = await db.query.connections.findFirst({ where: eq(connections.id, connectionId) });
   if (!connection?.encryptedAccessToken) return 0;
   const accessToken = decryptText(connection.encryptedAccessToken);
 
-  let cursor: string | undefined = connection.plaidCursor ?? undefined;
+  let cursor: string | undefined = options.resetCursor ? undefined : connection.plaidCursor ?? undefined;
   let addedCount = 0;
   let hasMore = true;
 
@@ -85,6 +93,7 @@ export async function syncPlaidConnection(connectionId: string): Promise<number>
       access_token: accessToken,
       cursor,
       count: 500,
+      options: options.daysRequested ? { days_requested: options.daysRequested } : undefined,
     });
     const data = res.data;
     await upsertAccounts(connectionId, connection.businessId ?? undefined, data.accounts ?? []);
@@ -147,7 +156,7 @@ async function upsertTransaction(connectionId: string, fallbackBusinessId: strin
     businessId,
     merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant',
     amountCents,
-    plaidCategory: raw.category,
+    plaidCategory: plaidCategoryHints(raw),
   });
   const sourceLabel = account ? `${account.name}${account.mask ? ` ${account.mask}` : ''}` : `Plaid ${connectionId.slice(0, 8)}`;
 
@@ -177,6 +186,16 @@ async function upsertTransaction(connectionId: string, fallbackBusinessId: strin
       updatedAt: new Date(),
     },
   });
+}
+
+function plaidCategoryHints(raw: Record<string, any>): string[] {
+  const personalFinanceCategory = raw.personal_finance_category ?? {};
+  return [
+    ...(Array.isArray(raw.category) ? raw.category : []),
+    personalFinanceCategory.primary,
+    personalFinanceCategory.detailed,
+    personalFinanceCategory.confidence_level,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0);
 }
 
 function mapAccountKind(type?: string, subtype?: string): 'checking' | 'savings' | 'credit' | 'other' {

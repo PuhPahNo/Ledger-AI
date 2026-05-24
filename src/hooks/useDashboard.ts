@@ -60,10 +60,18 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
   useEffect(() => {
     let cancelled = false;
     const accountIds = params.accountIds ?? [];
+    const window = monthBounds(params.period);
 
     Promise.all([
       listBusinesses(),
-      listTransactions({ biz: params.business ?? 'all', q: params.query || undefined, accountIds, limit: 2000 }),
+      listTransactions({
+        biz: params.business ?? 'all',
+        q: params.query || undefined,
+        accountIds,
+        from: window.from,
+        to: window.to,
+        limit: 2000,
+      }),
       listCategories(params.period, params.business ?? 'all', params.query || undefined, accountIds),
       listCategoryComparisons({
         period: params.period,
@@ -96,4 +104,18 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
   }, [params.accountIds?.join(','), params.business, params.comparisonBasis, params.period, params.query, params.refreshKey]);
 
   return state;
+}
+
+function monthBounds(period?: string): { from: string; to: string } {
+  const selected = period ?? new Date().toISOString().slice(0, 7);
+  const start = new Date(`${selected}-01T00:00:00`);
+  const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
+  return {
+    from: isoDate(start),
+    to: isoDate(end),
+  };
+}
+
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }

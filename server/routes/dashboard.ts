@@ -6,6 +6,7 @@ import { db } from '../db/client.js';
 import { accounts, alerts, businesses, categories, connections, transactions } from '../db/schema.js';
 import { notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
+import { learnMerchantCategoryRule } from '../services/categorization.js';
 import { normalizeTransactionOverride } from '../services/transactionOverrides.js';
 import { toApiAlert, toApiBusiness, toApiCategory, toApiConnection, toApiTransaction } from './mappers.js';
 
@@ -106,6 +107,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(transactions.id, params.id))
       .returning();
     if (!updated) notFound('Transaction not found');
+    if (body.categoryId && updated.categoryId) {
+      await learnMerchantCategoryRule({
+        businessId: updated.businessId,
+        merchant: updated.merchant,
+        categoryId: updated.categoryId,
+      });
+    }
     await audit(request, user, 'update_transaction', 'transaction', params.id, { ...body });
 
     const row = await transactionById(params.id);

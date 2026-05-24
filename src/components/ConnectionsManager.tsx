@@ -3,6 +3,7 @@ import { AlertTriangle, Building2, CheckCircle2, CreditCard, Mail, PlugZap, Refr
 import { usePlaidLink } from 'react-plaid-link';
 import {
   ApiError,
+  backfillConnection as backfillPlaidConnection,
   createPlaidLinkToken,
   disconnectConnection,
   exchangePlaidPublicToken,
@@ -131,6 +132,14 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     onRefresh();
   };
 
+  const backfillConnection = async (connection: Connection) => {
+    if (!connection.id) return;
+    setStatus(`Queued a 12-month history pull for ${connection.label}.`);
+    await backfillPlaidConnection(connection.id, 12);
+    setStatus('12-month pull queued. If this connection was created before 12-month history was enabled, reconnect it to expand the history window.');
+    onRefresh();
+  };
+
   const removeConnection = async (connection: Connection) => {
     if (!connection.id) return;
     setStatus(`Disconnected ${connection.label}.`);
@@ -211,6 +220,7 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
                   businesses={businesses}
                   onBusiness={(next) => changeConnectionBusiness(connection, next)}
                   onSync={() => refreshConnection(connection)}
+                  onBackfill={connection.kind === 'gmail' ? undefined : () => backfillConnection(connection)}
                   onDisconnect={() => removeConnection(connection)}
                 />
               )) : <Empty label="No provider connections yet." />}
@@ -274,12 +284,14 @@ function ProviderRow({
   businesses,
   onBusiness,
   onSync,
+  onBackfill,
   onDisconnect,
 }: {
   connection: Connection;
   businesses: Business[];
   onBusiness: (businessId: string) => void;
   onSync: () => void;
+  onBackfill?: () => void;
   onDisconnect: () => void;
 }) {
   return (
@@ -291,6 +303,7 @@ function ProviderRow({
       </div>
       <StatusPill status={connection.status} />
       <BusinessSelect value={connection.businessId ?? ''} businesses={businesses} onChange={onBusiness} />
+      {onBackfill ? <button type="button" style={smallIconButtonStyle} onClick={onBackfill} title="Pull 12 months of Plaid history">12m</button> : <span />}
       <button type="button" style={iconButtonStyle} onClick={onSync} title="Sync"><RefreshCcw size={15} /></button>
       <button type="button" style={iconButtonStyle} onClick={onDisconnect} title="Disconnect"><Trash2 size={15} /></button>
     </div>
@@ -480,7 +493,7 @@ const panelStyle: React.CSSProperties = {
 
 const providerRowStyle: React.CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '38px minmax(120px, 1fr) auto 160px 34px 34px',
+  gridTemplateColumns: '38px minmax(120px, 1fr) auto 160px 42px 34px 34px',
   gap: 8,
   alignItems: 'center',
   padding: 10,
@@ -554,6 +567,14 @@ const iconButtonStyle: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   cursor: 'pointer',
+};
+
+const smallIconButtonStyle: React.CSSProperties = {
+  ...iconButtonStyle,
+  width: 42,
+  borderRadius: radii.pill,
+  fontSize: 11,
+  fontWeight: 900,
 };
 
 const toggleStyle: React.CSSProperties = {

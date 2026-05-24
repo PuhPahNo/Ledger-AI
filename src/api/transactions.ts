@@ -27,6 +27,8 @@ export function listTransactions(params: ListTransactionsParams = {}): Promise<T
   if (useMockApi) {
     let rows = visibleMockTransactions(TRANSACTIONS, params.accountIds);
     if (params.biz && params.biz !== 'all') rows = rows.filter((t) => t.biz === params.biz);
+    if (params.from) rows = rows.filter((t) => t.date >= params.from!);
+    if (params.to) rows = rows.filter((t) => t.date <= params.to!);
     if (params.categories?.length) rows = rows.filter((t) => params.categories?.includes(t.cat));
     if (params.receipts?.length) rows = rows.filter((t) => params.receipts?.includes(t.receipt));
     if (params.q) {

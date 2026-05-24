@@ -62,6 +62,17 @@ export function syncConnection(connectionId: string): Promise<{ queued: boolean 
   return http<{ queued: boolean }>(`/connections/${connectionId}/sync`, { method: 'POST' });
 }
 
+export function backfillConnection(
+  connectionId: string,
+  months = 12,
+): Promise<{ queued: boolean; daysRequested: number; newLinkDaysRequested: number }> {
+  if (useMockApi) return Promise.resolve({ queued: true, daysRequested: months * 31, newLinkDaysRequested: 365 });
+  return http<{ queued: boolean; daysRequested: number; newLinkDaysRequested: number }>(`/connections/${connectionId}/backfill`, {
+    method: 'POST',
+    body: JSON.stringify({ months }),
+  });
+}
+
 export function updateConnectionBusiness(connectionId: string, businessId: string | null): Promise<Connection> {
   if (useMockApi) return Promise.resolve(CONNECTIONS.find((c) => c.id === connectionId) ?? CONNECTIONS[0]);
   return http<Connection>(`/connections/${connectionId}/business`, {

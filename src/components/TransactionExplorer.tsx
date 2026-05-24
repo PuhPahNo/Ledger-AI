@@ -90,6 +90,23 @@ export function TransactionExplorer({
     }
   };
 
+  const showLast12Months = () => {
+    const end = new Date();
+    const start = new Date();
+    start.setMonth(start.getMonth() - 12);
+    setFrom(toIsoDate(start));
+    setTo(toIsoDate(end));
+  };
+
+  const clearFilters = () => {
+    setAccountIds([]);
+    setCategoryNames([]);
+    setReceipts([]);
+    setQuery('');
+    setFrom('');
+    setTo('');
+  };
+
   return (
     <div style={backdropStyle}>
       <section style={modalStyle}>
@@ -125,9 +142,10 @@ export function TransactionExplorer({
             To
             <input type="date" value={to} onChange={(event) => setTo(event.target.value)} style={inputStyle} />
           </label>
-          <button type="button" onClick={() => { setAccountIds([]); setCategoryNames([]); setReceipts([]); setQuery(''); setFrom(''); setTo(''); }} style={clearButtonStyle}>
-            Clear filters
-          </button>
+          <div style={filterActionsStyle}>
+            <button type="button" onClick={showLast12Months} style={clearButtonStyle}>Last 12m</button>
+            <button type="button" onClick={clearFilters} style={clearButtonStyle}>Clear</button>
+          </div>
         </div>
 
         <div style={chipPanelStyle}>
@@ -202,6 +220,10 @@ export function TransactionExplorer({
 
 function toggle<T>(value: T, values: T[], setter: (values: T[]) => void) {
   setter(values.includes(value) ? values.filter((item) => item !== value) : [...values, value]);
+}
+
+function toIsoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -296,6 +318,12 @@ const filtersStyle: React.CSSProperties = {
   gridTemplateColumns: '180px minmax(240px, 1fr) 150px 150px auto',
   gap: 8,
   alignItems: 'end',
+};
+
+const filterActionsStyle: React.CSSProperties = {
+  display: 'flex',
+  gap: 6,
+  alignItems: 'center',
 };
 
 const fieldStyle: React.CSSProperties = {

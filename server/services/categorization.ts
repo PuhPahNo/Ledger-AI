@@ -84,6 +84,45 @@ export async function applyCategory(transactionId: string): Promise<void> {
   }
 }
 
+export async function learnMerchantCategoryRule(input: {
+  businessId: string;
+  merchant: string;
+  categoryId: string;
+}): Promise<void> {
+  const pattern = normalize(input.merchant);
+  if (!pattern || pattern === 'unknown merchant') return;
+
+  const existing = await db.query.categoryRules.findFirst({
+    where: and(
+      eq(categoryRules.businessId, input.businessId),
+      eq(categoryRules.matchKind, 'merchant_exact'),
+      eq(categoryRules.pattern, pattern),
+    ),
+  });
+
+  if (existing) {
+    await db
+      .update(categoryRules)
+      .set({
+        categoryId: input.categoryId,
+        priority: 1,
+        createdByAi: false,
+        updatedAt: new Date(),
+      })
+      .where(eq(categoryRules.id, existing.id));
+    return;
+  }
+
+  await db.insert(categoryRules).values({
+    businessId: input.businessId,
+    categoryId: input.categoryId,
+    matchKind: 'merchant_exact',
+    pattern,
+    priority: 1,
+    createdByAi: false,
+  });
+}
+
 function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
