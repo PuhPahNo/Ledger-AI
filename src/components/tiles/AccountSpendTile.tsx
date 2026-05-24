@@ -1,6 +1,7 @@
 import { CreditCard, EyeOff, Landmark } from 'lucide-react';
 import type { Account, Business, Transaction } from '@/types/domain';
 import { fmt$k } from '@/lib/format';
+import { accountLabel } from '@/lib/account';
 import { Tile } from '@/components/ui/tile';
 import { Button } from '@/components/ui/button';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
@@ -75,7 +76,7 @@ export function AccountSpendTile({
                   type="button"
                   disabled={!account.enabled}
                   onClick={() => onToggleAccount(account.id)}
-                  title={account.enabled ? `Filter spend to ${account.name}` : `${account.name} is ignored in spend results`}
+                  title={account.enabled ? `Filter spend to ${accountLabel(account)}` : `${accountLabel(account)} is ignored in spend results`}
                   className={cn(
                     'flex w-60 shrink-0 items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/30',
@@ -98,7 +99,7 @@ export function AccountSpendTile({
                     )}
                   </span>
                   <span className="min-w-0 flex-1 text-left">
-                    <span className="block truncate text-xs font-bold">{account.name}</span>
+                    <span className="block truncate text-xs font-bold">{accountLabel(account)}</span>
                     <span className="block truncate text-[10px] text-dim">
                       {account.mask ?? account.kind} · {business?.short ?? 'Unassigned'} · {account.enabled ? `${spend.count} txns` : 'ignored'}
                     </span>

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { Account, Business, Transaction } from '@/types/domain';
 import { accentRamp } from '@/theme/tokens';
 import { fmt$k } from '@/lib/format';
+import { accountLabel } from '@/lib/account';
 import { Tile } from '@/components/ui/tile';
 import { StatLabel } from '@/components/ui/stat-label';
 import { Button } from '@/components/ui/button';
@@ -130,7 +131,7 @@ function labelFor(mode: Mode, transaction: Transaction, business?: Business, acc
     case 'business':
       return business?.name ?? transaction.biz;
     case 'account':
-      return account?.name ?? transaction.src;
+      return account ? accountLabel(account) : transaction.src;
     case 'receipt':
       return transaction.receipt;
     default:

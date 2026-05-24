@@ -96,6 +96,8 @@ export interface Account {
   biz: BusinessId | 'all';
   kind: AccountKind;
   name: string;
+  /** User-chosen display name. Falls back to `name` when null. */
+  nickname?: string | null;
   officialName?: string | null;
   mask?: string | null;
   enabled: boolean;

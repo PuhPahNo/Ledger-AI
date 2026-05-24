@@ -109,7 +109,7 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     const body = z.object({ label: z.string().trim().min(1).max(80) }).parse(request.body);
     const [row] = await db
       .update(connections)
-      .set({ label: body.label, updatedAt: new Date() })
+      .set({ label: body.label, labelUserSet: true, updatedAt: new Date() })
       .where(eq(connections.id, params.id))
       .returning();
     if (!row) notFound('Connection not found');

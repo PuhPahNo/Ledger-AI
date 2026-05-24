@@ -26,3 +26,14 @@ export function updateAccountEnabled(accountId: string, enabled: boolean): Promi
     body: JSON.stringify({ enabled }),
   });
 }
+
+export function updateAccountNickname(accountId: string, nickname: string | null): Promise<Account> {
+  if (useMockApi) {
+    const existing = ACCOUNTS.find((a) => a.id === accountId) ?? ACCOUNTS[0];
+    return Promise.resolve({ ...existing, nickname: nickname ?? null });
+  }
+  return http<Account>(`/accounts/${accountId}/nickname`, {
+    method: 'PATCH',
+    body: JSON.stringify({ nickname }),
+  });
+}

@@ -11,11 +11,13 @@ import {
   syncConnection,
   updateAccountBusiness,
   updateAccountEnabled,
+  updateAccountNickname,
   updateConnectionBusiness,
   updateConnectionLabel,
 } from '@/api';
 import type { Account, Business, Connection } from '@/types/domain';
 import { useToast } from '@/hooks/useToast';
+import { accountLabel } from '@/lib/account';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -193,8 +195,17 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
       variant: 'success',
       title: applyToExisting ? 'Reassigned existing transactions' : 'Default business updated',
       description: applyToExisting
-        ? `Existing transactions reassigned for ${account.name}.`
-        : `Future transactions for ${account.name} will use the selected business.`,
+        ? `Existing transactions reassigned for ${accountLabel(account)}.`
+        : `Future transactions for ${accountLabel(account)} will use the selected business.`,
+    });
+    onRefresh();
+  };
+
+  const renameAccount = async (account: Account, nickname: string | null) => {
+    await updateAccountNickname(account.id, nickname);
+    toast({
+      variant: 'success',
+      title: nickname ? `Renamed to "${nickname}"` : 'Account name reset',
     });
     onRefresh();
   };
@@ -203,7 +214,7 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     await updateAccountEnabled(account.id, enabled);
     toast({
       variant: 'success',
-      title: enabled ? `${account.name} is watched` : `${account.name} is ignored`,
+      title: enabled ? `${accountLabel(account)} is watched` : `${accountLabel(account)} is ignored`,
       description: enabled ? 'Included in spend results.' : 'Excluded from spend results.',
     });
     onRefresh();
@@ -302,6 +313,7 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
                     businesses={businesses}
                     onBusiness={(next, applyToExisting = false) => changeAccountBusiness(account, next, applyToExisting)}
                     onEnabled={(enabled) => changeAccountWatch(account, enabled)}
+                    onRename={(nickname) => renameAccount(account, nickname)}
                   />
                 ))
               ) : (

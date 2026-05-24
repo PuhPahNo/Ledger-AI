@@ -3,6 +3,7 @@ import { ArrowDownUp, X } from 'lucide-react';
 import { listTransactions } from '@/api';
 import type { Account, Business, Category, ReceiptStatus, Transaction } from '@/types/domain';
 import { fmt$, fmt$k } from '@/lib/format';
+import { accountLabel } from '@/lib/account';
 import { cn } from '@/lib/cn';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -194,7 +195,7 @@ export function TransactionExplorer({
                   muted={!account.enabled}
                   onClick={() => toggle(account.id, accountIds, setAccountIds)}
                 >
-                  {account.name}
+                  {accountLabel(account)}
                   {account.mask ? ` ${account.mask}` : ''}
                 </FilterChip>
               )) : <span className="text-xs text-dim">No accounts in this business.</span>}
@@ -250,7 +251,7 @@ export function TransactionExplorer({
                         <TableCell className="whitespace-nowrap text-dim">{transaction.date}</TableCell>
                         <TableCell className="font-bold text-ink">{transaction.merchant}</TableCell>
                         <TableCell>{b?.name ?? transaction.biz}</TableCell>
-                        <TableCell className="text-dim">{account?.name ?? transaction.src}</TableCell>
+                        <TableCell className="text-dim">{account ? accountLabel(account) : transaction.src}</TableCell>
                         <TableCell>{transaction.cat}</TableCell>
                         <TableCell className="text-right font-display font-bold tabular-nums">
                           {fmt$(transaction.amount)}

@@ -20,6 +20,7 @@ export async function accountRoutes(app: FastifyInstance): Promise<void> {
         plaidAccountId: accounts.plaidAccountId,
         kind: accounts.kind,
         name: accounts.name,
+        nickname: accounts.nickname,
         officialName: accounts.officialName,
         mask: accounts.mask,
         enabled: accounts.enabled,
@@ -71,6 +72,21 @@ export async function accountRoutes(app: FastifyInstance): Promise<void> {
     }
 
     await audit(request, actor, 'update_account_business', 'account', params.id, body);
+    return row;
+  });
+
+  app.patch('/accounts/:id/nickname', async (request) => {
+    const actor = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({ nickname: z.string().trim().max(80).nullable() }).parse(request.body);
+    const normalized = body.nickname && body.nickname.length > 0 ? body.nickname : null;
+    const [row] = await db
+      .update(accounts)
+      .set({ nickname: normalized, updatedAt: new Date() })
+      .where(eq(accounts.id, params.id))
+      .returning();
+    if (!row) notFound('Account not found');
+    await audit(request, actor, 'rename_account', 'account', params.id, { nickname: normalized });
     return row;
   });
 
