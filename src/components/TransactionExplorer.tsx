@@ -2,8 +2,18 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowDownUp, X } from 'lucide-react';
 import { listTransactions } from '@/api';
 import type { Account, Business, Category, ReceiptStatus, Transaction } from '@/types/domain';
-import { colors, fonts, radii } from '@/theme/tokens';
 import { fmt$, fmt$k } from '@/lib/format';
+import { cn } from '@/lib/cn';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { EmptyState } from '@/components/ui/empty-state';
 
 type SortKey = 'date' | 'amount' | 'merchant' | 'business' | 'category' | 'account';
 
@@ -80,8 +90,6 @@ export function TransactionExplorer({
   const visibleAccounts = business === 'all' ? accounts : accounts.filter((account) => account.biz === business);
   const topCategories = categories.slice(0, 12);
 
-  if (!open) return null;
-
   const toggleSort = (key: SortKey) => {
     if (sort === key) setDir((current) => (current === 'asc' ? 'desc' : 'asc'));
     else {
@@ -107,113 +115,177 @@ export function TransactionExplorer({
     setTo('');
   };
 
+  const activeFilterCount = accountIds.length + categoryNames.length + receipts.length + (query ? 1 : 0) + (from || to ? 1 : 0);
+
   return (
-    <div style={backdropStyle}>
-      <section style={modalStyle}>
-        <header style={headerStyle}>
-          <div>
-            <div style={{ fontFamily: fonts.display, fontSize: 30, fontWeight: 900 }}>Transactions</div>
-            <div style={{ color: colors.dim, fontSize: 12 }}>Filter, sort, and inspect all synced spend rows.</div>
+    <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
+      <DialogContent size="full" className="grid grid-rows-[auto_auto_auto_minmax(0,1fr)] gap-4">
+        <DialogHeader className="flex flex-row items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <DialogTitle>Transactions</DialogTitle>
+            <DialogDescription>Filter, sort, and inspect every synced spend row.</DialogDescription>
           </div>
-          <span style={{ flex: 1 }} />
           <Metric label="Outflow" value={fmt$k(outflow)} />
           <Metric label="Rows" value={String(rows.length)} />
-          <Metric label="Missing" value={String(missing)} />
-          <button type="button" onClick={onClose} style={iconButtonStyle} title="Close"><X size={18} /></button>
-        </header>
+          <Metric label="Missing" value={String(missing)} tone={missing > 0 ? 'warning' : 'default'} />
+        </DialogHeader>
 
-        <div style={filtersStyle}>
-          <label style={fieldStyle}>
-            Business
-            <select value={business} onChange={(event) => { setBusiness(event.target.value); setAccountIds([]); }} style={inputStyle}>
-              <option value="all">All</option>
-              {businesses.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-          <label style={fieldStyle}>
-            Search
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Merchant, note, category" style={inputStyle} />
-          </label>
-          <label style={fieldStyle}>
-            From
-            <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} style={inputStyle} />
-          </label>
-          <label style={fieldStyle}>
-            To
-            <input type="date" value={to} onChange={(event) => setTo(event.target.value)} style={inputStyle} />
-          </label>
-          <div style={filterActionsStyle}>
-            <button type="button" onClick={showLast12Months} style={clearButtonStyle}>Last 12m</button>
-            <button type="button" onClick={clearFilters} style={clearButtonStyle}>Clear</button>
+        <div className="grid gap-3 sm:grid-cols-[200px_minmax(0,1fr)_160px_160px_auto]">
+          <div className="grid gap-1.5">
+            <Label htmlFor="explorer-business">Business</Label>
+            <Select
+              value={business}
+              onValueChange={(value) => {
+                setBusiness(value);
+                setAccountIds([]);
+              }}
+            >
+              <SelectTrigger id="explorer-business">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All businesses</SelectItem>
+                {businesses.map((item) => (
+                  <SelectItem key={item.id} value={item.id}>
+                    {item.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="explorer-search">Search</Label>
+            <Input
+              id="explorer-search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Merchant, note, category"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="explorer-from">From</Label>
+            <Input id="explorer-from" type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="explorer-to">To</Label>
+            <Input id="explorer-to" type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+          </div>
+          <div className="flex items-end gap-2">
+            <Button variant="outline" size="sm" onClick={showLast12Months}>
+              Last 12m
+            </Button>
+            <Button variant="ghost" size="sm" onClick={clearFilters} disabled={activeFilterCount === 0}>
+              Clear
+            </Button>
           </div>
         </div>
 
-        <div style={chipPanelStyle}>
-          <ChipGroup label="Accounts">
-            {visibleAccounts.map((account) => (
-              <Chip
-                key={account.id}
-                active={accountIds.includes(account.id)}
-                muted={!account.enabled}
-                onClick={() => toggle(account.id, accountIds, setAccountIds)}
-              >
-                {account.name}{account.mask ? ` ${account.mask}` : ''}
-              </Chip>
-            ))}
-          </ChipGroup>
-          <ChipGroup label="Categories">
-            {topCategories.map((category) => (
-              <Chip key={category.name} active={categoryNames.includes(category.name)} onClick={() => toggle(category.name, categoryNames, setCategoryNames)}>
-                {category.name}
-              </Chip>
-            ))}
-          </ChipGroup>
-          <ChipGroup label="Receipts">
-            {receiptOptions.map((receipt) => (
-              <Chip key={receipt} active={receipts.includes(receipt)} onClick={() => toggle(receipt, receipts, setReceipts)}>
-                {receipt}
-              </Chip>
-            ))}
-          </ChipGroup>
+        <Card>
+          <CardHeader className="flex flex-row items-baseline gap-3 py-3">
+            <CardTitle className="text-base">Filters</CardTitle>
+            <span className="text-xs text-dim">{activeFilterCount} active</span>
+          </CardHeader>
+          <CardContent className="grid gap-3 pt-0">
+            <ChipGroup label="Accounts">
+              {visibleAccounts.length ? visibleAccounts.map((account) => (
+                <FilterChip
+                  key={account.id}
+                  active={accountIds.includes(account.id)}
+                  muted={!account.enabled}
+                  onClick={() => toggle(account.id, accountIds, setAccountIds)}
+                >
+                  {account.name}
+                  {account.mask ? ` ${account.mask}` : ''}
+                </FilterChip>
+              )) : <span className="text-xs text-dim">No accounts in this business.</span>}
+            </ChipGroup>
+            <ChipGroup label="Categories">
+              {topCategories.map((category) => (
+                <FilterChip
+                  key={category.name}
+                  active={categoryNames.includes(category.name)}
+                  onClick={() => toggle(category.name, categoryNames, setCategoryNames)}
+                >
+                  {category.name}
+                </FilterChip>
+              ))}
+            </ChipGroup>
+            <ChipGroup label="Receipts">
+              {receiptOptions.map((receipt) => (
+                <FilterChip
+                  key={receipt}
+                  active={receipts.includes(receipt)}
+                  onClick={() => toggle(receipt, receipts, setReceipts)}
+                >
+                  {receipt}
+                </FilterChip>
+              ))}
+            </ChipGroup>
+          </CardContent>
+        </Card>
+
+        <div className="min-h-0 overflow-hidden rounded-lg border border-ink2/10">
+          {error ? (
+            <div className="p-4 text-sm text-coral-ink">{error}</div>
+          ) : (
+            <ScrollArea className="h-full">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <SortHeader active={sort === 'date'} dir={dir} onClick={() => toggleSort('date')}>Date</SortHeader>
+                    <SortHeader active={sort === 'merchant'} dir={dir} onClick={() => toggleSort('merchant')}>Merchant</SortHeader>
+                    <SortHeader active={sort === 'business'} dir={dir} onClick={() => toggleSort('business')}>Business</SortHeader>
+                    <SortHeader active={sort === 'account'} dir={dir} onClick={() => toggleSort('account')}>Account</SortHeader>
+                    <SortHeader active={sort === 'category'} dir={dir} onClick={() => toggleSort('category')}>Category</SortHeader>
+                    <SortHeader active={sort === 'amount'} dir={dir} onClick={() => toggleSort('amount')} align="right">Amount</SortHeader>
+                    <TableHead>Receipt</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((transaction) => {
+                    const b = businessById.get(transaction.biz);
+                    const account = transaction.accountId ? accountById.get(transaction.accountId) : undefined;
+                    return (
+                      <TableRow key={transaction.id} onClick={() => onSelect(transaction)} className="cursor-pointer">
+                        <TableCell className="whitespace-nowrap text-dim">{transaction.date}</TableCell>
+                        <TableCell className="font-bold text-ink">{transaction.merchant}</TableCell>
+                        <TableCell>{b?.name ?? transaction.biz}</TableCell>
+                        <TableCell className="text-dim">{account?.name ?? transaction.src}</TableCell>
+                        <TableCell>{transaction.cat}</TableCell>
+                        <TableCell className="text-right font-display font-bold tabular-nums">
+                          {fmt$(transaction.amount)}
+                        </TableCell>
+                        <TableCell>
+                          <ReceiptPill status={transaction.receipt} />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+              {loading && <div className="p-6 text-center text-sm text-dim">Loading transactions…</div>}
+              {!loading && !rows.length && (
+                <div className="p-8">
+                  <EmptyState title="No matches" description="No transactions match these filters. Try clearing them." />
+                </div>
+              )}
+            </ScrollArea>
+          )}
         </div>
 
-        {error && <div style={{ color: colors.coralInk, fontSize: 12 }}>{error}</div>}
+        <DialogCloseBar onClose={onClose} />
+      </DialogContent>
+    </Dialog>
+  );
+}
 
-        <div style={tableWrapStyle}>
-          <table style={tableStyle}>
-            <thead>
-              <tr>
-                <Th active={sort === 'date'} dir={dir} onClick={() => toggleSort('date')}>Date</Th>
-                <Th active={sort === 'merchant'} dir={dir} onClick={() => toggleSort('merchant')}>Merchant</Th>
-                <Th active={sort === 'business'} dir={dir} onClick={() => toggleSort('business')}>Business</Th>
-                <Th active={sort === 'account'} dir={dir} onClick={() => toggleSort('account')}>Account</Th>
-                <Th active={sort === 'category'} dir={dir} onClick={() => toggleSort('category')}>Category</Th>
-                <Th active={sort === 'amount'} dir={dir} onClick={() => toggleSort('amount')} align="right">Amount</Th>
-                <th style={plainThStyle}>Receipt</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((transaction) => {
-                const b = businessById.get(transaction.biz);
-                const account = transaction.accountId ? accountById.get(transaction.accountId) : undefined;
-                return (
-                  <tr key={transaction.id} onClick={() => onSelect(transaction)} style={{ cursor: 'pointer' }}>
-                    <td style={tdStyle}>{transaction.date}</td>
-                    <td style={{ ...tdStyle, fontWeight: 900 }}>{transaction.merchant}</td>
-                    <td style={tdStyle}>{b?.name ?? transaction.biz}</td>
-                    <td style={tdStyle}>{account?.name ?? transaction.src}</td>
-                    <td style={tdStyle}>{transaction.cat}</td>
-                    <td style={{ ...tdStyle, textAlign: 'right', fontFamily: fonts.display, fontWeight: 900 }}>{fmt$(transaction.amount)}</td>
-                    <td style={tdStyle}><ReceiptPill status={transaction.receipt} /></td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {loading && <div style={emptyStyle}>Loading transactions...</div>}
-          {!loading && !rows.length && <div style={emptyStyle}>No transactions match these filters.</div>}
-        </div>
-      </section>
+function DialogCloseBar({ onClose }: { onClose: () => void }) {
+  // Render an in-flow close button so it stays visible when content scrolls; the built-in × also handles it.
+  return (
+    <div className="absolute right-4 top-4 sm:hidden">
+      <Button variant="ghost" size="icon-sm" onClick={onClose}>
+        <X className="h-4 w-4" />
+      </Button>
     </div>
   );
 }
@@ -226,197 +298,90 @@ function toIsoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, tone = 'default' }: { label: string; value: string; tone?: 'default' | 'warning' }) {
   return (
-    <div style={{ background: colors.bg, borderRadius: radii.tile, padding: '8px 11px', minWidth: 82 }}>
-      <div style={{ color: colors.dim, fontFamily: fonts.mono, fontSize: 9.5, letterSpacing: 1 }}>{label}</div>
-      <div style={{ fontFamily: fonts.display, fontSize: 18, fontWeight: 900 }}>{value}</div>
+    <div
+      className={cn(
+        'rounded-md border px-3 py-1.5 text-right',
+        tone === 'warning' ? 'border-coral/40 bg-coral/10 text-coral-ink' : 'border-ink2/10 bg-[hsl(var(--color-sunken))]',
+      )}
+    >
+      <div className="font-mono text-[10px] uppercase tracking-wider text-dim">{label}</div>
+      <div className="font-display text-base font-bold tabular-nums">{value}</div>
     </div>
   );
 }
 
 function ChipGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div style={{ display: 'grid', gap: 6 }}>
-      <div style={{ color: colors.dim, fontFamily: fonts.mono, fontSize: 9.5, letterSpacing: 1.1 }}>{label}</div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>{children}</div>
+    <div className="grid gap-1.5">
+      <div className="font-mono text-[10px] uppercase tracking-wider text-dim">{label}</div>
+      <div className="flex flex-wrap gap-1.5">{children}</div>
     </div>
   );
 }
 
-function Chip({ active, muted, children, onClick }: { active: boolean; muted?: boolean; children: React.ReactNode; onClick: () => void }) {
+function FilterChip({
+  active,
+  muted,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  muted?: boolean;
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
-      style={{
-        border: `1px solid ${active ? colors.ink : colors.ink2}`,
-        borderRadius: radii.pill,
-        background: active ? colors.lemon : colors.bg,
-        color: muted ? colors.dim : colors.ink,
-        padding: '5px 8px',
-        fontSize: 10.5,
-        fontWeight: 900,
-        cursor: 'pointer',
-        opacity: muted ? 0.62 : 1,
-      }}
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold transition-colors',
+        active
+          ? 'border-ink bg-ink text-lemon'
+          : 'border-ink2/20 bg-paper text-ink hover:border-ink2/40',
+        muted && 'opacity-60',
+      )}
     >
       {children}
+      {active && <X className="h-3 w-3" />}
     </button>
   );
 }
 
-function Th({ active, dir, align, children, onClick }: { active: boolean; dir: 'asc' | 'desc'; align?: 'right'; children: React.ReactNode; onClick: () => void }) {
+function SortHeader({
+  active,
+  dir,
+  align,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  dir: 'asc' | 'desc';
+  align?: 'right';
+  children: React.ReactNode;
+  onClick: () => void;
+}) {
   return (
-    <th style={{ ...plainThStyle, textAlign: align ?? 'left' }}>
-      <button type="button" onClick={onClick} style={thButtonStyle}>
+    <TableHead className={align === 'right' ? 'text-right' : undefined}>
+      <button
+        type="button"
+        onClick={onClick}
+        className="inline-flex items-center gap-1.5 font-bold uppercase tracking-wider text-cream/90 hover:text-cream"
+      >
         {children}
-        {active && <ArrowDownUp size={12} style={{ transform: dir === 'asc' ? 'rotate(180deg)' : undefined }} />}
+        {active && (
+          <ArrowDownUp
+            className={cn('h-3 w-3 transition-transform', dir === 'asc' && 'rotate-180')}
+          />
+        )}
       </button>
-    </th>
+    </TableHead>
   );
 }
 
 function ReceiptPill({ status }: { status: ReceiptStatus }) {
-  const palette = status === 'missing'
-    ? { bg: colors.coral, fg: colors.coralInk }
-    : status === 'matched'
-      ? { bg: colors.sage, fg: colors.sageInk }
-      : { bg: colors.lemon, fg: colors.lemonInk };
-  return <span style={{ borderRadius: radii.pill, padding: '3px 7px', background: palette.bg, color: palette.fg, fontSize: 10.5, fontWeight: 900 }}>{status}</span>;
+  const variant = status === 'missing' ? 'danger' : status === 'matched' ? 'success' : status === 'pending' ? 'warning' : 'muted';
+  return <Badge variant={variant}>{status}</Badge>;
 }
-
-const backdropStyle: React.CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  zIndex: 40,
-  background: 'rgba(44,37,32,0.34)',
-  padding: 22,
-};
-
-const modalStyle: React.CSSProperties = {
-  width: '100%',
-  height: '100%',
-  background: colors.paper,
-  borderRadius: radii.tile,
-  color: colors.ink,
-  padding: 18,
-  display: 'grid',
-  gridTemplateRows: 'auto auto auto auto minmax(0, 1fr)',
-  gap: 12,
-  boxShadow: '0 30px 90px rgba(44,37,32,0.24)',
-};
-
-const headerStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-};
-
-const filtersStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '180px minmax(240px, 1fr) 150px 150px auto',
-  gap: 8,
-  alignItems: 'end',
-};
-
-const filterActionsStyle: React.CSSProperties = {
-  display: 'flex',
-  gap: 6,
-  alignItems: 'center',
-};
-
-const fieldStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 4,
-  color: colors.dim,
-  fontSize: 10.5,
-  fontWeight: 900,
-};
-
-const inputStyle: React.CSSProperties = {
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: 10,
-  background: colors.bg,
-  color: colors.ink,
-  padding: '8px 9px',
-  fontSize: 12,
-};
-
-const clearButtonStyle: React.CSSProperties = {
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: radii.pill,
-  background: 'transparent',
-  color: colors.ink,
-  padding: '8px 10px',
-  fontSize: 11,
-  fontWeight: 900,
-  cursor: 'pointer',
-};
-
-const chipPanelStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 10,
-  background: colors.bg,
-  borderRadius: radii.tile,
-  padding: 10,
-};
-
-const tableWrapStyle: React.CSSProperties = {
-  minHeight: 0,
-  overflow: 'auto',
-  borderRadius: radii.tile,
-  border: `1px solid ${colors.ink2}`,
-};
-
-const tableStyle: React.CSSProperties = {
-  width: '100%',
-  borderCollapse: 'collapse',
-  fontSize: 12,
-};
-
-const plainThStyle: React.CSSProperties = {
-  position: 'sticky',
-  top: 0,
-  zIndex: 1,
-  background: colors.ink,
-  color: colors.cream,
-  padding: '9px 10px',
-};
-
-const thButtonStyle: React.CSSProperties = {
-  border: 'none',
-  background: 'transparent',
-  color: 'inherit',
-  padding: 0,
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  fontWeight: 900,
-  cursor: 'pointer',
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: '9px 10px',
-  borderBottom: '1px solid rgba(44,37,32,0.08)',
-  verticalAlign: 'middle',
-};
-
-const emptyStyle: React.CSSProperties = {
-  padding: 18,
-  color: colors.dim,
-  fontSize: 13,
-};
-
-const iconButtonStyle: React.CSSProperties = {
-  width: 38,
-  height: 38,
-  borderRadius: '50%',
-  border: `1px solid ${colors.ink2}`,
-  background: colors.paper,
-  color: colors.ink,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'pointer',
-};

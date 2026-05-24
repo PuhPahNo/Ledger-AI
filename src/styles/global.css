@@ -1,24 +1,72 @@
-html,
-body {
-  margin: 0;
-  padding: 0;
-  background: #f0eee9;
-  font-family: 'Inter', -apple-system, system-ui, sans-serif;
-  color: #15140f;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Bento palette — HSL channels so Tailwind's <alpha-value> syntax works. */
+    --color-bg: 44 18% 91%;            /* #eceae3 */
+    --color-ink: 45 14% 7%;            /* #15140f */
+    --color-ink2: 42 13% 19%;          /* #3a382e */
+    --color-dim: 47 9% 45%;            /* #7b7868 */
+    --color-paper: 0 0% 100%;          /* #ffffff */
+    --color-cream: 44 56% 94%;         /* #f7f3e6 */
+    --color-sunken: 44 22% 95%;        /* slightly warmer than bg */
+    --color-sage: 95 31% 70%;          /* #abc89a */
+    --color-sage-ink: 105 35% 19%;     /* #274020 */
+    --color-coral: 13 100% 71%;        /* #ff8b6b */
+    --color-coral-ink: 9 78% 18%;      /* #54170a */
+    --color-sky: 207 60% 77%;          /* #9fc6e8 */
+    --color-sky-ink: 207 80% 19%;      /* #0a3454 */
+    --color-lemon: 51 80% 64%;         /* #ecd95a */
+    --color-lemon-ink: 49 100% 11%;    /* #3a2f00 */
+    --color-pink: 346 64% 83%;         /* #f1b6c5 */
+    --color-pink-ink: 343 70% 17%;     /* #4a0e22 */
+    --color-plum: 300 19% 21%;         /* #3e2a3e */
+    --color-purple: 268 67% 80%;       /* #caa6f0 */
+    --color-purple-ink: 264 70% 17%;   /* #2b0d4a */
+
+    /* shadcn-compatible aliases. Map to bento tokens so generated components look like the rest of the app. */
+    --background: var(--color-bg);
+    --foreground: var(--color-ink);
+    --card: var(--color-paper);
+    --card-foreground: var(--color-ink);
+    --popover: var(--color-paper);
+    --popover-foreground: var(--color-ink);
+    --primary: var(--color-ink);
+    --primary-foreground: var(--color-lemon);
+    --secondary: var(--color-sunken);
+    --secondary-foreground: var(--color-ink);
+    --muted: var(--color-sunken);
+    --muted-foreground: var(--color-dim);
+    --accent: var(--color-cream);
+    --accent-foreground: var(--color-ink);
+    --destructive: var(--color-coral);
+    --destructive-foreground: var(--color-coral-ink);
+    --border: var(--color-ink2);
+    --input: var(--color-ink2);
+    --ring: var(--color-ink);
+  }
+
+  html, body {
+    @apply bg-bg text-ink antialiased;
+    font-family: theme('fontFamily.sans');
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    margin: 0;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
 }
 
-#root {
-  min-height: 100vh;
-}
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
-button {
-  font-family: inherit;
+@layer components {
+  /* Reserved for any genuinely-shared utility classes that don't belong as a Tailwind plugin. */
 }

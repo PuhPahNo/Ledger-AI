@@ -1,8 +1,10 @@
 import { CreditCard, EyeOff, Landmark } from 'lucide-react';
 import type { Account, Business, Transaction } from '@/types/domain';
-import { colors, fonts, radii } from '@/theme/tokens';
 import { fmt$k } from '@/lib/format';
-import { Tile } from './Tile';
+import { Tile } from '@/components/ui/tile';
+import { Button } from '@/components/ui/button';
+import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
+import { cn } from '@/lib/cn';
 
 interface Props {
   accounts: Account[];
@@ -43,101 +45,76 @@ export function AccountSpendTile({
   });
 
   return (
-    <Tile
-      bg={colors.paper}
-      ink={colors.ink}
-      colSpan={2}
-      rowSpan={1}
-      pad={14}
-      style={{ display: 'flex', flexDirection: 'column', gap: 9 }}
-    >
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <div style={{ fontFamily: fonts.display, fontSize: 15, fontWeight: 800 }}>Spend By Account</div>
-        <span style={{ color: colors.dim, fontSize: 11 }}>{selected.size ? `${selected.size} selected` : `${watched} watched`}</span>
-        <span style={{ flex: 1 }} />
-        {selected.size > 0 && <button type="button" onClick={onClearAccounts} style={ghostButtonStyle}>All</button>}
-        <button type="button" onClick={onManageAccounts} style={ghostButtonStyle}>Manage</button>
-      </div>
-
-      <div style={{ display: 'grid', gap: 7, minHeight: 0 }}>
-        {sortedAccounts.length ? sortedAccounts.slice(0, 4).map((account) => {
-          const spend = spendByAccount[account.id] ?? { amount: 0, count: 0 };
-          const active = selected.has(account.id);
-          const business = businesses.find((item) => item.id === account.biz || item.dbId === account.businessId);
-          return (
-            <button
-              key={account.id}
-              type="button"
-              disabled={!account.enabled}
-              onClick={() => onToggleAccount(account.id)}
-              title={account.enabled ? `Filter spend to ${account.name}` : `${account.name} is ignored in spend results`}
-              style={{
-                ...accountButtonStyle,
-                borderColor: active ? colors.ink : colors.ink2,
-                background: active ? colors.lemon : colors.bg,
-                opacity: account.enabled ? 1 : 0.52,
-                cursor: account.enabled ? 'pointer' : 'not-allowed',
-              }}
-            >
-              <span style={iconStyle}>
-                {account.enabled ? account.kind === 'credit' ? <CreditCard size={14} /> : <Landmark size={14} /> : <EyeOff size={14} />}
-              </span>
-              <span style={{ minWidth: 0, textAlign: 'left' }}>
-                <span style={{ display: 'block', fontSize: 12, fontWeight: 900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {account.name}
-                </span>
-                <span style={{ display: 'block', color: colors.dim, fontSize: 10.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {account.mask ?? account.kind} · {business?.short ?? 'Unassigned'} · {account.enabled ? `${spend.count} txns` : 'ignored'}
-                </span>
-              </span>
-              <span style={{ fontFamily: fonts.display, fontWeight: 900, fontSize: 13, fontVariantNumeric: 'tabular-nums' }}>
-                {account.enabled ? selected.size > 0 && !active ? 'View' : fmt$k(spend.amount) : 'Ignored'}
-              </span>
-            </button>
-          );
-        }) : (
-          <div style={{ color: colors.dim, fontSize: 12, padding: '8px 0' }}>Connected Plaid accounts will appear here.</div>
+    <Tile tone="paper" pad="md" colSpan={12} rowSpan={1} className="gap-3">
+      <div className="flex items-baseline gap-3">
+        <div className="font-display text-base font-bold">Spend By Account</div>
+        <span className="text-xs text-dim">
+          {selected.size ? `${selected.size} selected` : `${watched} watched${ignored ? ` · ${ignored} ignored` : ''}`}
+        </span>
+        <span className="flex-1" />
+        {selected.size > 0 && (
+          <Button variant="outline" size="sm" onClick={onClearAccounts}>
+            All accounts
+          </Button>
         )}
+        <Button variant="ghost" size="sm" onClick={onManageAccounts}>
+          Manage
+        </Button>
       </div>
 
-      {ignored > 0 && (
-        <div style={{ color: colors.dim, fontSize: 10.5 }}>
-          {ignored} ignored account{ignored === 1 ? '' : 's'} excluded from spend totals.
-        </div>
+      {sortedAccounts.length ? (
+        <ScrollArea>
+          <div className="flex gap-2 pb-2">
+            {sortedAccounts.map((account) => {
+              const spend = spendByAccount[account.id] ?? { amount: 0, count: 0 };
+              const active = selected.has(account.id);
+              const business = businesses.find((item) => item.id === account.biz || item.dbId === account.businessId);
+              return (
+                <button
+                  key={account.id}
+                  type="button"
+                  disabled={!account.enabled}
+                  onClick={() => onToggleAccount(account.id)}
+                  title={account.enabled ? `Filter spend to ${account.name}` : `${account.name} is ignored in spend results`}
+                  className={cn(
+                    'flex w-60 shrink-0 items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/30',
+                    active
+                      ? 'border-ink bg-lemon text-ink shadow-sm'
+                      : 'border-ink2/15 bg-[hsl(var(--color-sunken))] text-ink hover:border-ink2/30',
+                    !account.enabled && 'cursor-not-allowed opacity-60',
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
+                      active ? 'bg-ink text-lemon' : 'bg-paper text-ink',
+                    )}
+                  >
+                    {account.enabled ? (
+                      account.kind === 'credit' ? <CreditCard className="h-4 w-4" /> : <Landmark className="h-4 w-4" />
+                    ) : (
+                      <EyeOff className="h-4 w-4" />
+                    )}
+                  </span>
+                  <span className="min-w-0 flex-1 text-left">
+                    <span className="block truncate text-xs font-bold">{account.name}</span>
+                    <span className="block truncate text-[10px] text-dim">
+                      {account.mask ?? account.kind} · {business?.short ?? 'Unassigned'} · {account.enabled ? `${spend.count} txns` : 'ignored'}
+                    </span>
+                  </span>
+                  <span className="font-display text-sm font-bold tabular-nums">
+                    {account.enabled ? (selected.size > 0 && !active ? 'View' : fmt$k(spend.amount)) : 'Ignored'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <ScrollBar orientation="horizontal" />
+        </ScrollArea>
+      ) : (
+        <div className="py-2 text-sm text-dim">Connected Plaid accounts will appear here.</div>
       )}
     </Tile>
   );
 }
-
-const accountButtonStyle: React.CSSProperties = {
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: radii.tile,
-  color: colors.ink,
-  padding: '7px 9px',
-  display: 'grid',
-  gridTemplateColumns: '28px minmax(0, 1fr) auto',
-  alignItems: 'center',
-  gap: 8,
-  minWidth: 0,
-};
-
-const iconStyle: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  borderRadius: 9,
-  background: colors.paper,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const ghostButtonStyle: React.CSSProperties = {
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: radii.pill,
-  background: 'transparent',
-  color: colors.ink,
-  padding: '4px 8px',
-  fontSize: 10.5,
-  fontWeight: 900,
-  cursor: 'pointer',
-};

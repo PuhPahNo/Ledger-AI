@@ -1,7 +1,10 @@
 import type { SpendSummary } from '@/types/domain';
-import { colors, fonts } from '@/theme/tokens';
 import { fmt$k } from '@/lib/format';
-import { Tile } from './Tile';
+import { Tile } from '@/components/ui/tile';
+import { MoneyDisplay } from '@/components/ui/money-display';
+import { Badge } from '@/components/ui/badge';
+import { StatLabel } from '@/components/ui/stat-label';
+import { colors } from '@/theme/tokens';
 import { Sparkline } from './Sparkline';
 
 interface Props {
@@ -11,86 +14,49 @@ interface Props {
 }
 
 export function SpendHeroTile({ summary, contextLabel, detailLabel }: Props) {
+  const up = summary.deltaPct >= 0;
   return (
-    <Tile
-      bg={colors.cream}
-      ink={colors.ink}
-      colSpan={3}
-      rowSpan={2}
-      pad={20}
-      style={{ display: 'flex', flexDirection: 'column' }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-        <span
-          style={{
-            padding: '3px 9px',
-            borderRadius: 99,
-            background: colors.ink,
-            color: colors.cream,
-            fontSize: 10.5,
-            fontWeight: 600,
-            letterSpacing: 0.5,
-          }}
-        >
-          SPEND · {summary.periodLabel}
-        </span>
-        <span style={{ fontSize: 11.5, color: colors.dim }}>{contextLabel}</span>
-        <span style={{ flex: 1 }} />
-        <span
-          style={{
-            fontSize: 11.5,
-            color: colors.sageInk,
-            background: colors.sage,
-            padding: '3px 8px',
-            borderRadius: 99,
-            fontWeight: 600,
-          }}
-        >
-          ↗ {summary.deltaPct}%
-        </span>
+    <Tile tone="cream" pad="lg" colSpan={8} rowSpan={2} className="gap-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <Badge variant="default">SPEND · {summary.periodLabel}</Badge>
+        <span className="text-xs text-dim">{contextLabel}</span>
+        <span className="flex-1" />
+        <Badge variant={up ? 'success' : 'danger'}>
+          {up ? '↗' : '↘'} {summary.deltaPct >= 0 ? `+${summary.deltaPct}` : summary.deltaPct}%
+        </Badge>
       </div>
-      <div
-        style={{
-          fontFamily: fonts.display,
-          fontWeight: 600,
-          fontSize: 78,
-          lineHeight: 0.95,
-          letterSpacing: -3,
-          color: colors.ink,
-          marginTop: 4,
-        }}
-      >
+
+      <MoneyDisplay size="display" className="text-ink">
         {fmt$k(summary.total)}
-      </div>
-      <div
-        style={{
-          marginTop: 'auto',
-          display: 'grid',
-          gridTemplateColumns: 'minmax(260px, 1fr) auto',
-          alignItems: 'end',
-          gap: 18,
-          minHeight: 0,
-        }}
-      >
-        <Sparkline
-          points={summary.trailingMonths}
-          values={summary.trailingMonthCents}
-          labels={summary.trailingMonthLabels}
-          baseColor={colors.ink}
-          highlightColor={colors.coral}
-          height={112}
-        />
-        <div style={{ fontSize: 11.5, color: colors.dim, lineHeight: 1.55, minWidth: 150 }}>
-          <div style={{ color: colors.ink, fontWeight: 600 }}>Trailing 12 months</div>
-          {detailLabel && <div style={{ color: colors.ink }}>{detailLabel}</div>}
-          <div>
-            Last month: <span style={{ color: colors.ink }}>{fmt$k(summary.lastMonth)}</span>
-          </div>
-          <div>
-            Avg: <span style={{ color: colors.ink }}>{fmt$k(summary.avgMonth)}</span>
-          </div>
+      </MoneyDisplay>
+
+      <div className="mt-auto grid grid-cols-[minmax(0,1fr)_auto] items-end gap-6">
+        <div className="min-w-0">
+          <Sparkline
+            points={summary.trailingMonths}
+            values={summary.trailingMonthCents}
+            labels={summary.trailingMonthLabels}
+            baseColor={colors.ink}
+            highlightColor={colors.coral}
+            height={120}
+          />
         </div>
+        <dl className="grid w-[180px] gap-1.5 text-xs text-dim">
+          <div className="font-bold text-ink">Trailing 12 months</div>
+          {detailLabel && <div className="text-ink">{detailLabel}</div>}
+          <div className="flex justify-between gap-2">
+            <dt>Last month</dt>
+            <dd className="font-display font-bold text-ink tabular-nums">{fmt$k(summary.lastMonth)}</dd>
+          </div>
+          <div className="flex justify-between gap-2">
+            <dt>Avg / month</dt>
+            <dd className="font-display font-bold text-ink tabular-nums">{fmt$k(summary.avgMonth)}</dd>
+          </div>
+        </dl>
       </div>
     </Tile>
   );
 }
+
+// Re-export StatLabel so tile callers can use it without a separate import path if needed elsewhere.
+export { StatLabel };

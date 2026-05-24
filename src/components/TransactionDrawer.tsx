@@ -1,9 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { X } from 'lucide-react';
+import { Save } from 'lucide-react';
 import { updateTransaction } from '@/api';
 import { fmt$ } from '@/lib/format';
-import { colors, fonts, radii } from '@/theme/tokens';
+import { useToast } from '@/hooks/useToast';
 import type { Business, Category, Transaction } from '@/types/domain';
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { MoneyDisplay } from '@/components/ui/money-display';
 
 interface Props {
   transaction: Transaction | null;
@@ -14,6 +22,7 @@ interface Props {
 }
 
 export function TransactionDrawer({ transaction, businesses, categories, onClose, onSaved }: Props) {
+  const { toast } = useToast();
   const resolvedBusinessId = useMemo(() => {
     if (!transaction) return '';
     return transaction.businessId ?? businesses.find((business) => business.id === transaction.biz)?.dbId ?? '';
@@ -21,128 +30,137 @@ export function TransactionDrawer({ transaction, businesses, categories, onClose
   const [businessId, setBusinessId] = useState('');
   const [categoryId, setCategoryId] = useState<string>('');
   const [note, setNote] = useState('');
-  const [status, setStatus] = useState('');
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setBusinessId(resolvedBusinessId);
     setCategoryId(transaction?.categoryId ?? '');
     setNote(transaction?.note ?? '');
-    setStatus('');
   }, [resolvedBusinessId, transaction]);
 
-  if (!transaction) return null;
-
   const save = async () => {
-    setStatus('Saving...');
-    await updateTransaction(transaction.id, {
-      businessId: businessId || undefined,
-      categoryId: categoryId || null,
-      note: note || null,
-    });
-    setStatus('Saved.');
-    onSaved();
+    if (!transaction) return;
+    setSaving(true);
+    try {
+      await updateTransaction(transaction.id, {
+        businessId: businessId || undefined,
+        categoryId: categoryId || null,
+        note: note || null,
+      });
+      toast({ variant: 'success', title: 'Transaction saved' });
+      onSaved();
+      onClose();
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Save failed',
+        description: error instanceof Error ? error.message : 'Try again.',
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <aside style={drawerStyle}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div>
-          <div style={{ color: colors.dim, fontSize: 11, fontWeight: 800 }}>{transaction.dateLabel}</div>
-          <div style={{ fontFamily: fonts.display, fontSize: 24, fontWeight: 800 }}>{transaction.merchant}</div>
-        </div>
-        <span style={{ flex: 1 }} />
-        <button type="button" onClick={onClose} style={iconButtonStyle} title="Close"><X size={18} /></button>
-      </div>
+    <Sheet open={Boolean(transaction)} onOpenChange={(open) => !open && onClose()}>
+      <SheetContent side="right" className="w-full sm:max-w-md">
+        {transaction && (
+          <>
+            <SheetHeader>
+              <span className="text-xs font-bold uppercase tracking-wider text-dim">{transaction.dateLabel}</span>
+              <SheetTitle className="text-2xl">{transaction.merchant}</SheetTitle>
+              <SheetDescription className="flex items-center gap-2">
+                <Badge variant="muted">{transaction.cat || 'Uncategorized'}</Badge>
+                <Badge variant={receiptVariant(transaction.receipt)}>{transaction.receipt}</Badge>
+              </SheetDescription>
+            </SheetHeader>
 
-      <div style={amountStyle}>{fmt$(transaction.amount)}</div>
+            <MoneyDisplay size="xl" className={transaction.amount > 0 ? 'text-sage-ink' : 'text-ink'}>
+              {fmt$(transaction.amount)}
+            </MoneyDisplay>
 
-      <label style={labelStyle}>Business</label>
-      <select value={businessId} onChange={(event) => setBusinessId(event.target.value)} style={inputStyle}>
-        {businesses.map((business) => (
-          <option key={business.dbId ?? business.id} value={business.dbId ?? business.id}>{business.name}</option>
-        ))}
-      </select>
+            <Separator />
 
-      <label style={labelStyle}>Category</label>
-      <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)} style={inputStyle}>
-        <option value="">Uncategorized</option>
-        {categories.map((category) => (
-          <option key={category.id ?? category.name} value={category.id ?? ''}>{category.name}</option>
-        ))}
-      </select>
+            <div className="grid gap-1.5">
+              <Label htmlFor="drawer-business">Business</Label>
+              <Select value={businessId} onValueChange={setBusinessId}>
+                <SelectTrigger id="drawer-business">
+                  <SelectValue placeholder="Choose a business" />
+                </SelectTrigger>
+                <SelectContent>
+                  {businesses.map((business) => (
+                    <SelectItem key={business.dbId ?? business.id} value={business.dbId ?? business.id}>
+                      {business.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-      <label style={labelStyle}>Receipt</label>
-      <div style={readonlyStyle}>{transaction.receipt}</div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="drawer-category">Category</Label>
+              <Select value={categoryId || 'uncategorized'} onValueChange={(value) => setCategoryId(value === 'uncategorized' ? '' : value)}>
+                <SelectTrigger id="drawer-category">
+                  <SelectValue placeholder="Uncategorized" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="uncategorized">Uncategorized</SelectItem>
+                  {categories.map((category) => (
+                    <SelectItem key={category.id ?? category.name} value={category.id ?? category.name}>
+                      {category.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-      <label style={labelStyle}>Source</label>
-      <div style={readonlyStyle}>{transaction.src}</div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="drawer-note">Note</Label>
+              <Textarea
+                id="drawer-note"
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                rows={4}
+                placeholder="Add context for tax season"
+              />
+            </div>
 
-      <label style={labelStyle}>Note</label>
-      <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={4} style={{ ...inputStyle, resize: 'vertical' }} />
+            <div className="grid gap-1.5 rounded-md bg-[hsl(var(--color-sunken))] p-3 text-xs">
+              <div className="flex justify-between">
+                <span className="text-dim">Receipt status</span>
+                <span className="font-bold">{transaction.receipt}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-dim">Source</span>
+                <span className="font-bold">{transaction.src}</span>
+              </div>
+            </div>
 
-      <button type="button" onClick={save} style={saveButtonStyle}>Save overrides</button>
-      {status && <div style={{ color: colors.dim, fontSize: 12 }}>{status}</div>}
-    </aside>
+            <div className="mt-auto flex justify-end gap-2 pt-2">
+              <Button variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button onClick={save} disabled={saving}>
+                <Save className="h-4 w-4" />
+                {saving ? 'Saving…' : 'Save overrides'}
+              </Button>
+            </div>
+          </>
+        )}
+      </SheetContent>
+    </Sheet>
   );
 }
 
-const drawerStyle: React.CSSProperties = {
-  position: 'fixed',
-  right: 0,
-  top: 0,
-  bottom: 0,
-  width: 380,
-  zIndex: 25,
-  background: colors.paper,
-  borderLeft: `1px solid ${colors.ink2}`,
-  boxShadow: '-18px 0 50px rgba(44,37,32,0.16)',
-  padding: 18,
-  display: 'grid',
-  alignContent: 'start',
-  gap: 10,
-  color: colors.ink,
-};
-
-const amountStyle: React.CSSProperties = {
-  fontFamily: fonts.display,
-  fontSize: 34,
-  fontWeight: 900,
-  margin: '4px 0 8px',
-};
-
-const labelStyle: React.CSSProperties = { fontSize: 11, fontWeight: 900, color: colors.dim };
-const inputStyle: React.CSSProperties = {
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: 10,
-  background: colors.bg,
-  color: colors.ink,
-  padding: '9px 10px',
-  fontSize: 13,
-};
-const readonlyStyle: React.CSSProperties = {
-  ...inputStyle,
-  background: colors.paper,
-  color: colors.dim,
-};
-const saveButtonStyle: React.CSSProperties = {
-  marginTop: 8,
-  border: 'none',
-  borderRadius: radii.pill,
-  background: colors.ink,
-  color: colors.lemon,
-  padding: '10px 12px',
-  fontWeight: 900,
-  cursor: 'pointer',
-};
-const iconButtonStyle: React.CSSProperties = {
-  width: 34,
-  height: 34,
-  borderRadius: '50%',
-  border: `1px solid ${colors.ink2}`,
-  background: 'transparent',
-  color: colors.ink,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'pointer',
-};
+function receiptVariant(status: Transaction['receipt']): 'success' | 'warning' | 'danger' | 'muted' {
+  switch (status) {
+    case 'matched':
+      return 'success';
+    case 'pending':
+      return 'warning';
+    case 'missing':
+      return 'danger';
+    default:
+      return 'muted';
+  }
+}

@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import type { Category, CategoryComparison } from '@/types/domain';
-import { accentRamp, colors, fonts, radii } from '@/theme/tokens';
+import { accentRamp, colors } from '@/theme/tokens';
 import { fmt$k } from '@/lib/format';
-import { Tile } from './Tile';
+import { Tile } from '@/components/ui/tile';
+import { StatLabel } from '@/components/ui/stat-label';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Donut } from './Donut';
 
 interface Props {
@@ -19,53 +22,62 @@ export function CategoriesTile({ categories, comparisons, comparisonBasis, onCom
   const total = visibleCategories.reduce((sum, category) => sum + category.amount, 0);
 
   return (
-    <Tile bg={colors.lemon} ink={colors.lemonInk} colSpan={2} rowSpan={2} pad={18} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div>
-          <div style={{ fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1.4, opacity: 0.72 }}>
-            CATEGORIES
-          </div>
-          <div style={{ fontFamily: fonts.display, fontSize: 24, fontWeight: 800, marginTop: 2 }}>
+    <Tile tone="lemon" pad="md" colSpan={6} rowSpan={2} className="gap-4">
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <StatLabel>CATEGORIES</StatLabel>
+          <div className="mt-0.5 font-display text-xl font-bold text-lemon-ink">
             {mode === 'breakdown' ? 'Where it went' : 'Compare spend'}
           </div>
         </div>
-        <span style={{ flex: 1 }} />
-        <SegmentButton active={mode === 'breakdown'} onClick={() => setMode('breakdown')}>Breakdown</SegmentButton>
-        <SegmentButton active={mode === 'compare'} onClick={() => setMode('compare')}>Compare</SegmentButton>
+        <Tabs value={mode} onValueChange={(value) => setMode(value as 'breakdown' | 'compare')}>
+          <TabsList className="h-8 bg-lemon-ink/10">
+            <TabsTrigger value="breakdown" className="h-7 text-[11px] data-[state=active]:bg-lemon-ink data-[state=active]:text-lemon">
+              Breakdown
+            </TabsTrigger>
+            <TabsTrigger value="compare" className="h-7 text-[11px] data-[state=active]:bg-lemon-ink data-[state=active]:text-lemon">
+              Compare
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
       </div>
 
       {mode === 'breakdown' ? (
-        <>
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 0 }}>
-            <Donut categories={visibleCategories} strokeColor={colors.lemon} labelColor={colors.lemonInk} size={190} />
+        <div className="grid min-h-0 flex-1 grid-cols-[auto_1fr] items-center gap-6">
+          <Donut categories={visibleCategories} strokeColor={colors.lemon} labelColor={colors.lemonInk} size={180} />
+          <div className="grid min-w-0 gap-1.5">
+            {total <= 0 ? (
+              <div className="text-sm text-lemon-ink/70">No categorized spend for this filter yet.</div>
+            ) : (
+              legendCategories.map((category, index) => (
+                <LegendRow key={`${category.id ?? category.name}-${index}`} category={category} index={index} />
+              ))
+            )}
           </div>
-          {total <= 0 && (
-            <div style={{ textAlign: 'center', color: colors.lemonInk, opacity: 0.72, fontSize: 12, marginTop: -14 }}>
-              No categorized spend for this filter yet.
-            </div>
-          )}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 18px', fontSize: 13 }}>
-            {legendCategories.map((category, index) => (
-              <LegendRow key={`${category.id ?? category.name}-${index}`} category={category} index={index} />
-            ))}
-          </div>
-        </>
+        </div>
       ) : (
-        <>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <SegmentButton active={comparisonBasis === 'month'} onClick={() => onComparisonBasisChange('month')}>This vs Last Month</SegmentButton>
-            <SegmentButton active={comparisonBasis === 'year'} onClick={() => onComparisonBasisChange('year')}>This vs Last Year</SegmentButton>
-          </div>
-          <div style={{ display: 'grid', gap: 9, flex: 1, alignContent: 'center' }}>
+        <div className="flex min-h-0 flex-1 flex-col gap-3">
+          <ToggleGroup
+            type="single"
+            value={comparisonBasis}
+            onValueChange={(value) => value && onComparisonBasisChange(value as 'month' | 'year')}
+            className="self-start bg-lemon-ink/10"
+          >
+            <ToggleGroupItem value="month" className="data-[state=on]:bg-lemon-ink data-[state=on]:text-lemon">
+              This vs Last Month
+            </ToggleGroupItem>
+            <ToggleGroupItem value="year" className="data-[state=on]:bg-lemon-ink data-[state=on]:text-lemon">
+              This vs Last Year
+            </ToggleGroupItem>
+          </ToggleGroup>
+          <div className="grid gap-3">
             {comparisons.length ? comparisons.slice(0, 6).map((comparison, index) => (
               <ComparisonRow key={comparison.category} comparison={comparison} index={index} />
             )) : (
-              <div style={{ textAlign: 'center', opacity: 0.72, fontSize: 13 }}>
-                No comparison spend for this filter yet.
-              </div>
+              <div className="text-center text-sm text-lemon-ink/70">No comparison spend for this filter yet.</div>
             )}
           </div>
-        </>
+        </div>
       )}
     </Tile>
   );
@@ -73,20 +85,13 @@ export function CategoriesTile({ categories, comparisons, comparisonBasis, onCom
 
 function LegendRow({ category, index }: { category: Category; index: number }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+    <div className="flex items-center gap-3 min-w-0 text-sm text-lemon-ink">
       <span
-        style={{
-          width: 10,
-          height: 10,
-          borderRadius: 3,
-          background: accentRamp[index % accentRamp.length],
-          flexShrink: 0,
-        }}
+        className="h-2.5 w-2.5 shrink-0 rounded-sm"
+        style={{ background: accentRamp[index % accentRamp.length] }}
       />
-      <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {category.name}
-      </span>
-      <span style={{ fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{fmt$k(category.amount)}</span>
+      <span className="flex-1 truncate">{category.name}</span>
+      <span className="font-display font-bold tabular-nums">{fmt$k(category.amount)}</span>
     </div>
   );
 }
@@ -98,15 +103,13 @@ function ComparisonRow({ comparison, index }: { comparison: CategoryComparison; 
   const delta = comparison.deltaPct >= 0 ? `+${comparison.deltaPct}%` : `${comparison.deltaPct}%`;
 
   return (
-    <div style={{ display: 'grid', gap: 4 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <div style={{ fontWeight: 900, fontSize: 13, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {comparison.category}
-        </div>
-        <div style={{ fontWeight: 900, fontSize: 12 }}>{fmt$k(comparison.current)}</div>
-        <div style={{ fontSize: 11, opacity: 0.72 }}>{delta}</div>
+    <div className="grid gap-1 text-lemon-ink">
+      <div className="flex items-baseline gap-2 text-sm">
+        <div className="min-w-0 flex-1 truncate font-bold">{comparison.category}</div>
+        <div className="font-display font-bold tabular-nums">{fmt$k(comparison.current)}</div>
+        <div className="text-xs opacity-70">{delta}</div>
       </div>
-      <div style={{ display: 'grid', gap: 3 }}>
+      <div className="grid gap-1">
         <Bar width={currentWidth} color={accentRamp[index % accentRamp.length]} label="Current" />
         <Bar width={previousWidth} color={colors.ink} label="Previous" muted />
       </div>
@@ -116,32 +119,14 @@ function ComparisonRow({ comparison, index }: { comparison: CategoryComparison; 
 
 function Bar({ width, color, label, muted = false }: { width: string; color: string; label: string; muted?: boolean }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-      <span style={{ width: 42, fontSize: 9.5, opacity: 0.66, fontFamily: fonts.mono }}>{label}</span>
-      <div style={{ flex: 1, height: 8, borderRadius: 99, background: 'rgba(58,47,0,0.14)', overflow: 'hidden' }}>
-        <div style={{ width, height: '100%', borderRadius: 99, background: color, opacity: muted ? 0.55 : 1 }} />
+    <div className="flex items-center gap-2">
+      <span className="w-12 font-mono text-[10px] opacity-60">{label}</span>
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-lemon-ink/15">
+        <div
+          className="h-full rounded-full"
+          style={{ width, background: color, opacity: muted ? 0.55 : 1 }}
+        />
       </div>
     </div>
-  );
-}
-
-function SegmentButton({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        border: 'none',
-        borderRadius: radii.pill,
-        background: active ? colors.ink : 'rgba(255,255,255,0.34)',
-        color: active ? colors.lemon : colors.lemonInk,
-        padding: '6px 10px',
-        cursor: 'pointer',
-        fontSize: 11,
-        fontWeight: 900,
-      }}
-    >
-      {children}
-    </button>
   );
 }

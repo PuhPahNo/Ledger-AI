@@ -1,7 +1,11 @@
 import { useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import { login } from '@/api';
 import type { CurrentUser } from '@/types/domain';
-import { colors, fonts, radii } from '@/theme/tokens';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 
 interface Props {
   onLogin: (user: CurrentUser) => void;
@@ -15,8 +19,8 @@ export function LoginPage({ onLogin }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
     setBusy(true);
     setError(null);
     try {
@@ -34,68 +38,68 @@ export function LoginPage({ onLogin }: Props) {
   };
 
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        background: colors.bg,
-        display: 'grid',
-        placeItems: 'center',
-        fontFamily: fonts.sans,
-        color: colors.ink,
-        padding: 24,
-      }}
-    >
-      <form
-        onSubmit={submit}
-        style={{
-          width: 'min(420px, 100%)',
-          background: colors.paper,
-          borderRadius: radii.tile,
-          padding: 24,
-          display: 'grid',
-          gap: 14,
-          boxShadow: '0 16px 50px rgba(21,20,15,0.08)',
-        }}
-      >
-        <div style={{ fontFamily: fonts.display, fontSize: 26, fontWeight: 700 }}>Ledger AI</div>
-        <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 700 }}>
-          Username
-          <input value={username} onChange={(e) => setUsername(e.target.value)} style={inputStyle} />
-        </label>
-        <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 700 }}>
-          Password
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
-        </label>
-        {needsTotp && (
-          <label style={{ display: 'grid', gap: 6, fontSize: 13, fontWeight: 700 }}>
-            Authenticator code
-            <input value={totpCode} onChange={(e) => setTotpCode(e.target.value)} style={inputStyle} inputMode="numeric" />
-          </label>
-        )}
-        {error && <div style={{ color: colors.coralInk, fontSize: 13 }}>{error}</div>}
-        <button
-          type="submit"
-          disabled={busy}
-          style={{
-            border: 'none',
-            borderRadius: radii.pill,
-            background: colors.ink,
-            color: colors.lemon,
-            padding: '11px 14px',
-            cursor: busy ? 'wait' : 'pointer',
-            fontWeight: 800,
-          }}
+    <main className="grid min-h-screen place-items-center bg-bg p-6">
+      <div className="w-full max-w-sm">
+        <div className="mb-6 flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-ink font-display text-xl font-bold text-lemon">
+            L
+          </div>
+          <div>
+            <div className="font-display text-2xl font-bold tracking-tight">Ledger AI</div>
+            <div className="text-xs text-dim">Sign in to continue</div>
+          </div>
+        </div>
+
+        <form
+          onSubmit={submit}
+          className="grid gap-4 rounded-xl border border-ink2/10 bg-paper p-6 shadow-md"
         >
-          {busy ? 'Signing in...' : 'Sign in'}
-        </button>
-      </form>
+          <div className="grid gap-1.5">
+            <Label htmlFor="login-username">Username</Label>
+            <Input
+              id="login-username"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              autoComplete="username"
+              required
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="login-password">Password</Label>
+            <Input
+              id="login-password"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </div>
+          {needsTotp && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="login-totp">Authenticator code</Label>
+              <Input
+                id="login-totp"
+                value={totpCode}
+                onChange={(event) => setTotpCode(event.target.value)}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="123 456"
+                required
+              />
+            </div>
+          )}
+          {error && (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+          <Button type="submit" disabled={busy} className="mt-2">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {busy ? 'Signing in…' : needsTotp ? 'Verify code' : 'Sign in'}
+          </Button>
+        </form>
+      </div>
     </main>
   );
 }
-
-const inputStyle: React.CSSProperties = {
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: 10,
-  padding: '10px 12px',
-  font: 'inherit',
-};

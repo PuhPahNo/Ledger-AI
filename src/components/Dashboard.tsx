@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Business, CurrentUser, Transaction } from '@/types/domain';
-import { colors, fonts, radii } from '@/theme/tokens';
 import { countDuplicateSubs, countNeedsReceipt } from '@/lib/calc';
 import { useDashboard } from '@/hooks/useDashboard';
 import { uploadReceipt } from '@/api';
+import { useToast } from '@/hooks/useToast';
+import { Button } from '@/components/ui/button';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Input } from '@/components/ui/input';
 import { HeaderBar } from './HeaderBar';
+import { BusinessStrip } from './BusinessStrip';
 import { SpendHeroTile } from './tiles/SpendHeroTile';
-import { BusinessTile } from './tiles/BusinessTile';
 import { ReceiptDropTile } from './tiles/ReceiptDropTile';
 import { ActivityTile } from './tiles/ActivityTile';
 import { CategoriesTile } from './tiles/CategoriesTile';
@@ -20,7 +24,6 @@ import { TransactionExplorer } from './TransactionExplorer';
 
 type TimePreset = 'month' | 'last3' | 'last12' | 'ytd';
 
-/** Display-only caption for a business tile, computed from the loaded transactions. */
 function captionFor(biz: Business, txns: Transaction[]): string {
   const total = txns.filter((t) => t.biz === biz.id).length;
   const missing = countNeedsReceipt(txns, biz.id);
@@ -37,6 +40,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
+  const { toast } = useToast();
   const [businessFilter, setBusinessFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [anchorMonth, setAnchorMonth] = useState(() => new Date().toISOString().slice(0, 7));
@@ -47,7 +51,11 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
   const [transactionsOpen, setTransactionsOpen] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
-  const [receiptStatus, setReceiptStatus] = useState<{ state: 'idle' | 'uploading' | 'processing' | 'matched' | 'pending' | 'error'; message?: string }>({ state: 'idle' });
+  const [receiptStatus, setReceiptStatus] = useState<{
+    state: 'idle' | 'uploading' | 'processing' | 'matched' | 'pending' | 'error';
+    message?: string;
+  }>({ state: 'idle' });
+
   const timeWindow = buildTimeWindow(anchorMonth, timePreset);
   const { data, loading, error } = useDashboard({
     business: businessFilter,
@@ -75,9 +83,7 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
 
   const { businesses, transactions, categories, categoryComparisons, connections, accounts, alerts, summary } = data;
   const selectedBusiness = businesses.find((business) => business.id === businessFilter);
-  const selectedBusinessDbId = businessFilter === 'all'
-    ? undefined
-    : selectedBusiness?.dbId;
+  const selectedBusinessDbId = businessFilter === 'all' ? undefined : selectedBusiness?.dbId;
   const heroContext = selectedAccountIds.length
     ? `filtered to ${selectedAccountIds.length} account${selectedAccountIds.length === 1 ? '' : 's'}`
     : selectedBusiness
@@ -97,9 +103,16 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
         state: result.matched ? 'matched' : result.processing ? 'processing' : 'pending',
         message: result.matched ? `Matched ${result.matched.merchant}` : 'OCR and matching job queued.',
       });
+      toast({
+        variant: result.matched ? 'success' : 'default',
+        title: result.matched ? 'Receipt matched' : 'Receipt queued',
+        description: result.matched ? `Matched ${result.matched.merchant}.` : 'OCR and matching job queued.',
+      });
       setRefreshKey((key) => key + 1);
-    } catch (error) {
-      setReceiptStatus({ state: 'error', message: error instanceof Error ? error.message : 'Upload failed.' });
+    } catch (uploadError) {
+      const message = uploadError instanceof Error ? uploadError.message : 'Upload failed.';
+      setReceiptStatus({ state: 'error', message });
+      toast({ variant: 'destructive', title: 'Upload failed', description: message });
     }
   };
   const handleBusinessChange = (business: string) => {
@@ -115,96 +128,79 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
   };
 
   return (
-    <div
-      style={{
-        width: '100%',
-        minHeight: '100vh',
-        background: colors.bg,
-        color: colors.ink,
-        fontFamily: fonts.sans,
-        padding: 14,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 10,
-      }}
-    >
-      <HeaderBar
-        onUploadReceipt={handleUpload}
-        currentView="dashboard"
-        onViewChange={onViewChange}
-        onLogout={onLogout}
-        user={user}
-        businesses={businesses}
-        selectedBusiness={businessFilter}
-        onBusinessChange={handleBusinessChange}
-        query={query}
-        onQueryChange={setQuery}
-      />
+    <div className="min-h-screen bg-bg text-ink">
+      <div className="mx-auto flex max-w-[1600px] flex-col gap-4 p-4">
+        <HeaderBar
+          onUploadReceipt={handleUpload}
+          currentView="dashboard"
+          onViewChange={onViewChange}
+          onLogout={onLogout}
+          user={user}
+          businesses={businesses}
+          selectedBusiness={businessFilter}
+          onBusinessChange={handleBusinessChange}
+          query={query}
+          onQueryChange={setQuery}
+        />
 
-      <TimeframeControls
-        month={anchorMonth}
-        preset={timePreset}
-        label={timeWindow.display}
-        onMonthChange={setAnchorMonth}
-        onPresetChange={setTimePreset}
-      />
+        <BusinessStrip
+          businesses={businesses}
+          transactions={transactions}
+          selected={businessFilter}
+          onSelect={handleBusinessChange}
+          captionFor={(business) => captionFor(business, transactions)}
+        />
 
-      <div
-        style={{
-          flex: 1,
-          display: 'grid',
-          gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
-          gridAutoRows: 'minmax(145px, auto)',
-          gap: 10,
-          minHeight: 0,
-          alignItems: 'stretch',
-        }}
-      >
-        <SpendHeroTile summary={summary} contextLabel={heroContext} detailLabel={heroDetail} />
+        <TimeframeControls
+          month={anchorMonth}
+          preset={timePreset}
+          label={timeWindow.display}
+          onMonthChange={setAnchorMonth}
+          onPresetChange={setTimePreset}
+        />
 
-        {businesses.map((b) => (
-          <BusinessTile
-            key={b.id}
-            business={b}
-            bg={`${b.color}33`}
-            ink={b.color}
-            transactions={transactions}
-            caption={captionFor(b, transactions)}
+        <div
+          className="grid grid-cols-12 gap-3"
+          style={{ gridAutoRows: '164px' }}
+        >
+          <SpendHeroTile summary={summary} contextLabel={heroContext} detailLabel={heroDetail} />
+          <AlertsTile alerts={alerts} />
+          <ConnectionsTile connections={connections} onAdd={() => setConnectionsOpen(true)} />
+
+          <CategoriesTile
+            categories={categories}
+            comparisons={categoryComparisons}
+            comparisonBasis={comparisonBasis}
+            onComparisonBasisChange={setComparisonBasis}
           />
-        ))}
+          <AnalysisTile
+            businesses={businesses}
+            accounts={accounts}
+            transactions={transactions}
+            onOpenTransactions={() => setTransactionsOpen(true)}
+          />
 
-        <AccountSpendTile
-          accounts={accounts}
-          businesses={businesses}
-          transactions={transactions}
-          selectedAccountIds={selectedAccountIds}
-          onToggleAccount={toggleAccountFilter}
-          onClearAccounts={() => setSelectedAccountIds([])}
-          onManageAccounts={() => setConnectionsOpen(true)}
-        />
-        <CategoriesTile
-          categories={categories}
-          comparisons={categoryComparisons}
-          comparisonBasis={comparisonBasis}
-          onComparisonBasisChange={setComparisonBasis}
-        />
-        <AnalysisTile
-          businesses={businesses}
-          accounts={accounts}
-          transactions={transactions}
-          onOpenTransactions={() => setTransactionsOpen(true)}
-        />
-        <ReceiptDropTile onFile={handleUpload} status={receiptStatus} />
-        <ActivityTile
-          transactions={transactions}
-          businesses={businesses}
-          totalCount={transactions.length}
-          onSelect={setSelectedTransaction}
-          onViewAll={() => setTransactionsOpen(true)}
-        />
-        <ConnectionsTile connections={connections} onAdd={() => setConnectionsOpen(true)} />
-        <AlertsTile alerts={alerts} />
+          <ActivityTile
+            transactions={transactions}
+            businesses={businesses}
+            totalCount={transactions.length}
+            onSelect={setSelectedTransaction}
+            onViewAll={() => setTransactionsOpen(true)}
+          />
+          <ReceiptDropTile onFile={handleUpload} status={receiptStatus} />
+
+          <AccountSpendTile
+            accounts={accounts}
+            businesses={businesses}
+            transactions={transactions}
+            selectedAccountIds={selectedAccountIds}
+            onToggleAccount={toggleAccountFilter}
+            onClearAccounts={() => setSelectedAccountIds([])}
+            onManageAccounts={() => setConnectionsOpen(true)}
+          />
+        </div>
       </div>
+
       <ConnectionsManager
         open={connectionsOpen}
         businesses={businesses}
@@ -257,46 +253,33 @@ function TimeframeControls({
   };
 
   return (
-    <div style={timeframeBarStyle}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <button type="button" onClick={() => shiftMonth(-1)} style={timeIconButtonStyle} title="Previous month">‹</button>
-        <input
+    <div className="flex flex-wrap items-center gap-3 px-1">
+      <div className="flex items-center gap-1.5 rounded-full bg-paper p-1 shadow-xs">
+        <Button variant="ghost" size="icon-sm" onClick={() => shiftMonth(-1)} title="Previous month">
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+        <Input
           type="month"
           value={month}
           onChange={(event) => onMonthChange(event.target.value)}
-          style={monthInputStyle}
+          className="h-7 w-auto rounded-full border-transparent bg-transparent px-2 text-xs font-bold focus-visible:bg-cream"
         />
-        <button type="button" onClick={() => shiftMonth(1)} style={timeIconButtonStyle} title="Next month">›</button>
+        <Button variant="ghost" size="icon-sm" onClick={() => shiftMonth(1)} title="Next month">
+          <ChevronRight className="h-4 w-4" />
+        </Button>
       </div>
-      <div style={timePresetGroupStyle}>
-        <PresetButton active={preset === 'month'} onClick={() => onPresetChange('month')}>Month</PresetButton>
-        <PresetButton active={preset === 'last3'} onClick={() => onPresetChange('last3')}>Last 3m</PresetButton>
-        <PresetButton active={preset === 'last12'} onClick={() => onPresetChange('last12')}>Last 12m</PresetButton>
-        <PresetButton active={preset === 'ytd'} onClick={() => onPresetChange('ytd')}>YTD</PresetButton>
-      </div>
-      <span style={{ color: colors.dim, fontSize: 12 }}>{label}</span>
+      <ToggleGroup
+        type="single"
+        value={preset}
+        onValueChange={(value) => value && onPresetChange(value as TimePreset)}
+      >
+        <ToggleGroupItem value="month">Month</ToggleGroupItem>
+        <ToggleGroupItem value="last3">Last 3m</ToggleGroupItem>
+        <ToggleGroupItem value="last12">Last 12m</ToggleGroupItem>
+        <ToggleGroupItem value="ytd">YTD</ToggleGroupItem>
+      </ToggleGroup>
+      <span className="text-xs text-dim">{label}</span>
     </div>
-  );
-}
-
-function PresetButton({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        border: 'none',
-        borderRadius: radii.pill,
-        background: active ? colors.ink : 'transparent',
-        color: active ? colors.lemon : colors.dim,
-        cursor: 'pointer',
-        fontSize: 11,
-        fontWeight: 900,
-        padding: '5px 9px',
-      }}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -339,57 +322,8 @@ function isoDate(date: Date): string {
 
 function StateScreen({ children, tone }: { children: React.ReactNode; tone?: 'error' }) {
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        background: colors.bg,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontFamily: fonts.sans,
-        color: tone === 'error' ? colors.coralInk : colors.dim,
-        fontSize: 14,
-      }}
-    >
+    <div className={`flex min-h-screen items-center justify-center bg-bg text-sm ${tone === 'error' ? 'text-coral-ink' : 'text-dim'}`}>
       {children}
     </div>
   );
 }
-
-const timeframeBarStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-  padding: '0 8px',
-  minHeight: 34,
-};
-
-const timePresetGroupStyle: React.CSSProperties = {
-  display: 'flex',
-  gap: 4,
-  background: colors.paper,
-  borderRadius: radii.pill,
-  padding: 3,
-};
-
-const timeIconButtonStyle: React.CSSProperties = {
-  width: 28,
-  height: 28,
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: '50%',
-  background: colors.paper,
-  color: colors.ink,
-  cursor: 'pointer',
-  fontWeight: 900,
-};
-
-const monthInputStyle: React.CSSProperties = {
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: radii.pill,
-  background: colors.paper,
-  color: colors.ink,
-  padding: '5px 9px',
-  fontSize: 12,
-  fontWeight: 900,
-  fontFamily: fonts.sans,
-};

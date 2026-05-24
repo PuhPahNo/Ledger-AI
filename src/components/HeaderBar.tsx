@@ -1,8 +1,18 @@
 import { useRef, useState } from 'react';
 import { KeyRound, LogOut, Search, ShieldCheck, Upload, UserRound } from 'lucide-react';
 import type { Business, CurrentUser } from '@/types/domain';
-import { colors, fonts, radii } from '@/theme/tokens';
 import { enableTotp, resetAdminUserPassword, setupTotp } from '@/api';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Separator } from '@/components/ui/separator';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { useToast } from '@/hooks/useToast';
+import { cn } from '@/lib/cn';
 
 interface Props {
   onUploadReceipt: (file: File) => void;
@@ -30,81 +40,51 @@ export function HeaderBar({
   onQueryChange,
 }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [newPassword, setNewPassword] = useState('');
-  const [totp, setTotp] = useState<{ qrDataUrl: string; code: string } | null>(null);
-  const [status, setStatus] = useState('');
-
-  const resetPassword = async () => {
-    if (!user || newPassword.length < 12) {
-      setStatus('Password must be at least 12 characters.');
-      return;
-    }
-    try {
-      await resetAdminUserPassword(user.id, newPassword);
-      setNewPassword('');
-      setStatus('Password updated. Use it the next time you log in.');
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Password update failed.');
-    }
-  };
-
-  const startTotp = async () => {
-    const result = await setupTotp();
-    setTotp({ qrDataUrl: result.qrDataUrl, code: '' });
-    setStatus('');
-  };
-
-  const confirmTotp = async () => {
-    if (!totp?.code) return;
-    await enableTotp(totp.code);
-    setStatus('Two-factor auth enabled.');
-    setTotp(null);
-  };
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 8px', position: 'relative' }}>
-      <div style={logoStyle}>L</div>
-      <div style={{ fontFamily: fonts.display, fontSize: 20, fontWeight: 600 }}>
-        Ledger AI
+    <header className="flex flex-wrap items-center gap-3 rounded-xl border border-ink2/8 bg-paper px-3 py-2 shadow-sm">
+      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-ink font-display text-lg font-bold text-lemon">
+        L
       </div>
-      <div style={versionStyle}>internal v1</div>
+      <div className="font-display text-lg font-bold tracking-tight text-ink">Ledger AI</div>
+      <span className="rounded-full bg-cream px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-dim">
+        internal v1
+      </span>
 
-      <div style={{ display: 'flex', gap: 6, background: colors.paper, borderRadius: radii.pill, padding: 3 }}>
-        <NavButton active={currentView === 'dashboard'} onClick={() => onViewChange?.('dashboard')}>Dashboard</NavButton>
-        <NavButton active={currentView === 'admin'} onClick={() => onViewChange?.('admin')}>Admin</NavButton>
-      </div>
+      <ToggleGroup
+        type="single"
+        value={currentView}
+        onValueChange={(value) => value && onViewChange?.(value as 'dashboard' | 'admin')}
+        className="ml-2"
+      >
+        <ToggleGroupItem value="dashboard">Dashboard</ToggleGroupItem>
+        <ToggleGroupItem value="admin">Admin</ToggleGroupItem>
+      </ToggleGroup>
 
-      {currentView === 'dashboard' && (
-        <div style={{ display: 'flex', gap: 4, background: colors.paper, borderRadius: radii.pill, padding: 3 }}>
-          <FilterButton active={selectedBusiness === 'all'} onClick={() => onBusinessChange?.('all')}>All</FilterButton>
+      {currentView === 'dashboard' && businesses.length > 0 && onBusinessChange && (
+        <ToggleGroup
+          type="single"
+          value={selectedBusiness}
+          onValueChange={(value) => value && onBusinessChange(value)}
+        >
+          <ToggleGroupItem value="all">All</ToggleGroupItem>
           {businesses.map((business) => (
-            <FilterButton key={business.id} active={selectedBusiness === business.id} onClick={() => onBusinessChange?.(business.id)}>
+            <ToggleGroupItem key={business.id} value={business.id}>
               {business.short}
-            </FilterButton>
+            </ToggleGroupItem>
           ))}
-        </div>
+        </ToggleGroup>
       )}
 
-      <label style={searchStyle}>
-        <Search size={15} />
-        <input
+      <div className="relative ml-auto w-full max-w-xs sm:w-72">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-dim" />
+        <Input
           value={query}
           onChange={(event) => onQueryChange?.(event.target.value)}
           placeholder="Search merchants, categories, notes"
-          style={{
-            width: 270,
-            border: 'none',
-            outline: 'none',
-            background: 'transparent',
-            color: colors.ink,
-            fontSize: 13,
-            fontFamily: fonts.sans,
-          }}
+          className="h-9 rounded-full pl-9 bg-cream/70 border-transparent focus-visible:bg-paper"
         />
-      </label>
-
-      <span style={{ flex: 1 }} />
+      </div>
 
       <input
         ref={fileInput}
@@ -117,206 +97,144 @@ export function HeaderBar({
           event.target.value = '';
         }}
       />
-      <button type="button" onClick={() => fileInput.current?.click()} style={primaryButtonStyle} title="Upload receipt">
-        <Upload size={15} />
+      <Button size="sm" onClick={() => fileInput.current?.click()} title="Upload receipt">
+        <Upload className="h-4 w-4" />
         Upload
-      </button>
+      </Button>
 
-      <button
-        type="button"
-        onClick={() => setMenuOpen((open) => !open)}
-        style={profileButtonStyle}
-        title="Profile settings"
-      >
-        {(user?.displayName || user?.username || 'A').slice(0, 1).toUpperCase()}
-      </button>
+      <ProfileMenu user={user} onLogout={onLogout} />
+    </header>
+  );
+}
 
-      {menuOpen && (
-        <div style={menuStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <UserRound size={16} />
-            <div>
-              <div style={{ fontWeight: 800 }}>{user?.displayName ?? 'Admin'}</div>
-              <div style={{ fontSize: 11, color: colors.dim }}>{user?.username}</div>
-            </div>
+function ProfileMenu({ user, onLogout }: { user?: CurrentUser; onLogout?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [totp, setTotp] = useState<{ qrDataUrl: string; code: string } | null>(null);
+  const { toast } = useToast();
+  const initial = (user?.displayName || user?.username || 'A').slice(0, 1).toUpperCase();
+
+  const resetPassword = async () => {
+    if (!user) return;
+    if (newPassword.length < 12) {
+      toast({ variant: 'destructive', title: 'Password too short', description: 'Use at least 12 characters.' });
+      return;
+    }
+    try {
+      await resetAdminUserPassword(user.id, newPassword);
+      setNewPassword('');
+      toast({ variant: 'success', title: 'Password updated', description: 'Use it the next time you log in.' });
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Password update failed',
+        description: error instanceof Error ? error.message : 'Try again.',
+      });
+    }
+  };
+
+  const startTotp = async () => {
+    const result = await setupTotp();
+    setTotp({ qrDataUrl: result.qrDataUrl, code: '' });
+  };
+
+  const confirmTotp = async () => {
+    if (!totp?.code) return;
+    try {
+      await enableTotp(totp.code);
+      toast({ variant: 'success', title: 'Two-factor enabled' });
+      setTotp(null);
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: '2FA setup failed',
+        description: error instanceof Error ? error.message : 'Try again.',
+      });
+    }
+  };
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            'flex h-9 w-9 items-center justify-center rounded-full bg-coral font-bold text-paper transition-shadow',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink focus-visible:ring-offset-2',
+          )}
+          title="Profile settings"
+        >
+          {initial}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72 p-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-cream">
+            <UserRound className="h-4 w-4 text-ink" />
           </div>
+          <div className="min-w-0">
+            <div className="truncate font-bold text-ink">{user?.displayName ?? 'Admin'}</div>
+            <div className="truncate text-xs text-dim">{user?.username}</div>
+          </div>
+        </div>
 
-          <div style={dividerStyle} />
-          <div style={{ display: 'grid', gap: 8 }}>
-            <label style={labelStyle}>Reset password</label>
-            <input
+        <Separator className="my-3" />
+
+        <div className="grid gap-2">
+          <label className="grid gap-1.5">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-dim">Reset password</span>
+            <Input
               type="password"
               value={newPassword}
               placeholder="12+ character password"
               onChange={(event) => setNewPassword(event.target.value)}
-              style={inputStyle}
+              className="h-9"
             />
-            <button type="button" style={secondaryActionStyle} onClick={resetPassword}>
-              <KeyRound size={14} />
-              Update password
-            </button>
-          </div>
-
-          <div style={dividerStyle} />
-          {!totp ? (
-            <button type="button" style={secondaryActionStyle} onClick={startTotp}>
-              <ShieldCheck size={14} />
-              Set up 2FA
-            </button>
-          ) : (
-            <div style={{ display: 'grid', gap: 8 }}>
-              {totp.qrDataUrl && <img src={totp.qrDataUrl} alt="TOTP QR code" style={{ width: 132, height: 132, justifySelf: 'center' }} />}
-              <input
-                value={totp.code}
-                onChange={(event) => setTotp({ ...totp, code: event.target.value })}
-                placeholder="Authenticator code"
-                style={inputStyle}
-              />
-              <button type="button" style={secondaryActionStyle} onClick={confirmTotp}>
-                Enable 2FA
-              </button>
-            </div>
-          )}
-
-          {status && <div style={{ color: colors.dim, fontSize: 11 }}>{status}</div>}
-          {onLogout && (
-            <button type="button" onClick={onLogout} style={{ ...secondaryActionStyle, color: colors.coralInk }}>
-              <LogOut size={14} />
-              Logout
-            </button>
-          )}
+          </label>
+          <Button variant="outline" size="sm" onClick={resetPassword}>
+            <KeyRound className="h-3.5 w-3.5" />
+            Update password
+          </Button>
         </div>
-      )}
-    </div>
+
+        <Separator className="my-3" />
+
+        {!totp ? (
+          <Button variant="outline" size="sm" onClick={startTotp}>
+            <ShieldCheck className="h-3.5 w-3.5" />
+            Set up 2FA
+          </Button>
+        ) : (
+          <div className="grid gap-2">
+            {totp.qrDataUrl && (
+              <img
+                src={totp.qrDataUrl}
+                alt="TOTP QR code"
+                className="mx-auto h-32 w-32 rounded-md border border-ink2/10"
+              />
+            )}
+            <Input
+              value={totp.code}
+              onChange={(event) => setTotp({ ...totp, code: event.target.value })}
+              placeholder="Authenticator code"
+              className="h-9"
+            />
+            <Button size="sm" onClick={confirmTotp}>
+              Enable 2FA
+            </Button>
+          </div>
+        )}
+
+        {onLogout && (
+          <>
+            <Separator className="my-3" />
+            <Button variant="ghost" size="sm" onClick={onLogout} className="text-coral-ink hover:bg-coral/10">
+              <LogOut className="h-3.5 w-3.5" />
+              Logout
+            </Button>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
-
-function NavButton({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} style={{
-      padding: '5px 10px',
-      borderRadius: radii.pill,
-      border: 'none',
-      background: active ? colors.ink : 'transparent',
-      color: active ? colors.lemon : colors.dim,
-      cursor: 'pointer',
-      fontSize: 12,
-      fontWeight: 700,
-    }}>{children}</button>
-  );
-}
-
-function FilterButton({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} style={{
-      minWidth: 32,
-      padding: '5px 9px',
-      borderRadius: radii.pill,
-      border: 'none',
-      background: active ? colors.lemon : 'transparent',
-      color: active ? colors.lemonInk : colors.dim,
-      cursor: 'pointer',
-      fontSize: 11,
-      fontWeight: 800,
-    }}>{children}</button>
-  );
-}
-
-const logoStyle: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 12,
-  background: colors.ink,
-  color: colors.lemon,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontFamily: fonts.display,
-  fontWeight: 700,
-  fontSize: 18,
-};
-
-const versionStyle: React.CSSProperties = {
-  fontFamily: fonts.mono,
-  fontSize: 11,
-  color: colors.dim,
-  padding: '3px 8px',
-  background: colors.paper,
-  borderRadius: radii.pill,
-};
-
-const searchStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '7px 12px',
-  background: colors.paper,
-  borderRadius: radii.pill,
-  color: colors.dim,
-};
-
-const primaryButtonStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 7,
-  padding: '8px 13px',
-  borderRadius: radii.pill,
-  background: colors.ink,
-  color: colors.lemon,
-  border: 'none',
-  fontWeight: 700,
-  fontSize: 13,
-  cursor: 'pointer',
-};
-
-const profileButtonStyle: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: '50%',
-  background: colors.coral,
-  color: colors.paper,
-  border: 'none',
-  fontWeight: 800,
-  cursor: 'pointer',
-};
-
-const menuStyle: React.CSSProperties = {
-  position: 'absolute',
-  right: 8,
-  top: 48,
-  width: 280,
-  zIndex: 20,
-  background: colors.paper,
-  color: colors.ink,
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: radii.tile,
-  boxShadow: '0 18px 50px rgba(44,37,32,0.18)',
-  padding: 14,
-  display: 'grid',
-  gap: 10,
-};
-
-const dividerStyle: React.CSSProperties = { height: 1, background: 'rgba(44,37,32,0.12)' };
-const labelStyle: React.CSSProperties = { fontSize: 11, color: colors.dim, fontWeight: 800 };
-const inputStyle: React.CSSProperties = {
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: 10,
-  padding: '8px 10px',
-  fontSize: 13,
-  background: colors.bg,
-  color: colors.ink,
-};
-const secondaryActionStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 7,
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: radii.pill,
-  background: 'transparent',
-  color: colors.ink,
-  padding: '8px 10px',
-  cursor: 'pointer',
-  fontWeight: 800,
-  fontSize: 12,
-};

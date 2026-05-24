@@ -1,6 +1,8 @@
+import { AlertTriangle } from 'lucide-react';
 import type { Alert } from '@/types/domain';
-import { colors, fonts } from '@/theme/tokens';
-import { Tile } from './Tile';
+import { Tile } from '@/components/ui/tile';
+import { Button } from '@/components/ui/button';
+import { StatLabel } from '@/components/ui/stat-label';
 
 interface Props {
   alerts: Alert[];
@@ -10,62 +12,43 @@ interface Props {
 
 export function AlertsTile({ alerts, onReview, onDismiss }: Props) {
   const lead = alerts[0];
-  if (!lead) return null;
 
   return (
-    <Tile bg={colors.pink} ink={colors.pinkInk} colSpan={2} rowSpan={1} style={{ display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline' }}>
-        <div style={{ fontFamily: fonts.mono, fontSize: 10, letterSpacing: 1.5, opacity: 0.7 }}>
+    <Tile tone="pink" pad="md" colSpan={4} rowSpan={1} className="gap-2">
+      <div className="flex items-baseline gap-2">
+        <StatLabel className="flex items-center gap-1 text-pink-ink/80">
+          <AlertTriangle className="h-3 w-3" />
           FLAGS · {alerts.length}
-        </div>
-        <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, fontWeight: 600, opacity: 0.7 }}>open ↗</span>
-      </div>
-      <div style={{ fontFamily: fonts.display, fontSize: 18, fontWeight: 600, marginTop: 4, lineHeight: 1.2 }}>
-        {lead.title}
-      </div>
-      <div style={{ fontSize: 11.5, marginTop: 6, opacity: 0.85, lineHeight: 1.4 }}>{lead.detail}</div>
-      <div style={{ flex: 1 }} />
-      <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-        <button
-          type="button"
-          onClick={() => onReview?.(lead)}
-          style={{
-            padding: '6px 12px',
-            borderRadius: 99,
-            background: colors.pinkInk,
-            color: colors.pink,
-            border: 'none',
-            fontSize: 11,
-            fontWeight: 600,
-            cursor: 'pointer',
-          }}
-        >
-          Review
-        </button>
-        <button
-          type="button"
-          onClick={() => onDismiss?.(lead)}
-          style={{
-            padding: '6px 12px',
-            borderRadius: 99,
-            background: 'transparent',
-            color: colors.pinkInk,
-            border: `1.5px solid ${colors.pinkInk}`,
-            fontSize: 11,
-            fontWeight: 600,
-            cursor: 'pointer',
-          }}
-        >
-          Dismiss
-        </button>
-        <span style={{ flex: 1 }} />
+        </StatLabel>
         {alerts.length > 1 && (
-          <span style={{ fontSize: 11, alignSelf: 'center', opacity: 0.7 }}>
-            +{alerts.length - 1} more
-          </span>
+          <span className="ml-auto text-xs text-pink-ink/70">+{alerts.length - 1} more</span>
         )}
       </div>
+      {lead ? (
+        <>
+          <div className="font-display text-lg font-bold leading-snug text-pink-ink">{lead.title}</div>
+          <div className="line-clamp-2 text-xs text-pink-ink/80">{lead.detail}</div>
+          <div className="mt-auto flex gap-2 pt-1">
+            <Button
+              size="sm"
+              onClick={() => onReview?.(lead)}
+              className="bg-pink-ink text-pink hover:bg-pink-ink/90"
+            >
+              Review
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onDismiss?.(lead)}
+              className="border-pink-ink/50 text-pink-ink hover:bg-pink-ink/10"
+            >
+              Dismiss
+            </Button>
+          </div>
+        </>
+      ) : (
+        <div className="text-sm text-pink-ink/80">All clear — no flagged transactions.</div>
+      )}
     </Tile>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Building2, CheckCircle2, CreditCard, Mail, PlugZap, RefreshCcw, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Building2, CheckCircle2, CreditCard, Mail, Pencil, PlugZap, RefreshCcw, Trash2 } from 'lucide-react';
 import { usePlaidLink } from 'react-plaid-link';
 import {
   ApiError,
@@ -15,7 +15,17 @@ import {
   updateConnectionLabel,
 } from '@/api';
 import type { Account, Business, Connection, ConnectionKind, ConnectionStatus } from '@/types/domain';
-import { colors, fonts, radii } from '@/theme/tokens';
+import { useToast } from '@/hooks/useToast';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { EmptyState } from '@/components/ui/empty-state';
 
 interface Props {
   open: boolean;
@@ -27,14 +37,20 @@ interface Props {
 }
 
 export function ConnectionsManager({ open, businesses, connections, accounts, onClose, onRefresh }: Props) {
+  const { toast } = useToast();
   const firstBusiness = businesses[0]?.dbId ?? businesses[0]?.id ?? '';
   const [businessId, setBusinessId] = useState(firstBusiness);
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [pendingPlaidOpen, setPendingPlaidOpen] = useState(false);
   const [busy, setBusy] = useState<'plaid' | 'gmail' | null>(null);
-  const [status, setStatus] = useState('');
-  const activePlaid = useMemo(() => connections.filter((c) => c.kind !== 'gmail' && c.status !== 'disconnected').length, [connections]);
-  const activeGmail = useMemo(() => connections.filter((c) => c.kind === 'gmail' && c.status !== 'disconnected').length, [connections]);
+  const activePlaid = useMemo(
+    () => connections.filter((c) => c.kind !== 'gmail' && c.status !== 'disconnected').length,
+    [connections],
+  );
+  const activeGmail = useMemo(
+    () => connections.filter((c) => c.kind === 'gmail' && c.status !== 'disconnected').length,
+    [connections],
+  );
   const needsAttention = connections.filter((c) => c.status === 'reauth').length;
 
   useEffect(() => {
@@ -46,20 +62,24 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     onSuccess: async (publicToken) => {
       try {
         setBusy('plaid');
-        setStatus('Connecting Plaid...');
         await exchangePlaidPublicToken(publicToken, businessId || undefined);
-        setStatus('Plaid connected. Initial sync is running in the background.');
+        toast({ variant: 'success', title: 'Plaid connected', description: 'Initial sync is running in the background.' });
         onRefresh();
       } catch (error) {
-        setStatus(readableError(error));
+        toast({ variant: 'destructive', title: 'Plaid connect failed', description: readableError(error) });
       } finally {
         setBusy(null);
         setLinkToken(null);
       }
     },
     onExit: (error) => {
-      if (error) setStatus(error.display_message || error.error_message || 'Plaid was closed before connecting.');
-      else if (pendingPlaidOpen || busy === 'plaid') setStatus('Plaid was closed before connecting.');
+      if (error) {
+        toast({
+          variant: 'destructive',
+          title: 'Plaid was closed',
+          description: error.display_message || error.error_message || 'Plaid was closed before connecting.',
+        });
+      }
       setPendingPlaidOpen(false);
       setBusy(null);
     },
@@ -69,7 +89,6 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     if (pendingPlaidOpen && ready) {
       setPendingPlaidOpen(false);
       openPlaid();
-      setStatus('Plaid window opened.');
       setBusy(null);
     }
   }, [openPlaid, pendingPlaidOpen, ready]);
@@ -78,8 +97,13 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     if (plaidLoadError) {
       setPendingPlaidOpen(false);
       setBusy(null);
-      setStatus('Plaid could not load in this browser. Check content blockers and try again.');
+      toast({
+        variant: 'destructive',
+        title: 'Plaid failed to load',
+        description: 'Check content blockers and try again.',
+      });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plaidLoadError]);
 
   useEffect(() => {
@@ -87,111 +111,129 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     const timeout = window.setTimeout(() => {
       setPendingPlaidOpen(false);
       setBusy(null);
-      setStatus('Plaid did not finish loading. Check Plaid credentials and browser content blockers, then try again.');
+      toast({
+        variant: 'destructive',
+        title: 'Plaid did not finish loading',
+        description: 'Check Plaid credentials and browser content blockers, then try again.',
+      });
     }, 15000);
     return () => window.clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingPlaidOpen]);
-
-  if (!open) return null;
 
   const startPlaid = async () => {
     if (activePlaid >= 10) {
-      setStatus('Plaid limit reached. Disconnect one before adding another.');
+      toast({ variant: 'destructive', title: 'Plaid limit reached', description: 'Disconnect one before adding another.' });
       return;
     }
     try {
       setBusy('plaid');
-      setStatus('Preparing Plaid...');
       const token = await createPlaidLinkToken();
       setLinkToken(token.link_token);
-      setStatus('Loading Plaid window...');
       setPendingPlaidOpen(true);
     } catch (error) {
       setBusy(null);
       setPendingPlaidOpen(false);
-      setStatus(readableError(error));
+      toast({ variant: 'destructive', title: 'Plaid setup failed', description: readableError(error) });
     }
   };
 
   const startGmail = async () => {
     try {
       setBusy('gmail');
-      setStatus('Opening Google...');
       const result = await getGmailOAuthUrl(businessId || undefined);
       if (!result.url) throw new Error('Google did not return an OAuth URL.');
       window.location.assign(result.url);
     } catch (error) {
       setBusy(null);
-      setStatus(readableError(error));
+      toast({ variant: 'destructive', title: 'Gmail OAuth failed', description: readableError(error) });
     }
   };
 
   const refreshConnection = async (connection: Connection) => {
     if (!connection.id) return;
-    setStatus(`Sync queued for ${connection.label}.`);
     await syncConnection(connection.id);
+    toast({ title: 'Sync queued', description: `Sync queued for ${connection.label}.` });
     onRefresh();
   };
 
   const backfillConnection = async (connection: Connection) => {
     if (!connection.id) return;
-    setStatus(`Queued a 12-month history pull for ${connection.label}.`);
     await backfillPlaidConnection(connection.id, 12);
-    setStatus('12-month pull queued. If this connection was created before 12-month history was enabled, reconnect it to expand the history window.');
+    toast({
+      title: '12-month pull queued',
+      description: 'If this connection was created before 12-month history was enabled, reconnect it to expand the window.',
+    });
     onRefresh();
   };
 
   const removeConnection = async (connection: Connection) => {
     if (!connection.id) return;
-    setStatus(`Disconnected ${connection.label}.`);
     await disconnectConnection(connection.id);
+    toast({ variant: 'success', title: `Disconnected ${connection.label}` });
     onRefresh();
   };
 
   const changeConnectionBusiness = async (connection: Connection, next: string) => {
     if (!connection.id) return;
-    setStatus(`Updated default business for ${connection.label}.`);
     await updateConnectionBusiness(connection.id, next || null);
+    toast({ variant: 'success', title: 'Default business updated' });
     onRefresh();
   };
 
   const renameConnection = async (connection: Connection, label: string) => {
     if (!connection.id) return;
-    setStatus(`Renamed ${connection.label}.`);
     await updateConnectionLabel(connection.id, label);
+    toast({ variant: 'success', title: `Renamed to ${label}` });
     onRefresh();
   };
 
   const changeAccountBusiness = async (account: Account, next: string, applyToExisting = false) => {
-    setStatus(applyToExisting ? `Reassigning existing transactions for ${account.name}...` : `Updated default business for ${account.name}.`);
     await updateAccountBusiness(account.id, next || null, applyToExisting);
-    setStatus(applyToExisting ? `Existing transactions reassigned for ${account.name}.` : `Future transactions for ${account.name} will use the selected business.`);
+    toast({
+      variant: 'success',
+      title: applyToExisting ? 'Reassigned existing transactions' : 'Default business updated',
+      description: applyToExisting
+        ? `Existing transactions reassigned for ${account.name}.`
+        : `Future transactions for ${account.name} will use the selected business.`,
+    });
     onRefresh();
   };
 
   const changeAccountWatch = async (account: Account, enabled: boolean) => {
-    setStatus(enabled ? `${account.name} is now watched.` : `${account.name} is ignored in spend results.`);
     await updateAccountEnabled(account.id, enabled);
+    toast({
+      variant: 'success',
+      title: enabled ? `${account.name} is watched` : `${account.name} is ignored`,
+      description: enabled ? 'Included in spend results.' : 'Excluded from spend results.',
+    });
     onRefresh();
   };
 
   return (
-    <div style={backdropStyle}>
-      <section style={modalStyle}>
-        <header style={headerStyle}>
-          <div style={logoMarkStyle}><PlugZap size={22} /></div>
-          <div>
-            <div style={{ fontFamily: fonts.display, fontSize: 28, fontWeight: 900 }}>Connections</div>
-            <div style={{ color: colors.dim, fontSize: 12 }}>{activePlaid}/10 Plaid · {activeGmail} Gmail · {accounts.length} mapped accounts</div>
+    <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
+      <DialogContent size="xl" className="gap-5">
+        <DialogHeader className="flex flex-row items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-ink text-lemon">
+            <PlugZap className="h-5 w-5" />
           </div>
-          <span style={{ flex: 1 }} />
-          {needsAttention > 0 && <StatusPill status="reauth" label={`${needsAttention} needs reauth`} />}
-          <button type="button" onClick={onClose} style={iconButtonStyle} title="Close"><X size={18} /></button>
-        </header>
+          <div className="min-w-0 flex-1">
+            <DialogTitle>Connections</DialogTitle>
+            <DialogDescription>
+              {activePlaid}/10 Plaid · {activeGmail} Gmail · {accounts.length} mapped accounts
+            </DialogDescription>
+          </div>
+          {needsAttention > 0 && (
+            <Badge variant="warning" className="mr-12">
+              <AlertTriangle className="h-3 w-3" />
+              {needsAttention} needs reauth
+            </Badge>
+          )}
+        </DialogHeader>
 
-        <div style={actionGridStyle}>
+        <div className="grid gap-3 sm:grid-cols-3">
           <QuickAction
-            icon={<CreditCard size={19} />}
+            icon={<CreditCard className="h-5 w-5" />}
             title="Plaid"
             detail={`${activePlaid}/10 active`}
             disabled={activePlaid >= 10 || Boolean(busy)}
@@ -199,60 +241,78 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
             onClick={startPlaid}
           />
           <QuickAction
-            icon={<Mail size={19} />}
+            icon={<Mail className="h-5 w-5" />}
             title="Gmail"
             detail={`${activeGmail} inboxes`}
             disabled={Boolean(busy)}
             loading={busy === 'gmail'}
             onClick={startGmail}
           />
-          <div style={defaultBusinessStyle}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 900 }}>
-              <Building2 size={17} />
+          <div className="rounded-lg border border-ink2/10 bg-[hsl(var(--color-sunken))] p-3">
+            <Label htmlFor="default-business" className="flex items-center gap-1.5">
+              <Building2 className="h-3.5 w-3.5" />
               Default business
+            </Label>
+            <div className="mt-2">
+              <BusinessSelect id="default-business" value={businessId} businesses={businesses} onChange={setBusinessId} includeAll={false} />
             </div>
-            <BusinessSelect value={businessId} businesses={businesses} onChange={setBusinessId} includeAll={false} />
           </div>
         </div>
 
-        {status && <div style={statusLineStyle}>{status}</div>}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-baseline gap-2">
+                Providers
+                <span className="text-xs font-normal text-dim">{connections.length}</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-2">
+              {connections.length ? (
+                connections.map((connection) => (
+                  <ProviderRow
+                    key={connection.id ?? connection.label}
+                    connection={connection}
+                    businesses={businesses}
+                    onBusiness={(next) => changeConnectionBusiness(connection, next)}
+                    onRename={(label) => renameConnection(connection, label)}
+                    onSync={() => refreshConnection(connection)}
+                    onBackfill={connection.kind === 'gmail' ? undefined : () => backfillConnection(connection)}
+                    onDisconnect={() => removeConnection(connection)}
+                  />
+                ))
+              ) : (
+                <EmptyState title="No providers" description="Add a Plaid or Gmail connection to start syncing." />
+              )}
+            </CardContent>
+          </Card>
 
-        <div style={contentGridStyle}>
-          <section style={panelStyle}>
-            <SectionTitle title="Providers" count={connections.length} />
-            <div style={{ display: 'grid', gap: 8 }}>
-              {connections.length ? connections.map((connection) => (
-                <ProviderRow
-                  key={connection.id ?? connection.label}
-                  connection={connection}
-                  businesses={businesses}
-                  onBusiness={(next) => changeConnectionBusiness(connection, next)}
-                  onRename={(label) => renameConnection(connection, label)}
-                  onSync={() => refreshConnection(connection)}
-                  onBackfill={connection.kind === 'gmail' ? undefined : () => backfillConnection(connection)}
-                  onDisconnect={() => removeConnection(connection)}
-                />
-              )) : <Empty label="No provider connections yet." />}
-            </div>
-          </section>
-
-          <section style={panelStyle}>
-            <SectionTitle title="Accounts And Cards" count={accounts.length} />
-            <div style={{ display: 'grid', gap: 8 }}>
-              {accounts.length ? accounts.map((account) => (
-                <AccountRow
-                  key={account.id}
-                  account={account}
-                  businesses={businesses}
-                  onBusiness={(next, applyToExisting = false) => changeAccountBusiness(account, next, applyToExisting)}
-                  onEnabled={(enabled) => changeAccountWatch(account, enabled)}
-                />
-              )) : <Empty label="Plaid accounts appear after the first sync." />}
-            </div>
-          </section>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-baseline gap-2">
+                Accounts and cards
+                <span className="text-xs font-normal text-dim">{accounts.length}</span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid gap-2">
+              {accounts.length ? (
+                accounts.map((account) => (
+                  <AccountRow
+                    key={account.id}
+                    account={account}
+                    businesses={businesses}
+                    onBusiness={(next, applyToExisting = false) => changeAccountBusiness(account, next, applyToExisting)}
+                    onEnabled={(enabled) => changeAccountWatch(account, enabled)}
+                  />
+                ))
+              ) : (
+                <EmptyState title="No accounts yet" description="Plaid accounts appear after the first sync." />
+              )}
+            </CardContent>
+          </Card>
         </div>
-      </section>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -278,11 +338,16 @@ function QuickAction({
   onClick: () => void;
 }) {
   return (
-    <button type="button" disabled={disabled} onClick={onClick} style={{ ...quickActionStyle, opacity: disabled ? 0.45 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }}>
-      <span style={quickIconStyle}>{icon}</span>
-      <span style={{ display: 'grid', textAlign: 'left' }}>
-        <span style={{ fontWeight: 900 }}>{title}</span>
-        <span style={{ fontSize: 11, color: colors.dim }}>{loading ? 'Working...' : detail}</span>
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className="flex items-center gap-3 rounded-lg border border-ink2/10 bg-[hsl(var(--color-sunken))] p-3 text-left transition-all hover:border-ink2/25 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/30"
+    >
+      <span className="flex h-9 w-9 items-center justify-center rounded-md bg-ink text-lemon">{icon}</span>
+      <span className="grid">
+        <span className="font-bold text-ink">{title}</span>
+        <span className="text-xs text-dim">{loading ? 'Working…' : detail}</span>
       </span>
     </button>
   );
@@ -307,9 +372,8 @@ function ProviderRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(connection.label);
-  useEffect(() => {
-    setLabel(connection.label);
-  }, [connection.label]);
+  useEffect(() => setLabel(connection.label), [connection.label]);
+
   const saveLabel = () => {
     const next = label.trim();
     if (!next || next === connection.label) {
@@ -322,11 +386,13 @@ function ProviderRow({
   };
 
   return (
-    <div style={providerRowStyle}>
-      <KindIcon kind={connection.kind} />
-      <div style={{ minWidth: 0 }}>
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-ink2/8 bg-[hsl(var(--color-sunken))] p-3">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-paper text-ink">
+        {connection.kind === 'gmail' ? <Mail className="h-4 w-4" /> : <CreditCard className="h-4 w-4" />}
+      </span>
+      <div className="min-w-0 flex-1">
         {editing ? (
-          <input
+          <Input
             value={label}
             onChange={(event) => setLabel(event.target.value)}
             onBlur={saveLabel}
@@ -338,20 +404,52 @@ function ProviderRow({
               }
             }}
             autoFocus
-            style={renameInputStyle}
+            className="h-7"
           />
         ) : (
-          <button type="button" onClick={() => setEditing(true)} style={connectionNameButtonStyle} title="Rename connection">
-            {connection.label}
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="flex w-full items-center gap-1.5 truncate text-left font-bold text-ink hover:text-ink/80"
+          >
+            <span className="truncate">{connection.label}</span>
+            <Pencil className="h-3 w-3 shrink-0 text-dim" />
           </button>
         )}
-        <div style={{ color: colors.dim, fontSize: 11 }}>{connection.last}</div>
+        <div className="truncate text-xs text-dim">{connection.last}</div>
       </div>
-      <StatusPill status={connection.status} />
-      <BusinessSelect value={connection.businessId ?? ''} businesses={businesses} onChange={onBusiness} />
-      {onBackfill ? <button type="button" style={smallIconButtonStyle} onClick={onBackfill} title="Pull 12 months of Plaid history">12m</button> : <span />}
-      <button type="button" style={iconButtonStyle} onClick={onSync} title="Sync"><RefreshCcw size={15} /></button>
-      <button type="button" style={iconButtonStyle} onClick={onDisconnect} title="Disconnect"><Trash2 size={15} /></button>
+      <StatusBadge status={connection.status} />
+      <div className="w-44">
+        <BusinessSelect value={connection.businessId ?? ''} businesses={businesses} onChange={onBusiness} />
+      </div>
+      <div className="flex gap-1">
+        {onBackfill && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="outline" size="sm" onClick={onBackfill} className="px-2 text-xs">
+                12m
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Pull 12 months of Plaid history</TooltipContent>
+          </Tooltip>
+        )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="outline" size="icon-sm" onClick={onSync}>
+              <RefreshCcw className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Sync now</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="outline" size="icon-sm" onClick={onDisconnect} className="text-coral-ink hover:bg-coral/10">
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Disconnect</TooltipContent>
+        </Tooltip>
+      </div>
     </div>
   );
 }
@@ -368,301 +466,90 @@ function AccountRow({
   onEnabled: (enabled: boolean) => void;
 }) {
   return (
-    <div style={{ ...accountRowStyle, opacity: account.enabled ? 1 : 0.62 }}>
-      <KindIcon kind={account.kind === 'credit' ? 'card' : 'bank'} />
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 900, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{account.name}</div>
-        <div style={{ color: colors.dim, fontSize: 11 }}>
-          {account.kind}{account.mask ? ` · ${account.mask}` : ''} · {account.enabled ? 'included in spend' : 'ignored in spend'}
+    <div className={`flex flex-wrap items-center gap-3 rounded-lg border border-ink2/8 bg-[hsl(var(--color-sunken))] p-3 ${account.enabled ? '' : 'opacity-60'}`}>
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-paper text-ink">
+        {account.kind === 'credit' ? <CreditCard className="h-4 w-4" /> : <Mail className="h-4 w-4" />}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-bold text-ink">{account.name}</div>
+        <div className="truncate text-xs text-dim">
+          {account.kind}
+          {account.mask ? ` · ${account.mask}` : ''} · {account.enabled ? 'included in spend' : 'ignored'}
         </div>
       </div>
-      <BusinessSelect value={account.businessId ?? ''} businesses={businesses} onChange={(next) => onBusiness(next, true)} />
-      <button
-        type="button"
-        disabled={!account.businessId}
-        style={{ ...smallButtonStyle, opacity: account.businessId ? 1 : 0.45, cursor: account.businessId ? 'pointer' : 'not-allowed' }}
-        onClick={() => onBusiness(account.businessId ?? '', true)}
-      >
-        Reassign existing
-      </button>
-      <label style={toggleStyle}>
-        <input type="checkbox" checked={account.enabled} onChange={(event) => onEnabled(event.target.checked)} />
+      <div className="w-44">
+        <BusinessSelect value={account.businessId ?? ''} businesses={businesses} onChange={(next) => onBusiness(next, true)} />
+      </div>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!account.businessId}
+            onClick={() => onBusiness(account.businessId ?? '', true)}
+          >
+            Reassign existing
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Apply current business to past transactions</TooltipContent>
+      </Tooltip>
+      <div className="flex items-center gap-2 text-xs font-bold text-dim">
+        <Switch checked={account.enabled} onCheckedChange={onEnabled} />
         {account.enabled ? 'Watched' : 'Ignored'}
-      </label>
+      </div>
     </div>
   );
 }
 
 function BusinessSelect({
+  id,
   value,
   businesses,
   onChange,
   includeAll = true,
 }: {
+  id?: string;
   value: string;
   businesses: Business[];
   onChange: (value: string) => void;
   includeAll?: boolean;
 }) {
   return (
-    <select value={value} onChange={(event) => onChange(event.target.value)} style={selectStyle}>
-      {includeAll && <option value="">Unassigned</option>}
-      {businesses.map((business) => (
-        <option key={business.dbId ?? business.id} value={business.dbId ?? business.id}>{business.name}</option>
-      ))}
-    </select>
+    <Select value={value || (includeAll ? '__unassigned__' : '')} onValueChange={(next) => onChange(next === '__unassigned__' ? '' : next)}>
+      <SelectTrigger id={id} className="h-9">
+        <SelectValue placeholder={includeAll ? 'Unassigned' : 'Choose'} />
+      </SelectTrigger>
+      <SelectContent>
+        {includeAll && <SelectItem value="__unassigned__">Unassigned</SelectItem>}
+        {businesses.map((business) => (
+          <SelectItem key={business.dbId ?? business.id} value={business.dbId ?? business.id}>
+            {business.name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
-function KindIcon({ kind }: { kind: ConnectionKind }) {
-  const icon = kind === 'gmail' ? <Mail size={16} /> : <CreditCard size={16} />;
-  return <span style={kindIconStyle}>{icon}</span>;
+function StatusBadge({ status }: { status: ConnectionStatus }) {
+  if (status === 'live') {
+    return (
+      <Badge variant="success">
+        <CheckCircle2 className="h-3 w-3" />
+        Live
+      </Badge>
+    );
+  }
+  if (status === 'reauth') {
+    return (
+      <Badge variant="warning">
+        <AlertTriangle className="h-3 w-3" />
+        Needs reauth
+      </Badge>
+    );
+  }
+  return <Badge variant="muted">Disconnected</Badge>;
 }
 
-function StatusPill({ status, label }: { status: ConnectionStatus; label?: string }) {
-  const live = status === 'live';
-  const palette = live
-    ? { bg: colors.sage, fg: colors.sageInk, icon: <CheckCircle2 size={12} /> }
-    : status === 'reauth'
-      ? { bg: colors.pink, fg: colors.pinkInk, icon: <AlertTriangle size={12} /> }
-      : { bg: colors.bg, fg: colors.dim, icon: <X size={12} /> };
-  return (
-    <span style={{ ...statusPillStyle, background: palette.bg, color: palette.fg }}>
-      {palette.icon}
-      {label ?? status}
-    </span>
-  );
-}
-
-function SectionTitle({ title, count }: { title: string; count: number }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-      <div style={{ fontFamily: fonts.display, fontSize: 18, fontWeight: 900 }}>{title}</div>
-      <span style={{ color: colors.dim, fontSize: 12 }}>{count}</span>
-    </div>
-  );
-}
-
-function Empty({ label }: { label: string }) {
-  return <div style={{ color: colors.dim, fontSize: 13, padding: 14, background: colors.bg, borderRadius: radii.tile }}>{label}</div>;
-}
-
-const backdropStyle: React.CSSProperties = {
-  position: 'fixed',
-  inset: 0,
-  zIndex: 30,
-  background: 'rgba(44,37,32,0.30)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: 20,
-};
-
-const modalStyle: React.CSSProperties = {
-  width: 'min(1120px, 100%)',
-  maxHeight: '88vh',
-  overflow: 'auto',
-  background: colors.paper,
-  color: colors.ink,
-  borderRadius: radii.tile,
-  padding: 18,
-  display: 'grid',
-  gap: 14,
-  boxShadow: '0 26px 80px rgba(44,37,32,0.24)',
-};
-
-const headerStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
-};
-
-const logoMarkStyle: React.CSSProperties = {
-  width: 46,
-  height: 46,
-  borderRadius: 14,
-  background: colors.ink,
-  color: colors.lemon,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const actionGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '180px 180px minmax(260px, 1fr)',
-  gap: 10,
-};
-
-const quickActionStyle: React.CSSProperties = {
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: radii.tile,
-  background: colors.bg,
-  color: colors.ink,
-  padding: 12,
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-};
-
-const quickIconStyle: React.CSSProperties = {
-  width: 36,
-  height: 36,
-  borderRadius: 12,
-  background: colors.ink,
-  color: colors.lemon,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const defaultBusinessStyle: React.CSSProperties = {
-  borderRadius: radii.tile,
-  background: colors.bg,
-  padding: 12,
-  display: 'grid',
-  gap: 8,
-};
-
-const contentGridStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(360px, 0.9fr) minmax(480px, 1.1fr)',
-  gap: 14,
-  alignItems: 'start',
-};
-
-const panelStyle: React.CSSProperties = {
-  display: 'grid',
-  gap: 10,
-  alignContent: 'start',
-};
-
-const providerRowStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '38px minmax(120px, 1fr) auto 160px 42px 34px 34px',
-  gap: 8,
-  alignItems: 'center',
-  padding: 10,
-  borderRadius: radii.tile,
-  background: colors.bg,
-};
-
-const accountRowStyle: React.CSSProperties = {
-  display: 'grid',
-  gridTemplateColumns: '38px minmax(140px, 1fr) 180px auto 96px',
-  gap: 8,
-  alignItems: 'center',
-  padding: 10,
-  borderRadius: radii.tile,
-  background: colors.bg,
-};
-
-const kindIconStyle: React.CSSProperties = {
-  width: 34,
-  height: 34,
-  borderRadius: 11,
-  background: colors.paper,
-  color: colors.ink,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const statusPillStyle: React.CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 5,
-  borderRadius: radii.pill,
-  padding: '5px 8px',
-  fontSize: 11,
-  fontWeight: 900,
-  whiteSpace: 'nowrap',
-};
-
-const selectStyle: React.CSSProperties = {
-  width: '100%',
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: 10,
-  background: colors.paper,
-  color: colors.ink,
-  padding: '8px 9px',
-  fontSize: 12,
-};
-
-const connectionNameButtonStyle: React.CSSProperties = {
-  border: 'none',
-  background: 'transparent',
-  color: colors.ink,
-  padding: 0,
-  maxWidth: '100%',
-  fontWeight: 900,
-  fontSize: 13,
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-  textAlign: 'left',
-  cursor: 'text',
-};
-
-const renameInputStyle: React.CSSProperties = {
-  width: '100%',
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: 8,
-  background: colors.paper,
-  color: colors.ink,
-  padding: '4px 6px',
-  fontSize: 12,
-  fontWeight: 900,
-};
-
-const smallButtonStyle: React.CSSProperties = {
-  border: `1px solid ${colors.ink2}`,
-  borderRadius: radii.pill,
-  background: colors.paper,
-  color: colors.ink,
-  padding: '7px 10px',
-  fontWeight: 900,
-  cursor: 'pointer',
-  fontSize: 11,
-  whiteSpace: 'nowrap',
-};
-
-const iconButtonStyle: React.CSSProperties = {
-  width: 34,
-  height: 34,
-  borderRadius: '50%',
-  border: `1px solid ${colors.ink2}`,
-  background: colors.paper,
-  color: colors.ink,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  cursor: 'pointer',
-};
-
-const smallIconButtonStyle: React.CSSProperties = {
-  ...iconButtonStyle,
-  width: 42,
-  borderRadius: radii.pill,
-  fontSize: 11,
-  fontWeight: 900,
-};
-
-const toggleStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  color: colors.dim,
-  fontSize: 12,
-  fontWeight: 800,
-  whiteSpace: 'nowrap',
-};
-
-const statusLineStyle: React.CSSProperties = {
-  color: colors.dim,
-  fontSize: 12,
-  background: colors.bg,
-  borderRadius: radii.tile,
-  padding: '8px 10px',
-};
+// Helper exports kept for potential reuse — currently only ConnectionKind / kind icons depend on this file.
+export type { ConnectionKind };

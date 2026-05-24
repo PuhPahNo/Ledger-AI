@@ -1,13 +1,17 @@
 import { useState } from 'react';
 import type { Business, Transaction } from '@/types/domain';
-import { colors, fonts } from '@/theme/tokens';
 import { fmt$ } from '@/lib/format';
-import { Tile } from './Tile';
+import { Tile } from '@/components/ui/tile';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Separator } from '@/components/ui/separator';
+import { cn } from '@/lib/cn';
 
 interface Props {
   transactions: Transaction[];
   businesses: Business[];
-  /** Total count for the current API result set. */
   totalCount: number;
   onSelect?: (transaction: Transaction) => void;
   onViewAll?: () => void;
@@ -18,70 +22,43 @@ type Filter = (typeof FILTERS)[number];
 
 export function ActivityTile({ transactions, businesses, totalCount, onSelect, onViewAll }: Props) {
   const [filter, setFilter] = useState<Filter>('All');
-
-  const visible = (filter === 'All' ? transactions : transactions.filter((t) => t.cat === filter)).slice(0, 7);
+  const visible = (filter === 'All' ? transactions : transactions.filter((t) => t.cat === filter)).slice(0, 12);
 
   return (
-    <Tile
-      bg={colors.paper}
-      ink={colors.ink}
-      colSpan={4}
-      rowSpan={2}
-      pad={0}
-      style={{ display: 'flex', flexDirection: 'column' }}
-    >
-      <div style={{ display: 'flex', alignItems: 'baseline', padding: '14px 16px 8px' }}>
-        <div style={{ fontFamily: fonts.display, fontSize: 16, fontWeight: 600, letterSpacing: -0.3 }}>
-          Activity
-        </div>
-        <span style={{ marginLeft: 8, fontSize: 10.5, color: colors.dim, fontFamily: fonts.mono }}>
+    <Tile tone="paper" pad="none" colSpan={8} rowSpan={3} className="overflow-hidden">
+      <div className="flex flex-wrap items-baseline gap-3 px-5 pb-3 pt-5">
+        <div className="font-display text-lg font-bold tracking-tight">Activity</div>
+        <span className="font-mono text-[10px] uppercase tracking-wider text-dim">
           {visible.length} of {totalCount}
         </span>
-        <span style={{ flex: 1 }} />
-        <button
-          type="button"
-          onClick={onViewAll}
-          style={{
-            border: `1px solid ${colors.ink2}`,
-            borderRadius: 99,
-            background: 'transparent',
-            color: colors.ink,
-            padding: '3px 8px',
-            fontSize: 10.5,
-            fontWeight: 900,
-            cursor: 'pointer',
-            marginRight: 6,
-          }}
+        <span className="flex-1" />
+        <ToggleGroup
+          type="single"
+          value={filter}
+          onValueChange={(value) => value && setFilter(value as Filter)}
+          className="bg-[hsl(var(--color-sunken))]"
         >
-          View all
-        </button>
-        <div style={{ display: 'flex', gap: 4 }}>
           {FILTERS.map((s) => (
-            <button
-              key={s}
-              type="button"
-              onClick={() => setFilter(s)}
-              style={{
-                padding: '3px 9px',
-                borderRadius: 99,
-                background: s === filter ? colors.ink : 'transparent',
-                color: s === filter ? colors.cream : colors.dim,
-                fontSize: 10.5,
-                fontWeight: 500,
-                cursor: 'pointer',
-                border: 'none',
-              }}
-            >
+            <ToggleGroupItem key={s} value={s}>
               {s}
-            </button>
+            </ToggleGroupItem>
           ))}
+        </ToggleGroup>
+        <Button variant="outline" size="sm" onClick={onViewAll}>
+          View all
+        </Button>
+      </div>
+      <Separator />
+      <ScrollArea className="flex-1">
+        <div className="grid divide-y divide-ink2/8 px-2 pb-3">
+          {visible.map((t) => (
+            <ActivityRow key={t.id} transaction={t} businesses={businesses} onSelect={onSelect} />
+          ))}
+          {!visible.length && (
+            <div className="px-3 py-6 text-center text-sm text-dim">No transactions match this filter yet.</div>
+          )}
         </div>
-      </div>
-      <div style={{ flex: 1, overflow: 'hidden', padding: '0 6px 8px' }}>
-        {visible.map((t, i) => (
-          <ActivityRow key={t.id} transaction={t} businesses={businesses} striped={i % 2 === 1} onSelect={onSelect} />
-        ))}
-      </div>
+      </ScrollArea>
     </Tile>
   );
 }
@@ -89,17 +66,15 @@ export function ActivityTile({ transactions, businesses, totalCount, onSelect, o
 function ActivityRow({
   transaction: t,
   businesses,
-  striped,
   onSelect,
 }: {
   transaction: Transaction;
   businesses: Business[];
-  striped: boolean;
   onSelect?: (transaction: Transaction) => void;
 }) {
-  const b = businesses.find((x) => x.id === t.biz);
+  const business = businesses.find((x) => x.id === t.biz);
   const rcpt = receiptBadge(t.receipt);
-  if (!b) return null;
+  if (!business) return null;
 
   return (
     <div
@@ -107,93 +82,44 @@ function ActivityRow({
       tabIndex={0}
       onClick={() => onSelect?.(t)}
       onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') onSelect?.(t);
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onSelect?.(t);
+        }
       }}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        padding: '6px 10px',
-        borderRadius: 10,
-        background: striped ? '#fafaf6' : 'transparent',
-        cursor: onSelect ? 'pointer' : 'default',
-      }}
+      className={cn(
+        'group flex items-center gap-3 rounded-lg px-3 py-2 transition-colors',
+        'hover:bg-cream/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20',
+        onSelect ? 'cursor-pointer' : 'cursor-default',
+      )}
     >
       <div
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 9,
-          background: b.color + '30',
-          color: b.color,
-          fontWeight: 700,
-          fontSize: 12,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-        }}
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md font-bold"
+        style={{ background: business.color + '22', color: business.color }}
       >
         {t.merchant[0]}
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{
-            fontSize: 13,
-            fontWeight: 600,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-        >
-          {t.merchant}
-          {t.flag === 'dup-sub' && (
-            <span
-              style={{
-                marginLeft: 8,
-                fontSize: 9.5,
-                padding: '1px 5px',
-                borderRadius: 5,
-                background: colors.pink,
-                color: colors.pinkInk,
-                fontWeight: 600,
-              }}
-            >
-              DUP
-            </span>
-          )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-bold text-ink">{t.merchant}</span>
+          {t.flag === 'dup-sub' && <Badge variant="danger" className="px-1.5 py-0 text-[9px]">DUP</Badge>}
         </div>
-        <div style={{ fontSize: 10.5, color: colors.dim, marginTop: 0 }}>
-          {t.dateLabel} · {b.name} · {t.cat}
+        <div className="text-xs text-dim">
+          {t.dateLabel} · {business.name} · {t.cat}
         </div>
       </div>
-      <div
+      <span
         title={rcpt.title}
-        style={{
-          width: 20,
-          height: 20,
-          borderRadius: '50%',
-          background: rcpt.bg,
-          color: rcpt.fg,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          fontSize: 10.5,
-          fontWeight: 700,
-        }}
+        className="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold"
+        style={{ background: rcpt.bg, color: rcpt.fg }}
       >
         {rcpt.glyph}
-      </div>
+      </span>
       <div
-        style={{
-          width: 84,
-          textAlign: 'right',
-          fontFamily: fonts.display,
-          fontSize: 14,
-          fontWeight: 600,
-          color: t.amount > 0 ? colors.sageInk : colors.ink,
-          fontVariantNumeric: 'tabular-nums',
-        }}
+        className={cn(
+          'w-24 text-right font-display text-sm font-bold tabular-nums',
+          t.amount > 0 ? 'text-sage-ink' : 'text-ink',
+        )}
       >
         {fmt$(t.amount)}
       </div>
@@ -204,12 +130,12 @@ function ActivityRow({
 function receiptBadge(status: Transaction['receipt']) {
   switch (status) {
     case 'matched':
-      return { fg: colors.sageInk, bg: colors.sage, glyph: '✓', title: 'Receipt matched' };
+      return { fg: 'hsl(var(--color-sage-ink))', bg: 'hsl(var(--color-sage))', glyph: '✓', title: 'Receipt matched' };
     case 'missing':
-      return { fg: colors.coralInk, bg: colors.coral, glyph: '!', title: 'Receipt missing' };
+      return { fg: 'hsl(var(--color-coral-ink))', bg: 'hsl(var(--color-coral))', glyph: '!', title: 'Receipt missing' };
     case 'pending':
-      return { fg: colors.lemonInk, bg: colors.lemon, glyph: '…', title: 'Receipt pending OCR/match' };
+      return { fg: 'hsl(var(--color-lemon-ink))', bg: 'hsl(var(--color-lemon))', glyph: '…', title: 'Receipt pending OCR/match' };
     default:
-      return { fg: colors.dim, bg: 'transparent', glyph: '—', title: 'Not applicable' };
+      return { fg: 'hsl(var(--color-dim))', bg: 'transparent', glyph: '—', title: 'Not applicable' };
   }
 }
