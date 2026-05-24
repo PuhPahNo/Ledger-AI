@@ -6,6 +6,7 @@ import { Tile } from '@/components/ui/tile';
 import { StatLabel } from '@/components/ui/stat-label';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { ChartTooltip, useChartTooltip } from '@/components/ui/chart-tooltip';
 import { Donut } from './Donut';
 
 interface Props {
@@ -70,16 +71,64 @@ export function CategoriesTile({ categories, comparisons, comparisonBasis, onCom
               This vs Last Year
             </ToggleGroupItem>
           </ToggleGroup>
-          <div className="grid gap-3">
-            {comparisons.length ? comparisons.slice(0, 6).map((comparison, index) => (
-              <ComparisonRow key={comparison.category} comparison={comparison} index={index} />
-            )) : (
-              <div className="text-center text-sm text-lemon-ink/70">No comparison spend for this filter yet.</div>
-            )}
-          </div>
+          <ComparisonChart comparisons={comparisons} basis={comparisonBasis} />
         </div>
       )}
     </Tile>
+  );
+}
+
+interface ComparisonTipData {
+  category: string;
+  current: number;
+  previous: number;
+  deltaPct: number;
+  basis: 'month' | 'year';
+}
+
+function ComparisonChart({ comparisons, basis }: { comparisons: CategoryComparison[]; basis: 'month' | 'year' }) {
+  const { tip, containerRef, show, hide } = useChartTooltip<ComparisonTipData>();
+  if (!comparisons.length) {
+    return <div className="text-center text-sm text-lemon-ink/70">No comparison spend for this filter yet.</div>;
+  }
+  return (
+    <div ref={containerRef} className="relative grid gap-3" onMouseLeave={hide}>
+      {comparisons.slice(0, 6).map((comparison, index) => (
+        <ComparisonRow
+          key={comparison.category}
+          comparison={comparison}
+          index={index}
+          onHover={(event) =>
+            show(
+              {
+                category: comparison.category,
+                current: comparison.current,
+                previous: comparison.previous,
+                deltaPct: comparison.deltaPct,
+                basis,
+              },
+              event,
+            )
+          }
+        />
+      ))}
+      <ChartTooltip open={tip.open} x={tip.x} y={tip.y}>
+        {tip.data && (
+          <>
+            <div className="font-bold uppercase tracking-wider text-[10px] opacity-70">{tip.data.category}</div>
+            <div className="grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5 text-[11px]">
+              <span className="opacity-70">Current</span>
+              <span className="text-right font-display font-bold tabular-nums">{fmt$k(tip.data.current)}</span>
+              <span className="opacity-70">Last {tip.data.basis}</span>
+              <span className="text-right font-display font-bold tabular-nums">{fmt$k(tip.data.previous)}</span>
+            </div>
+            <div className={`text-[10px] font-bold ${tip.data.deltaPct >= 0 ? 'text-coral' : 'text-sage'}`}>
+              {tip.data.deltaPct >= 0 ? '↗' : '↘'} {tip.data.deltaPct >= 0 ? `+${tip.data.deltaPct}` : tip.data.deltaPct}% vs last {tip.data.basis}
+            </div>
+          </>
+        )}
+      </ChartTooltip>
+    </div>
   );
 }
 
@@ -96,14 +145,26 @@ function LegendRow({ category, index }: { category: Category; index: number }) {
   );
 }
 
-function ComparisonRow({ comparison, index }: { comparison: CategoryComparison; index: number }) {
+function ComparisonRow({
+  comparison,
+  index,
+  onHover,
+}: {
+  comparison: CategoryComparison;
+  index: number;
+  onHover: (event: React.MouseEvent) => void;
+}) {
   const max = Math.max(comparison.current, comparison.previous, 1);
   const currentWidth = `${Math.max(4, (comparison.current / max) * 100)}%`;
   const previousWidth = `${Math.max(4, (comparison.previous / max) * 100)}%`;
   const delta = comparison.deltaPct >= 0 ? `+${comparison.deltaPct}%` : `${comparison.deltaPct}%`;
 
   return (
-    <div className="grid gap-1 text-lemon-ink">
+    <div
+      className="grid gap-1 rounded-md px-1 py-0.5 text-lemon-ink transition-colors hover:bg-lemon-ink/8"
+      onMouseEnter={onHover}
+      onMouseMove={onHover}
+    >
       <div className="flex items-baseline gap-2 text-sm">
         <div className="min-w-0 flex-1 truncate font-bold">{comparison.category}</div>
         <div className="font-display font-bold tabular-nums">{fmt$k(comparison.current)}</div>

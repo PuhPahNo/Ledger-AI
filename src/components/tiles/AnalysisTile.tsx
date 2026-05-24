@@ -6,6 +6,7 @@ import { Tile } from '@/components/ui/tile';
 import { StatLabel } from '@/components/ui/stat-label';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ChartTooltip, useChartTooltip } from '@/components/ui/chart-tooltip';
 
 type Mode = 'business' | 'category' | 'account' | 'receipt';
 
@@ -16,11 +17,19 @@ interface Props {
   onOpenTransactions: () => void;
 }
 
+interface AnalysisTipData {
+  label: string;
+  amount: number;
+  count: number;
+  share: number;
+}
+
 export function AnalysisTile({ businesses, accounts, transactions, onOpenTransactions }: Props) {
   const [mode, setMode] = useState<Mode>('category');
   const rows = useMemo(() => groupRows(mode, transactions, businesses, accounts), [accounts, businesses, mode, transactions]);
   const max = Math.max(...rows.map((row) => row.amount), 1);
   const total = rows.reduce((sum, row) => sum + row.amount, 0);
+  const { tip, containerRef, show, hide } = useChartTooltip<AnalysisTipData>();
 
   return (
     <Tile tone="paper" pad="md" colSpan={6} rowSpan={2} className="gap-3">
@@ -49,26 +58,50 @@ export function AnalysisTile({ businesses, accounts, transactions, onOpenTransac
         <Metric label="Rows" value={String(transactions.length)} />
       </div>
 
-      <div className="grid min-h-0 gap-2.5 overflow-auto">
-        {rows.slice(0, 6).map((row, index) => (
-          <div key={row.label} className="grid gap-1">
-            <div className="flex items-baseline gap-2">
-              <span className="min-w-0 flex-1 truncate text-sm font-bold">{row.label}</span>
-              <span className="text-xs text-dim">{row.count}</span>
-              <span className="font-display text-sm font-bold tabular-nums">{fmt$k(row.amount)}</span>
+      <div ref={containerRef} className="relative grid min-h-0 gap-2.5 overflow-auto" onMouseLeave={hide}>
+        {rows.slice(0, 6).map((row, index) => {
+          const data: AnalysisTipData = {
+            label: row.label,
+            amount: row.amount,
+            count: row.count,
+            share: total > 0 ? (row.amount / total) * 100 : 0,
+          };
+          return (
+            <div
+              key={row.label}
+              className="grid gap-1 rounded-md px-1 py-0.5 transition-colors hover:bg-cream/60"
+              onMouseEnter={(event) => show(data, event)}
+              onMouseMove={(event) => show(data, event)}
+            >
+              <div className="flex items-baseline gap-2">
+                <span className="min-w-0 flex-1 truncate text-sm font-bold">{row.label}</span>
+                <span className="text-xs text-dim">{row.count}</span>
+                <span className="font-display text-sm font-bold tabular-nums">{fmt$k(row.amount)}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-[hsl(var(--color-sunken))]">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${Math.max(4, (row.amount / max) * 100)}%`,
+                    background: row.color ?? accentRamp[index % accentRamp.length],
+                  }}
+                />
+              </div>
             </div>
-            <div className="h-2 overflow-hidden rounded-full bg-[hsl(var(--color-sunken))]">
-              <div
-                className="h-full rounded-full"
-                style={{
-                  width: `${Math.max(4, (row.amount / max) * 100)}%`,
-                  background: row.color ?? accentRamp[index % accentRamp.length],
-                }}
-              />
-            </div>
-          </div>
-        ))}
+          );
+        })}
         {!rows.length && <div className="text-sm text-dim">No spend matches the current filters.</div>}
+        <ChartTooltip open={tip.open} x={tip.x} y={tip.y}>
+          {tip.data && (
+            <>
+              <div className="font-bold uppercase tracking-wider text-[10px] opacity-70">{tip.data.label}</div>
+              <div className="font-display font-bold tabular-nums">{fmt$k(tip.data.amount)}</div>
+              <div className="text-[10px] opacity-70">
+                {tip.data.count} {tip.data.count === 1 ? 'txn' : 'txns'} · {tip.data.share.toFixed(1)}% of view
+              </div>
+            </>
+          )}
+        </ChartTooltip>
       </div>
     </Tile>
   );
