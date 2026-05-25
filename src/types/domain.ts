@@ -65,6 +65,44 @@ export interface TransactionRollup {
   missingReceipts: number;
 }
 
+export type CashFlowGroup = 'month' | 'year';
+
+export interface CashFlowBusinessBreakdown {
+  businessId: BusinessId;
+  businessName: string;
+  color: string;
+  inflowCents: number;
+  outflowCents: number;
+  transferCents: number;
+  netCents: number;
+}
+
+export interface CashFlowPeriod {
+  label: string;
+  from: string;
+  to: string;
+  inflowCents: number;
+  outflowCents: number;
+  transferCents: number;
+  netCents: number;
+  previousInflowCents: number;
+  previousOutflowCents: number;
+  previousTransferCents: number;
+  previousNetCents: number;
+  netDeltaCents: number;
+  netDeltaPct: number;
+  businessBreakdown: CashFlowBusinessBreakdown[];
+}
+
+export interface CashFlowSummary {
+  from: string;
+  to: string;
+  group: CashFlowGroup;
+  includeTransfers: boolean;
+  totals: Omit<CashFlowPeriod, 'label' | 'from' | 'to' | 'businessBreakdown'>;
+  periods: CashFlowPeriod[];
+}
+
 export interface Category {
   id?: string;
   businessId?: string | null;

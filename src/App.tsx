@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getCurrentUser, logout, useMockApi } from './api';
 import { AdminPage } from './components/admin/AdminPage';
+import { CashFlowPage } from './components/CashFlowPage';
 import { LoginPage } from './components/auth/LoginPage';
 import { Dashboard } from './components/Dashboard';
 import { TransactionsPage } from './components/TransactionsPage';
@@ -39,6 +40,7 @@ export default function App() {
   if (checking) return null;
   if (!user) return <LoginPage onLogin={setUser} />;
   if (view === 'admin') return <AdminPage user={user} onViewChange={setView} onLogout={handleLogout} />;
+  if (view === 'cash-flow') return <CashFlowPage user={user} onViewChange={setView} onLogout={handleLogout} />;
   if (view === 'transactions') {
     return <TransactionsPage initialFilters={transactionFilters} user={user} onViewChange={setView} onLogout={handleLogout} />;
   }

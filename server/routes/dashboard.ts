@@ -531,6 +531,197 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       avgMonthCents: avg,
     };
   });
+
+  app.get('/cash-flow', async (request) => {
+    await requireUser(request);
+    const query = z.object({
+      from: z.string().optional(),
+      to: z.string().optional(),
+      group: z.enum(['month', 'year']).default('month'),
+      includeTransfers: z.enum(['true', 'false']).default('false'),
+      biz: z.string().optional(),
+      accounts: z.string().optional(),
+    }).parse(request.query);
+    const to = query.to ?? isoDate(new Date());
+    const from = query.from ?? isoDate(new Date(dateFromIso(to).getFullYear(), 0, 1));
+    const accountIds = parseAccountIds(query.accounts);
+    const includeTransfers = query.includeTransfers === 'true';
+    const selectedBusiness = query.biz && query.biz !== 'all'
+      ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
+      : null;
+    const periods = cashFlowPeriods(from, to, query.group);
+    const rows = await Promise.all(periods.map(async (period) => {
+      const [current, previous, businessBreakdown] = await Promise.all([
+        cashFlowTotals(period.from, period.to, selectedBusiness?.id ?? null, accountIds, includeTransfers),
+        cashFlowTotals(shiftIsoYear(period.from, -1), shiftIsoYear(period.to, -1), selectedBusiness?.id ?? null, accountIds, includeTransfers),
+        cashFlowBusinessBreakdown(period.from, period.to, selectedBusiness?.id ?? null, accountIds, includeTransfers),
+      ]);
+      const netDeltaCents = current.netCents - previous.netCents;
+      return {
+        label: period.label,
+        from: period.from,
+        to: period.to,
+        ...current,
+        previousInflowCents: previous.inflowCents,
+        previousOutflowCents: previous.outflowCents,
+        previousTransferCents: previous.transferCents,
+        previousNetCents: previous.netCents,
+        netDeltaCents,
+        netDeltaPct: previous.netCents !== 0 ? Math.round((netDeltaCents / Math.abs(previous.netCents)) * 100) : 0,
+        businessBreakdown,
+      };
+    }));
+    const totals = sumCashFlowPeriods(rows);
+    return {
+      from,
+      to,
+      group: query.group,
+      includeTransfers,
+      totals,
+      periods: rows,
+    };
+  });
+}
+
+async function cashFlowTotals(
+  from: string,
+  to: string,
+  businessId: string | null,
+  accountIds: string[],
+  includeTransfers: boolean,
+) {
+  const includedMovementFilter = includeTransfers ? sql`true` : categoryIsVisibleSpend();
+  const [row] = await db.select({
+    inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+    outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
+    transferCents: sql<number>`coalesce(sum(CASE WHEN ${transferCategoryFilter()} THEN abs(${transactions.amountCents}) ELSE 0 END), 0)::int`,
+    netCents: sql<number>`coalesce(sum(CASE WHEN ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+  })
+    .from(transactions)
+    .leftJoin(categories, eq(transactions.categoryId, categories.id))
+    .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+    .where(and(
+      gte(transactions.date, from),
+      lte(transactions.date, to),
+      businessId ? eq(transactions.businessId, businessId) : sql`true`,
+      accountSpendFilter(accountIds),
+    ));
+  return {
+    inflowCents: Number(row?.inflowCents ?? 0),
+    outflowCents: Number(row?.outflowCents ?? 0),
+    transferCents: Number(row?.transferCents ?? 0),
+    netCents: Number(row?.netCents ?? 0),
+  };
+}
+
+async function cashFlowBusinessBreakdown(
+  from: string,
+  to: string,
+  businessId: string | null,
+  accountIds: string[],
+  includeTransfers: boolean,
+) {
+  const includedMovementFilter = includeTransfers ? sql`true` : categoryIsVisibleSpend();
+  const rows = await db.select({
+    businessId: businesses.key,
+    businessName: businesses.name,
+    color: businesses.color,
+    inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+    outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
+    transferCents: sql<number>`coalesce(sum(CASE WHEN ${transferCategoryFilter()} THEN abs(${transactions.amountCents}) ELSE 0 END), 0)::int`,
+    netCents: sql<number>`coalesce(sum(CASE WHEN ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+  })
+    .from(transactions)
+    .innerJoin(businesses, eq(transactions.businessId, businesses.id))
+    .leftJoin(categories, eq(transactions.categoryId, categories.id))
+    .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+    .where(and(
+      gte(transactions.date, from),
+      lte(transactions.date, to),
+      businessId ? eq(transactions.businessId, businessId) : sql`true`,
+      accountSpendFilter(accountIds),
+    ))
+    .groupBy(businesses.key, businesses.name, businesses.color)
+    .orderBy(desc(sql`abs(sum(${transactions.amountCents}))`));
+  return rows.map((row) => ({
+    businessId: row.businessId,
+    businessName: row.businessName,
+    color: row.color,
+    inflowCents: Number(row.inflowCents ?? 0),
+    outflowCents: Number(row.outflowCents ?? 0),
+    transferCents: Number(row.transferCents ?? 0),
+    netCents: Number(row.netCents ?? 0),
+  }));
+}
+
+function sumCashFlowPeriods(rows: Array<{
+  inflowCents: number;
+  outflowCents: number;
+  transferCents: number;
+  netCents: number;
+  previousInflowCents: number;
+  previousOutflowCents: number;
+  previousTransferCents: number;
+  previousNetCents: number;
+}>) {
+  const totals = rows.reduce((sum, row) => ({
+    inflowCents: sum.inflowCents + row.inflowCents,
+    outflowCents: sum.outflowCents + row.outflowCents,
+    transferCents: sum.transferCents + row.transferCents,
+    netCents: sum.netCents + row.netCents,
+    previousInflowCents: sum.previousInflowCents + row.previousInflowCents,
+    previousOutflowCents: sum.previousOutflowCents + row.previousOutflowCents,
+    previousTransferCents: sum.previousTransferCents + row.previousTransferCents,
+    previousNetCents: sum.previousNetCents + row.previousNetCents,
+  }), {
+    inflowCents: 0,
+    outflowCents: 0,
+    transferCents: 0,
+    netCents: 0,
+    previousInflowCents: 0,
+    previousOutflowCents: 0,
+    previousTransferCents: 0,
+    previousNetCents: 0,
+  });
+  const netDeltaCents = totals.netCents - totals.previousNetCents;
+  return {
+    ...totals,
+    netDeltaCents,
+    netDeltaPct: totals.previousNetCents !== 0 ? Math.round((netDeltaCents / Math.abs(totals.previousNetCents)) * 100) : 0,
+  };
+}
+
+function cashFlowPeriods(from: string, to: string, group: 'month' | 'year') {
+  const start = dateFromIso(from);
+  const end = dateFromIso(to);
+  const periods: Array<{ label: string; from: string; to: string }> = [];
+  const cursor = group === 'year'
+    ? new Date(start.getFullYear(), 0, 1)
+    : new Date(start.getFullYear(), start.getMonth(), 1);
+  while (cursor <= end) {
+    const periodStart = group === 'year'
+      ? new Date(cursor.getFullYear(), 0, 1)
+      : new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+    const periodEnd = group === 'year'
+      ? new Date(cursor.getFullYear(), 11, 31)
+      : new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+    periods.push({
+      label: group === 'year'
+        ? String(cursor.getFullYear())
+        : cursor.toLocaleString('en-US', { month: 'short', year: '2-digit' }),
+      from: isoDate(periodStart < start ? start : periodStart),
+      to: isoDate(periodEnd > end ? end : periodEnd),
+    });
+    if (group === 'year') cursor.setFullYear(cursor.getFullYear() + 1);
+    else cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return periods;
+}
+
+function shiftIsoYear(value: string, delta: number): string {
+  const date = dateFromIso(value);
+  date.setFullYear(date.getFullYear() + delta);
+  return isoDate(date);
 }
 
 function dateWindow(period?: string, from?: string, to?: string) {
