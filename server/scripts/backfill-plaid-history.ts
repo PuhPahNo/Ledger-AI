@@ -39,6 +39,8 @@ async function main(): Promise<void> {
       const added = await syncPlaidConnection(connection.id, {
         resetCursor: true,
         daysRequested: PLAID_TRANSACTION_HISTORY_DAYS,
+        skipExistingCategorization: true,
+        allowAiCategorization: false,
       });
       console.log(`Finished ${connection.label}: ${added} new transactions added.`);
     }

@@ -77,7 +77,12 @@ export async function exchangePlaidPublicToken(input: {
 
 export async function syncPlaidConnection(
   connectionId: string,
-  options: { resetCursor?: boolean; daysRequested?: number } = {},
+  options: {
+    resetCursor?: boolean;
+    daysRequested?: number;
+    skipExistingCategorization?: boolean;
+    allowAiCategorization?: boolean;
+  } = {},
 ): Promise<number> {
   const client = plaidClient();
   if (!client) return 0;
@@ -99,11 +104,17 @@ export async function syncPlaidConnection(
     const data = res.data;
     await upsertAccounts(connectionId, connection.businessId ?? undefined, data.accounts ?? []);
     for (const txn of data.added ?? []) {
-      await upsertTransaction(connectionId, connection.businessId ?? undefined, txn);
-      addedCount += 1;
+      const inserted = await upsertTransaction(connectionId, connection.businessId ?? undefined, txn, {
+        allowAiCategorization: options.allowAiCategorization,
+        skipExistingCategorization: options.skipExistingCategorization,
+      });
+      if (inserted) addedCount += 1;
     }
     for (const txn of data.modified ?? []) {
-      await upsertTransaction(connectionId, connection.businessId ?? undefined, txn);
+      await upsertTransaction(connectionId, connection.businessId ?? undefined, txn, {
+        allowAiCategorization: options.allowAiCategorization,
+        skipExistingCategorization: options.skipExistingCategorization,
+      });
     }
     for (const removed of data.removed ?? []) {
       await db.delete(transactions).where(eq(transactions.plaidTransactionId, removed.transaction_id));
@@ -150,16 +161,41 @@ async function upsertAccounts(connectionId: string, businessId: string | undefin
   }
 }
 
-async function upsertTransaction(connectionId: string, fallbackBusinessId: string | undefined, raw: Record<string, any>): Promise<void> {
+async function upsertTransaction(
+  connectionId: string,
+  fallbackBusinessId: string | undefined,
+  raw: Record<string, any>,
+  options: { skipExistingCategorization?: boolean; allowAiCategorization?: boolean } = {},
+): Promise<boolean> {
   const account = await db.query.accounts.findFirst({ where: eq(accounts.plaidAccountId, raw.account_id) });
   const businessId = resolveTransactionBusinessId(account?.businessId, fallbackBusinessId);
-  if (!businessId) return;
+  if (!businessId) return false;
   const amountCents = plaidAmountCents(raw);
+  if (options.skipExistingCategorization && raw.transaction_id) {
+    const existing = await db.query.transactions.findFirst({
+      where: eq(transactions.plaidTransactionId, raw.transaction_id),
+      columns: { id: true },
+    });
+    if (existing) {
+      await db.update(transactions).set({
+        date: raw.date,
+        authorizedDate: raw.authorized_date,
+        merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant',
+        amountCents,
+        pending: Boolean(raw.pending),
+        raw,
+        updatedAt: new Date(),
+      }).where(eq(transactions.id, existing.id));
+      return false;
+    }
+  }
+
   const categorization = await categorizeTransactionWithDetails({
     businessId,
     merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant',
     amountCents,
     plaidCategory: plaidCategoryHints(raw),
+    allowAi: options.allowAiCategorization,
   });
   const shouldReviewAi = categorization.source === 'ai_suggested' && (categorization.confidence ?? 0) < 0.85;
   const uncategorizedCategoryId = shouldReviewAi ? await fallbackUncategorizedCategoryId() : null;
@@ -224,6 +260,7 @@ async function upsertTransaction(connectionId: string, fallbackBusinessId: strin
   if (shouldReviewAi && saved?.categorySource === 'uncategorized') {
     await createAiCategorySuggestionReview(saved, categorization);
   }
+  return true;
 }
 
 async function receiptStatusForPlaidTransaction(amountCents: number, categoryId: string | null): Promise<'missing' | 'n/a'> {

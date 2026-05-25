@@ -17,6 +17,7 @@ export interface CategorizeInput {
   merchant: string;
   amountCents: number;
   plaidCategory?: string[];
+  allowAi?: boolean;
 }
 
 export interface CategorizeResult {
@@ -130,11 +131,13 @@ export async function categorizeTransactionWithDetails(input: CategorizeInput): 
     };
   }
 
-  const aiEligibleCategories = availableCategories.filter((category) => (
-    categoryMatchesTransactionDirection(category, input.amountCents)
-  ));
-  const aiSuggestion = await suggestCategoryWithAi(input, aiEligibleCategories);
-  if (aiSuggestion) return aiSuggestion;
+  if (input.allowAi !== false) {
+    const aiEligibleCategories = availableCategories.filter((category) => (
+      categoryMatchesTransactionDirection(category, input.amountCents)
+    ));
+    const aiSuggestion = await suggestCategoryWithAi(input, aiEligibleCategories);
+    if (aiSuggestion) return aiSuggestion;
+  }
 
   return {
     categoryId: await fallbackUncategorizedCategory(),
