@@ -277,9 +277,11 @@ function ProfileMenu({
           <label className="grid gap-1.5">
             <span className="text-[10px] font-bold uppercase tracking-wider text-dim">Reset password</span>
             <Input
+              name="profile-new-password"
               type="password"
               value={newPassword}
               placeholder="12+ character password"
+              autoComplete="new-password"
               onChange={(event) => setNewPassword(event.target.value)}
               className="h-9"
             />

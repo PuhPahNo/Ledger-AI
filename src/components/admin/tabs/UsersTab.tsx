@@ -67,7 +67,15 @@ export function UsersTab({ data, businesses, user, saveAndRefresh }: Props) {
           <CardContent className="grid gap-3">
             <FieldText label="Username" value={form.username} onChange={(username) => setForm({ ...form, username })} />
             <FieldText label="Display name" value={form.displayName} onChange={(displayName) => setForm({ ...form, displayName })} />
-            <FieldText label="Password" type="password" value={form.password} onChange={(password) => setForm({ ...form, password })} placeholder="12+ characters" />
+            <FieldText
+              label="Password"
+              type="password"
+              value={form.password}
+              onChange={(password) => setForm({ ...form, password })}
+              placeholder="12+ characters"
+              autoComplete="new-password"
+              name="new-admin-password"
+            />
             <Button onClick={() => saveAndRefresh(() => createAdminUser(form), 'Admin created.')}>
               <UserPlus className="h-3.5 w-3.5" /> Create admin
             </Button>
@@ -83,7 +91,15 @@ export function UsersTab({ data, businesses, user, saveAndRefresh }: Props) {
             <FieldText label="Username" value={uploaderForm.username} onChange={(username) => setUploaderForm({ ...uploaderForm, username })} />
             <FieldText label="Display name" value={uploaderForm.displayName} onChange={(displayName) => setUploaderForm({ ...uploaderForm, displayName })} />
             <FieldBusiness label="Business" value={uploaderForm.businessId} businesses={businesses} onChange={(businessId) => setUploaderForm({ ...uploaderForm, businessId })} />
-            <FieldText label="Password" type="password" value={uploaderForm.password} onChange={(password) => setUploaderForm({ ...uploaderForm, password })} placeholder="8+ characters" />
+            <FieldText
+              label="Password"
+              type="password"
+              value={uploaderForm.password}
+              onChange={(password) => setUploaderForm({ ...uploaderForm, password })}
+              placeholder="8+ characters"
+              autoComplete="new-password"
+              name="new-receipt-uploader-password"
+            />
             <Button
               onClick={createUploader}
               disabled={!canCreateUploader}
@@ -94,66 +110,68 @@ export function UsersTab({ data, businesses, user, saveAndRefresh }: Props) {
         </Card>
       </div>
 
-      <Card className="lg:col-span-8">
-        <CardHeader>
-          <CardTitle>Admin accounts</CardTitle>
-          <CardDescription>{data.users.length} active.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-2">
-            {data.users.map((admin) => (
-              <EditableUser
-                key={admin.id}
-                admin={admin}
-                onSave={(body) => saveAndRefresh(() => updateAdminUser(admin.id, body), 'Admin saved.')}
-                onPassword={(password) => {
-                  if (password.length < 12) {
-                    toast({ variant: 'destructive', title: 'Password too short', description: 'Use at least 12 characters.' });
-                    return Promise.resolve(false);
+      <div className="grid gap-4 lg:col-span-8 xl:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Admin accounts</CardTitle>
+            <CardDescription>{data.users.length} active.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-2">
+              {data.users.map((admin) => (
+                <EditableUser
+                  key={admin.id}
+                  admin={admin}
+                  onSave={(body) => saveAndRefresh(() => updateAdminUser(admin.id, body), 'Admin saved.')}
+                  onPassword={(password) => {
+                    if (password.length < 12) {
+                      toast({ variant: 'destructive', title: 'Password too short', description: 'Use at least 12 characters.' });
+                      return Promise.resolve(false);
+                    }
+                    return saveAndRefresh(
+                      () => resetAdminUserPassword(admin.id, password),
+                      admin.id === user?.id ? 'Password reset. Use it next time you log in.' : 'Password reset.',
+                    );
+                  }}
+                  onActive={(active) =>
+                    saveAndRefresh(
+                      () => setAdminUserActive(admin.id, active),
+                      active ? 'Admin activated.' : 'Admin deactivated.',
+                    )
                   }
-                  return saveAndRefresh(
-                    () => resetAdminUserPassword(admin.id, password),
-                    admin.id === user?.id ? 'Password reset. Use it next time you log in.' : 'Password reset.',
-                  );
-                }}
-                onActive={(active) =>
-                  saveAndRefresh(
-                    () => setAdminUserActive(admin.id, active),
-                    active ? 'Admin activated.' : 'Admin deactivated.',
-                  )
-                }
-              />
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+                />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
 
-      <Card className="lg:col-span-12">
-        <CardHeader>
-          <CardTitle>Receipt uploaders</CardTitle>
-          <CardDescription>{data.receiptUploaders.filter((uploader) => uploader.active).length} active.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-2 lg:grid-cols-2">
-            {data.receiptUploaders.map((uploader) => (
-              <EditableReceiptUploader
-                key={uploader.id}
-                uploader={uploader}
-                businesses={businesses}
-                onSave={(body) => saveAndRefresh(() => updateReceiptUploader(uploader.id, body), 'Uploader saved.')}
-                onPassword={(password) => {
-                  if (password.length < 8) {
-                    toast({ variant: 'destructive', title: 'Password too short', description: 'Use at least 8 characters.' });
-                    return Promise.resolve(false);
-                  }
-                  return saveAndRefresh(() => resetReceiptUploaderPassword(uploader.id, password), 'Uploader password reset.');
-                }}
-                onDelete={() => saveAndRefresh(() => deleteReceiptUploader(uploader.id), 'Uploader deleted.')}
-              />
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Receipt uploaders</CardTitle>
+            <CardDescription>{data.receiptUploaders.filter((uploader) => uploader.active).length} active.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-2">
+              {data.receiptUploaders.map((uploader) => (
+                <EditableReceiptUploader
+                  key={uploader.id}
+                  uploader={uploader}
+                  businesses={businesses}
+                  onSave={(body) => saveAndRefresh(() => updateReceiptUploader(uploader.id, body), 'Uploader saved.')}
+                  onPassword={(password) => {
+                    if (password.length < 8) {
+                      toast({ variant: 'destructive', title: 'Password too short', description: 'Use at least 8 characters.' });
+                      return Promise.resolve(false);
+                    }
+                    return saveAndRefresh(() => resetReceiptUploaderPassword(uploader.id, password), 'Uploader password reset.');
+                  }}
+                  onDelete={() => saveAndRefresh(() => deleteReceiptUploader(uploader.id), 'Uploader deleted.')}
+                />
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

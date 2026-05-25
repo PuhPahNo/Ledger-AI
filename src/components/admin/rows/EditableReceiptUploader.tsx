@@ -58,7 +58,15 @@ export function EditableReceiptUploader({ uploader, businesses, onSave, onPasswo
             checked={draft.active}
             onCheckedChange={(active) => setDraft({ ...draft, active })}
           />
-          <FieldText label="New password" type="password" value={password} onChange={setPassword} placeholder="8+ characters" />
+          <FieldText
+            label="New password"
+            type="password"
+            value={password}
+            onChange={setPassword}
+            placeholder="8+ characters"
+            autoComplete="new-password"
+            name={`uploader-new-password-${uploader.id}`}
+          />
           <div className="flex items-end justify-end gap-2">
             <Button variant="outline" size="sm" onClick={resetPassword} disabled={!password}>
               Reset password

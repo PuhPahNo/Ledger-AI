@@ -17,18 +17,30 @@ export function FieldText({
   onChange,
   type = 'text',
   placeholder,
+  autoComplete,
+  name,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   type?: string;
   placeholder?: string;
+  autoComplete?: string;
+  name?: string;
 }) {
   const id = useFieldId();
   return (
     <div className="grid gap-1.5">
       <Label htmlFor={id}>{label}</Label>
-      <Input id={id} type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+      <Input
+        id={id}
+        name={name ?? id}
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        autoComplete={autoComplete}
+      />
     </div>
   );
 }

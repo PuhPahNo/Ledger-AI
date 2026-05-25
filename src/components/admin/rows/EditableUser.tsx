@@ -45,7 +45,15 @@ export function EditableUser({ admin, onSave, onPassword, onActive }: Props) {
         <div className="grid gap-3 border-t border-ink2/10 p-4 md:grid-cols-2">
           <FieldText label="Username" value={draft.username} onChange={(username) => setDraft({ ...draft, username })} />
           <FieldText label="Display name" value={draft.displayName} onChange={(displayName) => setDraft({ ...draft, displayName })} />
-          <FieldText label="New password" type="password" value={password} onChange={setPassword} placeholder="12+ characters" />
+          <FieldText
+            label="New password"
+            type="password"
+            value={password}
+            onChange={setPassword}
+            placeholder="12+ characters"
+            autoComplete="new-password"
+            name={`admin-new-password-${admin.id}`}
+          />
           <FieldSwitch
             label="Account active"
             checked={draft.active}
