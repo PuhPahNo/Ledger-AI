@@ -2,6 +2,7 @@ import { CreditCard, EyeOff, Landmark } from 'lucide-react';
 import type { Account, Business, Transaction } from '@/types/domain';
 import { fmt$k } from '@/lib/format';
 import { accountLabel } from '@/lib/account';
+import { isSpendTransaction } from '@/lib/calc';
 import { Tile } from '@/components/ui/tile';
 import { Button } from '@/components/ui/button';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
@@ -28,7 +29,7 @@ export function AccountSpendTile({
 }: Props) {
   const selected = new Set(selectedAccountIds);
   const spendByAccount = transactions.reduce<Record<string, { amount: number; count: number }>>((acc, txn) => {
-    if (!txn.accountId || txn.amount >= 0) return acc;
+    if (!txn.accountId || !isSpendTransaction(txn)) return acc;
     const row = acc[txn.accountId] ?? { amount: 0, count: 0 };
     row.amount += Math.abs(txn.amount);
     row.count += 1;

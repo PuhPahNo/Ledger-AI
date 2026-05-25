@@ -1,4 +1,11 @@
-import type { Alert, Business, Category, Connection, Transaction } from '../db/schema.js';
+import type {
+  Alert,
+  Business,
+  Category,
+  CategorizationReviewItem,
+  Connection,
+  Transaction,
+} from '../db/schema.js';
 
 export function toApiBusiness(row: Business) {
   return {
@@ -27,7 +34,11 @@ export function toApiConnection(row: Connection, businessKey?: string) {
   };
 }
 
-export function toApiTransaction(row: Transaction & { businessKey?: string; categoryName?: string | null }) {
+export function toApiTransaction(row: Transaction & {
+  businessKey?: string;
+  categoryName?: string | null;
+  categoryTaxCode?: string | null;
+}) {
   return {
     id: row.id,
     businessId: row.businessId,
@@ -39,6 +50,10 @@ export function toApiTransaction(row: Transaction & { businessKey?: string; cate
     amountCents: row.amountCents,
     biz: row.businessKey ?? row.businessId,
     cat: row.categoryName ?? 'Uncategorized',
+    categoryTaxCode: row.categoryTaxCode ?? undefined,
+    categorySource: row.categorySource,
+    categoryConfidence: row.categoryConfidence == null ? undefined : Number(row.categoryConfidence),
+    categoryEvidence: row.categoryEvidence,
     receipt: row.receiptStatus,
     src: row.sourceLabel,
     note: row.note ?? undefined,
@@ -51,6 +66,7 @@ export function toApiCategory(row: Category & { amountCents?: number; count?: nu
   return {
     id: row.id,
     name: row.name,
+    taxCode: row.taxCode,
     amountCents: row.amountCents ?? 0,
     delta: row.delta ?? '+0%',
     count: row.count ?? 0,
@@ -65,5 +81,20 @@ export function toApiAlert(row: Alert) {
     detail: row.detail,
     severity: row.severity,
     status: row.status,
+  };
+}
+
+export function toApiCategorizationReviewItem(row: CategorizationReviewItem & { businessKey?: string | null }) {
+  return {
+    id: row.id,
+    businessId: row.businessId,
+    biz: row.businessKey ?? row.businessId,
+    type: row.type,
+    status: row.status,
+    title: row.title,
+    detail: row.detail,
+    payload: row.payload,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }

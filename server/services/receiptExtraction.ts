@@ -10,6 +10,13 @@ const receiptExtractionSchema = z.object({
   receiptDate: z.string().nullable(),
   taxCents: z.number().int().nullable(),
   paymentLast4: z.string().nullable(),
+  categoryHint: z.string().nullable(),
+  categoryEvidence: z.string().nullable(),
+  categoryConfidence: z.number().min(0).max(1).nullable(),
+  lineItems: z.array(z.object({
+    description: z.string(),
+    amountCents: z.number().int().nullable(),
+  })).default([]),
   confidence: z.number().min(0).max(1),
   notes: z.string().nullable(),
 });
@@ -39,6 +46,7 @@ export async function extractReceipt(input: {
             'Extract receipt fields for Ledger AI.',
             'Return null for fields that are not visible.',
             'Amounts must be integer cents. receiptDate must be YYYY-MM-DD.',
+            'If visible line items or receipt wording reveals a business expense category, provide a short categoryHint and categoryEvidence.',
             'If this is not a business receipt, set isReceipt=false and confidence below 0.5.',
           ].join(' '),
         },
@@ -68,6 +76,10 @@ function fallbackExtraction(fileName: string): ReceiptExtraction {
     receiptDate: null,
     taxCents: null,
     paymentLast4: null,
+    categoryHint: null,
+    categoryEvidence: null,
+    categoryConfidence: null,
+    lineItems: [],
     confidence: 0.2,
     notes: 'Fallback extraction used because OpenAI is not configured or the file is not an image.',
   };

@@ -12,6 +12,7 @@ import type {
   Transaction,
   Account,
 } from '@/types/domain';
+import { isSpendTransaction } from '@/lib/calc';
 
 export const BUSINESSES: Business[] = [
   { id: 'draft-sharks', name: 'Draft Sharks', short: 'DS', color: '#D97757', hue: 24 },
@@ -96,4 +97,4 @@ SUMMARY.trailingMonthBusinessCents = SUMMARY.trailingMonthCents?.map((total, ind
     { businessId: 'womens-net', businessName: 'Womens Net', color: BUSINESSES[2].color, cents: womens },
   ];
 });
-SUMMARY.total = Math.abs(visibleMockTransactions(TRANSACTIONS).filter((t) => t.amount < 0).reduce((a, t) => a + t.amount, 0));
+SUMMARY.total = Math.abs(visibleMockTransactions(TRANSACTIONS).filter(isSpendTransaction).reduce((a, t) => a + t.amount, 0));

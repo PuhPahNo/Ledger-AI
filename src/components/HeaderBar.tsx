@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { KeyRound, LogOut, Search, ShieldCheck, Upload, UserRound } from 'lucide-react';
+import { Bell, KeyRound, LogOut, Search, ShieldCheck, Upload, UserRound } from 'lucide-react';
 import type { Business, CurrentUser } from '@/types/domain';
 import { enableTotp, resetAdminUserPassword, setupTotp } from '@/api';
 import { Button } from '@/components/ui/button';
@@ -25,6 +25,8 @@ interface Props {
   onBusinessChange?: (business: string) => void;
   query?: string;
   onQueryChange?: (query: string) => void;
+  reviewCount?: number;
+  onOpenReviewCenter?: () => void;
 }
 
 export function HeaderBar({
@@ -38,6 +40,8 @@ export function HeaderBar({
   onBusinessChange,
   query = '',
   onQueryChange,
+  reviewCount = 0,
+  onOpenReviewCenter,
 }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -85,6 +89,23 @@ export function HeaderBar({
           className="h-9 rounded-full pl-9 bg-cream/70 border-transparent focus-visible:bg-paper"
         />
       </div>
+
+      {onOpenReviewCenter && (
+        <Button
+          variant="secondary"
+          size="icon-sm"
+          onClick={onOpenReviewCenter}
+          title="Notifications"
+          className="relative"
+        >
+          <Bell className="h-4 w-4" />
+          {reviewCount > 0 && (
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-coral px-1 text-[10px] font-bold leading-none text-coral-ink">
+              {reviewCount > 9 ? '9+' : reviewCount}
+            </span>
+          )}
+        </Button>
+      )}
 
       <input
         ref={fileInput}

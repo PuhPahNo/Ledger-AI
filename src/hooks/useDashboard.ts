@@ -8,12 +8,14 @@ import {
   getSummary,
   listAccounts,
   listCategoryComparisons,
+  listCategorizationReviewItems,
 } from '@/api';
 import type {
   Alert,
   Business,
   Category,
   CategoryComparison,
+  CategorizationReviewItem,
   Connection,
   Account,
   SpendSummary,
@@ -28,6 +30,7 @@ export interface DashboardData {
   connections: Connection[];
   accounts: Account[];
   alerts: Alert[];
+  categorizationReviewItems: CategorizationReviewItem[];
   summary: SpendSummary;
 }
 
@@ -97,6 +100,7 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
       listConnections({ biz: params.business ?? 'all' }),
       listAccounts({ biz: params.business ?? 'all' }),
       listAlerts({ biz: params.business ?? 'all' }),
+      listCategorizationReviewItems({ biz: params.business ?? 'all' }),
       getSummary({
         period: params.period,
         from: window.from,
@@ -106,10 +110,30 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
         accountIds,
       }),
     ])
-      .then(([businesses, transactions, categories, categoryComparisons, connections, accounts, alerts, summary]) => {
+      .then(([
+        businesses,
+        transactions,
+        categories,
+        categoryComparisons,
+        connections,
+        accounts,
+        alerts,
+        categorizationReviewItems,
+        summary,
+      ]) => {
         if (cancelled) return;
         setState({
-          data: { businesses, transactions, categories, categoryComparisons, connections, accounts, alerts, summary },
+          data: {
+            businesses,
+            transactions,
+            categories,
+            categoryComparisons,
+            connections,
+            accounts,
+            alerts,
+            categorizationReviewItems,
+            summary,
+          },
           loading: false,
           error: null,
         });

@@ -8,11 +8,12 @@ import {
 } from 'plaid';
 import { getEnv } from '../config/env.js';
 import { db } from '../db/client.js';
-import { accounts, connections, transactions } from '../db/schema.js';
+import { accounts, categories, connections, transactions } from '../db/schema.js';
 import { decryptText, encryptText } from '../lib/crypto.js';
 import { serviceUnavailable } from '../lib/errors.js';
 import { resolveTransactionBusinessId } from './accountAssignment.js';
-import { categorizeTransaction } from './categorization.js';
+import { categorizeTransactionWithDetails, isExcludedFromSpendCategory } from './categorization.js';
+import { createAiCategorySuggestionReview } from './categorizationFeedback.js';
 
 export const PLAID_TRANSACTION_HISTORY_DAYS = 365;
 
@@ -154,15 +155,24 @@ async function upsertTransaction(connectionId: string, fallbackBusinessId: strin
   const businessId = resolveTransactionBusinessId(account?.businessId, fallbackBusinessId);
   if (!businessId) return;
   const amountCents = -Math.round(Number(raw.amount) * 100);
-  const categoryId = await categorizeTransaction({
+  const categorization = await categorizeTransactionWithDetails({
     businessId,
     merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant',
     amountCents,
     plaidCategory: plaidCategoryHints(raw),
   });
+  const shouldReviewAi = categorization.source === 'ai_suggested' && (categorization.confidence ?? 0) < 0.85;
+  const uncategorizedCategoryId = shouldReviewAi ? await fallbackUncategorizedCategoryId() : null;
+  const appliedCategoryId = shouldReviewAi ? uncategorizedCategoryId : categorization.categoryId;
+  const appliedCategorySource = shouldReviewAi ? 'uncategorized' : categorization.source;
+  const appliedCategoryConfidence = shouldReviewAi ? null : categorization.confidence;
+  const appliedCategoryEvidence = shouldReviewAi
+    ? { reason: 'ai_suggestion_deferred_to_review', suggestion: categorization }
+    : categorization.evidence;
+  const receiptStatus = await receiptStatusForPlaidTransaction(amountCents, appliedCategoryId);
   const sourceLabel = account ? `${account.name}${account.mask ? ` ${account.mask}` : ''}` : `Plaid ${connectionId.slice(0, 8)}`;
 
-  await db.insert(transactions).values({
+  const [saved] = await db.insert(transactions).values({
     businessId,
     accountId: account?.id,
     plaidTransactionId: raw.transaction_id,
@@ -170,8 +180,11 @@ async function upsertTransaction(connectionId: string, fallbackBusinessId: strin
     authorizedDate: raw.authorized_date,
     merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant',
     amountCents,
-    categoryId,
-    receiptStatus: amountCents < 0 ? 'missing' : 'n/a',
+    categoryId: appliedCategoryId,
+    categorySource: appliedCategorySource,
+    categoryConfidence: appliedCategoryConfidence == null ? null : appliedCategoryConfidence.toFixed(4),
+    categoryEvidence: appliedCategoryEvidence,
+    receiptStatus,
     sourceLabel,
     pending: Boolean(raw.pending),
     raw,
@@ -182,12 +195,49 @@ async function upsertTransaction(connectionId: string, fallbackBusinessId: strin
       authorizedDate: raw.authorized_date,
       merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant',
       amountCents,
-      categoryId,
+      categoryId: sql`CASE
+        WHEN ${transactions.categorySource} IN ('manual', 'user_confirmed_rule', 'receipt_evidence')
+          THEN ${transactions.categoryId}
+        ELSE excluded.category_id
+      END`,
+      categorySource: sql`CASE
+        WHEN ${transactions.categorySource} IN ('manual', 'user_confirmed_rule', 'receipt_evidence')
+          THEN ${transactions.categorySource}
+        ELSE excluded.category_source
+      END`,
+      categoryConfidence: sql`CASE
+        WHEN ${transactions.categorySource} IN ('manual', 'user_confirmed_rule', 'receipt_evidence')
+          THEN ${transactions.categoryConfidence}
+        ELSE excluded.category_confidence
+      END`,
+      categoryEvidence: sql`CASE
+        WHEN ${transactions.categorySource} IN ('manual', 'user_confirmed_rule', 'receipt_evidence')
+          THEN ${transactions.categoryEvidence}
+        ELSE excluded.category_evidence
+      END`,
       pending: Boolean(raw.pending),
       raw,
       updatedAt: new Date(),
     },
+  }).returning();
+
+  if (shouldReviewAi && saved?.categorySource === 'uncategorized') {
+    await createAiCategorySuggestionReview(saved, categorization);
+  }
+}
+
+async function receiptStatusForPlaidTransaction(amountCents: number, categoryId: string | null): Promise<'missing' | 'n/a'> {
+  if (amountCents >= 0) return 'n/a';
+  if (!categoryId) return 'missing';
+  const category = await db.query.categories.findFirst({ where: eq(categories.id, categoryId) });
+  return category && isExcludedFromSpendCategory(category) ? 'n/a' : 'missing';
+}
+
+async function fallbackUncategorizedCategoryId(): Promise<string | null> {
+  const uncategorized = await db.query.categories.findFirst({
+    where: sql`${categories.businessId} IS NULL AND ${categories.name} = 'Uncategorized'`,
   });
+  return uncategorized?.id ?? null;
 }
 
 function plaidCategoryHints(raw: Record<string, any>): string[] {

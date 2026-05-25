@@ -19,6 +19,7 @@ import { AlertsTile } from './tiles/AlertsTile';
 import { AccountSpendTile } from './tiles/AccountSpendTile';
 import { AnalysisTile } from './tiles/AnalysisTile';
 import { ConnectionsManager } from './ConnectionsManager';
+import { CategorizationReviewCenter } from './CategorizationReviewCenter';
 import { TransactionDrawer } from './TransactionDrawer';
 import { TransactionExplorer } from './TransactionExplorer';
 
@@ -48,6 +49,7 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
   const [comparisonBasis, setComparisonBasis] = useState<'month' | 'year'>('month');
   const [refreshKey, setRefreshKey] = useState(0);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [reviewCenterOpen, setReviewCenterOpen] = useState(false);
   const [transactionsOpen, setTransactionsOpen] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
@@ -81,7 +83,17 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
   if (error) return <StateScreen tone="error">Couldn't load: {error.message}</StateScreen>;
   if (loading || !data) return <StateScreen>Loading…</StateScreen>;
 
-  const { businesses, transactions, categories, categoryComparisons, connections, accounts, alerts, summary } = data;
+  const {
+    businesses,
+    transactions,
+    categories,
+    categoryComparisons,
+    connections,
+    accounts,
+    alerts,
+    categorizationReviewItems,
+    summary,
+  } = data;
   const selectedBusiness = businesses.find((business) => business.id === businessFilter);
   const selectedBusinessDbId = businessFilter === 'all' ? undefined : selectedBusiness?.dbId;
   const heroContext = selectedAccountIds.length
@@ -141,6 +153,8 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
           onBusinessChange={handleBusinessChange}
           query={query}
           onQueryChange={setQuery}
+          reviewCount={categorizationReviewItems.length}
+          onOpenReviewCenter={() => setReviewCenterOpen(true)}
         />
 
         <BusinessStrip
@@ -208,6 +222,13 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
         accounts={accounts}
         onClose={() => setConnectionsOpen(false)}
         onRefresh={() => setRefreshKey((key) => key + 1)}
+      />
+      <CategorizationReviewCenter
+        open={reviewCenterOpen}
+        items={categorizationReviewItems}
+        businesses={businesses}
+        onClose={() => setReviewCenterOpen(false)}
+        onResolved={() => setRefreshKey((key) => key + 1)}
       />
       <TransactionDrawer
         transaction={selectedTransaction}

@@ -6,9 +6,21 @@ import { db } from '../db/client.js';
 import { accounts, alerts, businesses, categories, connections, transactions } from '../db/schema.js';
 import { notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
-import { isIncomeCategory, learnMerchantCategoryRule } from '../services/categorization.js';
+import { isIncomeCategory } from '../services/categorization.js';
+import {
+  createManualCategorizationFeedback,
+  listCategorizationReviewItems,
+  resolveCategorizationReviewItem,
+} from '../services/categorizationFeedback.js';
 import { normalizeTransactionOverride } from '../services/transactionOverrides.js';
-import { toApiAlert, toApiBusiness, toApiCategory, toApiConnection, toApiTransaction } from './mappers.js';
+import {
+  toApiAlert,
+  toApiBusiness,
+  toApiCategorizationReviewItem,
+  toApiCategory,
+  toApiConnection,
+  toApiTransaction,
+} from './mappers.js';
 
 export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
   app.get('/businesses', async (request) => {
@@ -48,6 +60,9 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         merchant: transactions.merchant,
         amountCents: transactions.amountCents,
         categoryId: transactions.categoryId,
+        categorySource: transactions.categorySource,
+        categoryConfidence: transactions.categoryConfidence,
+        categoryEvidence: transactions.categoryEvidence,
         receiptId: transactions.receiptId,
         receiptStatus: transactions.receiptStatus,
         sourceLabel: transactions.sourceLabel,
@@ -59,6 +74,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         updatedAt: transactions.updatedAt,
         businessKey: businesses.key,
         categoryName: categories.name,
+        categoryTaxCode: categories.taxCode,
       })
       .from(transactions)
       .innerJoin(businesses, eq(transactions.businessId, businesses.id))
@@ -102,9 +118,26 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       if (!selectedCategory) notFound('Category not found');
     }
 
+    const previous = await db.query.transactions.findFirst({ where: eq(transactions.id, params.id) });
+    if (!previous) notFound('Transaction not found');
+
+    const categoryProvenance = body.categoryId !== undefined
+      ? body.categoryId
+        ? {
+            categorySource: 'manual' as const,
+            categoryConfidence: '1.0000',
+            categoryEvidence: { source: 'transaction_drawer' },
+          }
+        : {
+            categorySource: 'uncategorized' as const,
+            categoryConfidence: null,
+            categoryEvidence: {},
+          }
+      : {};
+
     const [updated] = await db
       .update(transactions)
-      .set({ ...body, updatedAt: new Date() })
+      .set({ ...body, ...categoryProvenance, updatedAt: new Date() })
       .where(eq(transactions.id, params.id))
       .returning();
     if (!updated) notFound('Transaction not found');
@@ -114,11 +147,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       && updated.amountCents < 0
       && selectedCategory
       && !isIncomeCategory(selectedCategory)
+      && previous.categoryId !== updated.categoryId
     ) {
-      await learnMerchantCategoryRule({
-        businessId: updated.businessId,
-        merchant: updated.merchant,
-        categoryId: updated.categoryId,
+      await createManualCategorizationFeedback({
+        transaction: updated,
+        previousCategoryId: previous.categoryId,
+        newCategoryId: updated.categoryId,
+        userId: user.id,
       });
     }
     await audit(request, user, 'update_transaction', 'transaction', params.id, { ...body });
@@ -140,6 +175,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         ...getTableColumns(transactions),
         businessKey: businesses.key,
         categoryName: categories.name,
+        categoryTaxCode: categories.taxCode,
       })
       .from(transactions)
       .innerJoin(businesses, eq(transactions.businessId, businesses.id))
@@ -183,11 +219,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         gte(transactions.date, from),
         lte(transactions.date, to),
         sql`${transactions.amountCents} < 0`,
+        spendCategoryFilter(),
         selectedBusiness ? eq(transactions.businessId, selectedBusiness.id) : sql`true`,
       ))
       .leftJoin(accounts, eq(transactions.accountId, accounts.id))
       .where(and(
         eq(categories.active, true),
+        categoryIsVisibleSpend(),
         selectedBusiness ? or(eq(categories.businessId, selectedBusiness.id), sql`${categories.businessId} IS NULL`) : sql`true`,
         joinedTransactionSpendFilter(accountIds),
         query.q ? ilike(categories.name, `%${query.q}%`) : sql`true`,
@@ -251,6 +289,41 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
     return reply.status(204).send();
   });
 
+  app.get('/categorization/review-items', async (request) => {
+    await requireUser(request);
+    const query = z.object({
+      status: z.enum(['open', 'accepted', 'dismissed', 'expired']).optional(),
+      biz: z.string().optional(),
+    }).parse(request.query);
+    const rows = await listCategorizationReviewItems({
+      status: query.status ?? 'open',
+      businessKey: query.biz,
+    });
+    return rows.map(toApiCategorizationReviewItem);
+  });
+
+  app.post('/categorization/review-items/:id/resolve', async (request) => {
+    const user = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({ action: z.enum(['accept', 'dismiss']) }).parse(request.body);
+    const result = await resolveCategorizationReviewItem({
+      id: params.id,
+      action: body.action,
+      userId: user.id,
+    });
+    if (!result) notFound('Review item not found');
+    await audit(request, user, 'resolve_categorization_review_item', 'categorization_review_item', params.id, {
+      action: body.action,
+      appliedCount: result.appliedCount,
+      conflictCount: result.conflictCount,
+    });
+    return {
+      item: toApiCategorizationReviewItem(result.item as any),
+      appliedCount: result.appliedCount,
+      conflictCount: result.conflictCount,
+    };
+  });
+
   app.get('/insights/category-comparison', async (request) => {
     await requireUser(request);
     const query = z.object({
@@ -290,6 +363,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         LEFT JOIN ${categories} ON ${transactions.categoryId} = ${categories.id}
         LEFT JOIN ${accounts} ON ${transactions.accountId} = ${accounts.id}
         WHERE ${transactions.amountCents} < 0
+          AND ${categoryIsVisibleSpend()}
           AND ${transactions.date} >= ${window.previousFrom}
           AND ${transactions.date} <= ${window.currentTo}
           AND ${accountSpendFilter(accountIds)}
@@ -336,22 +410,26 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       sql`${transactions.amountCents} < 0`,
       businessFilter,
       accountSpendFilter(accountIds),
+      spendCategoryFilter(),
     ] as const;
     const [current] = await db.select({
       totalCents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
     }).from(transactions)
       .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
       .where(and(gte(transactions.date, from), lte(transactions.date, to), ...spendFilters));
     const [prior] = await db.select({
       totalCents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
     }).from(transactions)
       .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
       .where(and(gte(transactions.date, priorFrom), lte(transactions.date, priorTo), ...spendFilters));
     const trailingRows = await Promise.all(labels.map(async ({ from: monthFrom, to: monthTo }) => {
       const [row] = await db.select({
         totalCents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
       }).from(transactions)
         .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+        .leftJoin(categories, eq(transactions.categoryId, categories.id))
         .where(and(gte(transactions.date, monthFrom), lte(transactions.date, monthTo), ...spendFilters));
       return row?.totalCents ?? 0;
     }));
@@ -364,6 +442,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       }).from(transactions)
         .innerJoin(businesses, eq(transactions.businessId, businesses.id))
         .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+        .leftJoin(categories, eq(transactions.categoryId, categories.id))
         .where(and(gte(transactions.date, monthFrom), lte(transactions.date, monthTo), ...spendFilters))
         .groupBy(businesses.key, businesses.name, businesses.color);
       return rows
@@ -449,6 +528,7 @@ async function transactionById(id: string) {
       ...getTableColumns(transactions),
       businessKey: businesses.key,
       categoryName: categories.name,
+      categoryTaxCode: categories.taxCode,
     })
     .from(transactions)
     .innerJoin(businesses, eq(transactions.businessId, businesses.id))
@@ -528,6 +608,14 @@ function parseList(value?: string): string[] {
 function accountSpendFilter(accountIds: string[]) {
   return sql`(${transactions.accountId} IS NULL OR ${accounts.id} IS NULL OR ${accounts.enabled} = true)
     AND ${accountIds.length ? inArray(transactions.accountId, accountIds) : sql`true`}`;
+}
+
+function spendCategoryFilter() {
+  return sql`${categoryIsVisibleSpend()}`;
+}
+
+function categoryIsVisibleSpend() {
+  return sql`coalesce(${categories.taxCode}, '') NOT LIKE 'exclude_%'`;
 }
 
 function joinedTransactionSpendFilter(accountIds: string[]) {

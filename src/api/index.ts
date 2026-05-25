@@ -7,6 +7,7 @@ export * from './connections';
 export * from './receipts';
 export * from './summary';
 export * from './transactions';
+export * from './categorizationReview';
 export * from './auth';
 export * from './admin';
 export * from './accounts';

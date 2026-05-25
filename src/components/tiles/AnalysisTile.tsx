@@ -3,6 +3,7 @@ import type { Account, Business, Transaction } from '@/types/domain';
 import { accentRamp } from '@/theme/tokens';
 import { fmt$k } from '@/lib/format';
 import { accountLabel } from '@/lib/account';
+import { isSpendTransaction } from '@/lib/calc';
 import { Tile } from '@/components/ui/tile';
 import { StatLabel } from '@/components/ui/stat-label';
 import { Button } from '@/components/ui/button';
@@ -189,7 +190,7 @@ function groupRows(mode: Mode, transactions: Transaction[], businesses: Business
   const accountById = new Map(accounts.map((account) => [account.id, account]));
   const rows = new Map<string, { label: string; amount: number; count: number; color?: string }>();
   for (const transaction of transactions) {
-    if (transaction.amount >= 0) continue;
+    if (!isSpendTransaction(transaction)) continue;
     const business = businessById.get(transaction.biz);
     const account = transaction.accountId ? accountById.get(transaction.accountId) : undefined;
     const label = labelFor(mode, transaction, business, account);
@@ -204,7 +205,7 @@ function groupRows(mode: Mode, transactions: Transaction[], businesses: Business
 
 function topPurchases(transactions: Transaction[], businessId: string, category: string) {
   return transactions
-    .filter((transaction) => transaction.amount < 0)
+    .filter(isSpendTransaction)
     .filter((transaction) => transaction.biz === businessId)
     .filter((transaction) => (transaction.cat || 'Uncategorized') === category)
     .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
@@ -213,7 +214,7 @@ function topPurchases(transactions: Transaction[], businessId: string, category:
 function categoryNames(transactions: Transaction[]) {
   return [...new Set(
     transactions
-      .filter((transaction) => transaction.amount < 0)
+      .filter(isSpendTransaction)
       .map((transaction) => transaction.cat || 'Uncategorized'),
   )].sort((a, b) => a.localeCompare(b));
 }

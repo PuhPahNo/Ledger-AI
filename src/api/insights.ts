@@ -1,4 +1,5 @@
 import type { BusinessId, CategoryComparison } from '@/types/domain';
+import { isSpendTransaction } from '@/lib/calc';
 import { http, useMockApi } from './client';
 import { TRANSACTIONS, visibleMockTransactions } from './mocks';
 
@@ -38,7 +39,7 @@ function mockComparisons(params: {
   const currentMultiplier = params.basis === 'year' ? 7.4 : 1;
   const previousMultiplier = params.basis === 'year' ? 6.6 : 0.72;
   const rows = visibleMockTransactions(TRANSACTIONS, params.accountIds)
-    .filter((txn) => txn.amount < 0)
+    .filter(isSpendTransaction)
     .filter((txn) => !params.biz || params.biz === 'all' || txn.biz === params.biz)
     .reduce<Record<string, number>>((acc, txn) => {
       acc[txn.cat] = (acc[txn.cat] ?? 0) + Math.abs(txn.amount);

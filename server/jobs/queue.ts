@@ -7,6 +7,9 @@ export type JobType =
   | 'gmail.sync'
   | 'gmail.renew-watch'
   | 'receipt.extract'
+  | 'categorization.apply-rule'
+  | 'categorization.scan-uncategorized'
+  | 'categorization.receipt-evidence-review'
   | 'insights.generate'
   | 'export.build';
 

@@ -42,6 +42,10 @@ export interface Transaction {
   amountCents?: number;
   biz: BusinessId;
   cat: string;
+  categoryTaxCode?: string | null;
+  categorySource?: CategorySource;
+  categoryConfidence?: number;
+  categoryEvidence?: Record<string, unknown>;
   receipt: ReceiptStatus;
   /** "Amex •• 4002" — display only; backend owns the canonical account id. */
   src: string;
@@ -53,6 +57,7 @@ export interface Category {
   id?: string;
   businessId?: string | null;
   name: string;
+  taxCode?: string | null;
   amount: number;
   amountCents?: number;
   /** "+12%", "-8%". Pre-formatted by the backend or by lib/calc. */
@@ -116,6 +121,50 @@ export interface Alert {
   title: string;
   detail: string;
   severity: AlertSeverity;
+}
+
+export type CategorySource =
+  | 'manual'
+  | 'user_confirmed_rule'
+  | 'auto_rule'
+  | 'plaid_signal'
+  | 'ai_suggested'
+  | 'receipt_evidence'
+  | 'uncategorized';
+
+export type CategorizationReviewType =
+  | 'learn_rule_prompt'
+  | 'ai_category_suggestion'
+  | 'receipt_category_override'
+  | 'rule_conflict_review';
+
+export type CategorizationReviewStatus = 'open' | 'accepted' | 'dismissed' | 'expired';
+
+export interface CategorizationReviewItem {
+  id: string;
+  businessId: string;
+  biz: BusinessId | 'all';
+  type: CategorizationReviewType;
+  status: CategorizationReviewStatus;
+  title: string;
+  detail: string;
+  payload: {
+    transactionIds?: string[];
+    transactionId?: string;
+    merchant?: string;
+    currentCategoryId?: string | null;
+    currentCategoryName?: string | null;
+    proposedCategoryId?: string | null;
+    proposedCategoryName?: string | null;
+    confidence?: number;
+    evidence?: Record<string, unknown>;
+    matchCounts?: {
+      uncategorized: number;
+      conflicts: number;
+    };
+  };
+  createdAt: string;
+  updatedAt: string;
 }
 
 /** Aggregate the dashboard hero card uses. */

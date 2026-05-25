@@ -1,4 +1,5 @@
 import type { BusinessId, Category } from '@/types/domain';
+import { isSpendTransaction } from '@/lib/calc';
 import { http, useMockApi } from './client';
 import { mapCategory, type ApiCategory } from './mapper';
 import { CATEGORIES, TRANSACTIONS, visibleMockTransactions } from './mocks';
@@ -23,7 +24,7 @@ export function listCategories(params: {
     let rows = [...CATEGORIES];
     if (params.biz && params.biz !== 'all') {
       rows = rows.map((category) => {
-        const txns = visibleTransactions.filter((txn) => txn.biz === params.biz && txn.cat === category.name && txn.amount < 0);
+        const txns = visibleTransactions.filter((txn) => txn.biz === params.biz && txn.cat === category.name && isSpendTransaction(txn));
         return {
           ...category,
           amount: Math.abs(txns.reduce((sum, txn) => sum + txn.amount, 0)),
@@ -32,7 +33,7 @@ export function listCategories(params: {
       }).filter((category) => category.count > 0);
     } else if (params.accountIds?.length) {
       rows = rows.map((category) => {
-        const txns = visibleTransactions.filter((txn) => txn.cat === category.name && txn.amount < 0);
+        const txns = visibleTransactions.filter((txn) => txn.cat === category.name && isSpendTransaction(txn));
         return {
           ...category,
           amount: Math.abs(txns.reduce((sum, txn) => sum + txn.amount, 0)),

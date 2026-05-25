@@ -12,7 +12,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 
 export const userRole = pgEnum('user_role', ['admin']);
 export const connectionKind = pgEnum('connection_kind', ['bank', 'card', 'gmail']);
@@ -26,6 +26,45 @@ export const alertSeverity = pgEnum('alert_severity', ['warn', 'todo', 'info']);
 export const alertStatus = pgEnum('alert_status', ['open', 'dismissed']);
 export const jobStatus = pgEnum('job_status', ['queued', 'running', 'succeeded', 'failed']);
 export const exportStatus = pgEnum('export_status', ['queued', 'running', 'ready', 'failed']);
+
+export type CategorySource =
+  | 'manual'
+  | 'user_confirmed_rule'
+  | 'auto_rule'
+  | 'plaid_signal'
+  | 'ai_suggested'
+  | 'receipt_evidence'
+  | 'uncategorized';
+
+export type CategorizationReviewType =
+  | 'learn_rule_prompt'
+  | 'ai_category_suggestion'
+  | 'receipt_category_override'
+  | 'rule_conflict_review';
+
+export type CategorizationReviewStatus = 'open' | 'accepted' | 'dismissed' | 'expired';
+
+export interface CategorizationReviewPayload {
+  transactionIds?: string[];
+  transactionId?: string;
+  merchant?: string;
+  normalizedMerchant?: string;
+  currentCategoryId?: string | null;
+  currentCategoryName?: string | null;
+  proposedCategoryId?: string | null;
+  proposedCategoryName?: string | null;
+  proposedRule?: {
+    matchKind: string;
+    pattern: string;
+    priority: number;
+  };
+  confidence?: number;
+  evidence?: Record<string, unknown>;
+  matchCounts?: {
+    uncategorized: number;
+    conflicts: number;
+  };
+}
 
 const timestamps = {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -164,6 +203,9 @@ export const transactions = pgTable('transactions', {
   merchant: text('merchant').notNull(),
   amountCents: integer('amount_cents').notNull(),
   categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'set null' }),
+  categorySource: text('category_source').$type<CategorySource>().notNull().default('uncategorized'),
+  categoryConfidence: numeric('category_confidence', { precision: 5, scale: 4 }),
+  categoryEvidence: jsonb('category_evidence').$type<Record<string, unknown>>().notNull().default({}),
   receiptId: uuid('receipt_id').references(() => receipts.id, { onDelete: 'set null' }),
   receiptStatus: receiptStatus('receipt_status').notNull().default('missing'),
   sourceLabel: text('source_label').notNull(),
@@ -176,6 +218,60 @@ export const transactions = pgTable('transactions', {
   plaidTxnIdx: uniqueIndex('transactions_plaid_txn_idx').on(table.plaidTransactionId),
   businessDateIdx: index('transactions_business_date_idx').on(table.businessId, table.date),
   receiptStatusIdx: index('transactions_receipt_status_idx').on(table.receiptStatus),
+}));
+
+export const categorizationFeedback = pgTable('categorization_feedback', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').notNull().references(() => businesses.id, { onDelete: 'cascade' }),
+  transactionId: uuid('transaction_id').references(() => transactions.id, { onDelete: 'set null' }),
+  merchant: text('merchant').notNull(),
+  normalizedMerchant: text('normalized_merchant').notNull(),
+  previousCategoryId: uuid('previous_category_id').references(() => categories.id, { onDelete: 'set null' }),
+  newCategoryId: uuid('new_category_id').notNull().references(() => categories.id, { onDelete: 'cascade' }),
+  source: text('source').notNull(),
+  payload: jsonb('payload').$type<Record<string, unknown>>().notNull().default({}),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  merchantIdx: index('categorization_feedback_merchant_idx').on(table.businessId, table.normalizedMerchant),
+}));
+
+export const categorizationReviewItems = pgTable('categorization_review_items', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').notNull().references(() => businesses.id, { onDelete: 'cascade' }),
+  type: text('type').$type<CategorizationReviewType>().notNull(),
+  status: text('status').$type<CategorizationReviewStatus>().notNull().default('open'),
+  fingerprint: text('fingerprint').notNull(),
+  title: text('title').notNull(),
+  detail: text('detail').notNull(),
+  payload: jsonb('payload').$type<CategorizationReviewPayload>().notNull().default({}),
+  resolvedAction: text('resolved_action'),
+  resolvedByUserId: uuid('resolved_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+  ...timestamps,
+}, (table) => ({
+  statusIdx: index('categorization_review_items_status_idx').on(table.status, table.createdAt),
+  businessStatusIdx: index('categorization_review_items_business_status_idx').on(table.businessId, table.status),
+  dedupeIdx: uniqueIndex('categorization_review_items_dedupe_idx').on(
+    table.businessId,
+    table.type,
+    table.fingerprint,
+  ).where(sql`${table.status} = 'open'`),
+}));
+
+export const transactionCategoryEvents = pgTable('transaction_category_events', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').notNull().references(() => businesses.id, { onDelete: 'cascade' }),
+  transactionId: uuid('transaction_id').notNull().references(() => transactions.id, { onDelete: 'cascade' }),
+  previousCategoryId: uuid('previous_category_id').references(() => categories.id, { onDelete: 'set null' }),
+  newCategoryId: uuid('new_category_id').references(() => categories.id, { onDelete: 'set null' }),
+  source: text('source').$type<CategorySource>().notNull(),
+  confidence: numeric('confidence', { precision: 5, scale: 4 }),
+  evidence: jsonb('evidence').$type<Record<string, unknown>>().notNull().default({}),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  transactionIdx: index('transaction_category_events_transaction_idx').on(table.transactionId, table.createdAt),
 }));
 
 export const receiptMatches = pgTable('receipt_matches', {
@@ -262,6 +358,9 @@ export type Account = typeof accounts.$inferSelect;
 export type Category = typeof categories.$inferSelect;
 export type CategoryRule = typeof categoryRules.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
+export type CategorizationFeedback = typeof categorizationFeedback.$inferSelect;
+export type CategorizationReviewItem = typeof categorizationReviewItems.$inferSelect;
+export type TransactionCategoryEvent = typeof transactionCategoryEvents.$inferSelect;
 export type Receipt = typeof receipts.$inferSelect;
 export type ReceiptMatch = typeof receiptMatches.$inferSelect;
 export type Alert = typeof alerts.$inferSelect;

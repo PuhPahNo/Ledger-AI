@@ -1,4 +1,5 @@
 import type { BusinessId, SpendSummary } from '@/types/domain';
+import { isSpendTransaction } from '@/lib/calc';
 import { http, useMockApi } from './client';
 import { mapSummary, type ApiSpendSummary } from './mapper';
 import { SUMMARY, TRANSACTIONS, visibleMockTransactions } from './mocks';
@@ -25,7 +26,7 @@ export function getSummary(params: {
     return Promise.resolve({
       ...SUMMARY,
       periodLabel: params.label ?? SUMMARY.periodLabel,
-      total: Math.abs(rows.filter((txn) => txn.amount < 0).reduce((sum, txn) => sum + txn.amount, 0)),
+      total: Math.abs(rows.filter(isSpendTransaction).reduce((sum, txn) => sum + txn.amount, 0)),
     });
   }
   const query = new URLSearchParams();

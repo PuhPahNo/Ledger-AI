@@ -34,6 +34,7 @@ const seedCategories = [
   { name: 'Cloud', taxCode: 'other_expense_software', color: '#9fc6e8' },
   { name: 'Equipment', taxCode: 'schedule_c_line_13_review', color: '#ecd95a' },
   { name: 'Entertainment', taxCode: 'non_deductible_review', color: '#3e2a3e' },
+  { name: 'Transfers', taxCode: 'exclude_transfer', color: '#ffffff' },
   { name: 'Revenue', taxCode: 'income', color: '#ffffff' },
   { name: 'Uncategorized', taxCode: 'review_required', color: '#ffffff' },
 ];

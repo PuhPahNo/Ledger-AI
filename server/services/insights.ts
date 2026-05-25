@@ -1,6 +1,6 @@
 import { and, eq, isNull, lt, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { alerts, businesses, receipts, transactions } from '../db/schema.js';
+import { alerts, businesses, categories, receipts, transactions } from '../db/schema.js';
 
 export async function regenerateInsights(): Promise<void> {
   await db.delete(alerts).where(eq(alerts.status, 'open'));
@@ -17,7 +17,12 @@ async function generateMissingReceiptAlerts(): Promise<void> {
       count: sql<number>`count(*)::int`,
     })
     .from(transactions)
-    .where(and(eq(transactions.receiptStatus, 'missing'), lt(transactions.date, sql`current_date - interval '7 days'`)))
+    .leftJoin(categories, eq(transactions.categoryId, categories.id))
+    .where(and(
+      eq(transactions.receiptStatus, 'missing'),
+      lt(transactions.date, sql`current_date - interval '7 days'`),
+      sql`coalesce(${categories.taxCode}, '') NOT LIKE 'exclude_%'`,
+    ))
     .groupBy(transactions.businessId);
 
   for (const row of rows) {
@@ -61,7 +66,9 @@ async function generateDuplicateSubscriptionAlerts(): Promise<void> {
            count(DISTINCT business_id) AS business_count,
            array_agg(DISTINCT merchant) AS merchants
     FROM transactions
+    LEFT JOIN categories ON transactions.category_id = categories.id
     WHERE amount_cents < 0
+      AND coalesce(categories.tax_code, '') NOT LIKE 'exclude_%'
       AND date >= current_date - interval '45 days'
     GROUP BY merchant_key
     HAVING count(DISTINCT business_id) > 1 AND count(*) > 1
@@ -88,8 +95,10 @@ async function generateSpendSpikeAlerts(): Promise<void> {
                date_trunc('month', date)::date AS month,
                abs(sum(amount_cents)) AS spend
         FROM transactions
+        LEFT JOIN categories ON transactions.category_id = categories.id
         WHERE business_id = ${business.id}
           AND amount_cents < 0
+          AND coalesce(categories.tax_code, '') NOT LIKE 'exclude_%'
           AND date >= date_trunc('month', current_date) - interval '1 month'
         GROUP BY category_id, month
       )

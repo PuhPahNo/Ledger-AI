@@ -4,6 +4,7 @@ import { listTransactions } from '@/api';
 import type { Account, Business, Category, ReceiptStatus, Transaction } from '@/types/domain';
 import { fmt$, fmt$k } from '@/lib/format';
 import { accountLabel } from '@/lib/account';
+import { isSpendTransaction } from '@/lib/calc';
 import { cn } from '@/lib/cn';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -86,7 +87,7 @@ export function TransactionExplorer({
 
   const businessById = useMemo(() => new Map(businesses.map((item) => [item.id, item])), [businesses]);
   const accountById = useMemo(() => new Map(accounts.map((item) => [item.id, item])), [accounts]);
-  const outflow = rows.filter((row) => row.amount < 0).reduce((sum, row) => sum + Math.abs(row.amount), 0);
+  const outflow = rows.filter(isSpendTransaction).reduce((sum, row) => sum + Math.abs(row.amount), 0);
   const missing = rows.filter((row) => row.receipt === 'missing').length;
   const visibleAccounts = business === 'all' ? accounts : accounts.filter((account) => account.biz === business);
   const topCategories = categories.slice(0, 12);

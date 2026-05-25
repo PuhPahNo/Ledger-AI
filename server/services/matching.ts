@@ -1,6 +1,7 @@
 import { and, eq, gte, lte, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { receiptMatches, receipts, transactions, type Receipt, type Transaction } from '../db/schema.js';
+import { reviewReceiptCategoryEvidence } from './categorizationFeedback.js';
 
 export interface MatchResult {
   transaction: Transaction;
@@ -39,6 +40,9 @@ export async function matchReceipt(receiptId: string): Promise<MatchResult | nul
 }
 
 export async function attachReceipt(transactionId: string, receiptId: string): Promise<Transaction | null> {
+  const match = await db.query.receiptMatches.findFirst({
+    where: and(eq(receiptMatches.receiptId, receiptId), eq(receiptMatches.transactionId, transactionId)),
+  });
   const [updated] = await db
     .update(transactions)
     .set({ receiptId, receiptStatus: 'matched', updatedAt: new Date() })
@@ -54,6 +58,14 @@ export async function attachReceipt(transactionId: string, receiptId: string): P
     .update(receiptMatches)
     .set({ status: 'accepted', decidedAt: new Date() })
     .where(and(eq(receiptMatches.receiptId, receiptId), eq(receiptMatches.transactionId, transactionId)));
+
+  if (updated) {
+    await reviewReceiptCategoryEvidence({
+      transactionId,
+      receiptId,
+      matchScore: match?.score == null ? null : Number(match.score),
+    });
+  }
 
   return updated ?? null;
 }

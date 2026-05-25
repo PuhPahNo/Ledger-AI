@@ -47,7 +47,11 @@ export function TransactionDrawer({ transaction, businesses, categories, onClose
         categoryId: categoryId || null,
         note: note || null,
       });
-      toast({ variant: 'success', title: 'Transaction saved' });
+      toast({
+        variant: 'success',
+        title: 'Transaction saved',
+        description: categoryId && categoryId !== transaction.categoryId ? 'Learning question added to Notifications.' : undefined,
+      });
       onSaved();
       onClose();
     } catch (error) {

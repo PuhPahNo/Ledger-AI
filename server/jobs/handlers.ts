@@ -4,6 +4,11 @@ import { exportJobs, receipts } from '../db/schema.js';
 import { extractReceipt } from '../services/receiptExtraction.js';
 import { storage } from '../services/storage.js';
 import { matchReceipt } from '../services/matching.js';
+import {
+  resolveCategorizationReviewItem,
+  reviewReceiptCategoryEvidence,
+  scanUncategorizedTransactions,
+} from '../services/categorizationFeedback.js';
 import { syncPlaidConnection } from '../services/plaid.js';
 import { renewGmailWatch, syncGmailConnection } from '../services/gmail.js';
 import { regenerateInsights } from '../services/insights.js';
@@ -27,6 +32,29 @@ export async function handleJob(type: string, payload: Record<string, unknown>):
   }
   if (type === 'receipt.extract') {
     await extractAndMatchReceipt(String(payload.receiptId));
+    return;
+  }
+  if (type === 'categorization.apply-rule') {
+    await resolveCategorizationReviewItem({
+      id: String(payload.reviewItemId),
+      action: 'accept',
+      userId: typeof payload.userId === 'string' ? payload.userId : undefined,
+    });
+    return;
+  }
+  if (type === 'categorization.scan-uncategorized') {
+    await scanUncategorizedTransactions({
+      businessId: typeof payload.businessId === 'string' ? payload.businessId : undefined,
+      limit: typeof payload.limit === 'number' ? payload.limit : undefined,
+    });
+    return;
+  }
+  if (type === 'categorization.receipt-evidence-review') {
+    await reviewReceiptCategoryEvidence({
+      transactionId: String(payload.transactionId),
+      receiptId: String(payload.receiptId),
+      matchScore: typeof payload.matchScore === 'number' ? payload.matchScore : undefined,
+    });
     return;
   }
   if (type === 'insights.generate') {

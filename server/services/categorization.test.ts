@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  categoryNameForKnownSignals,
   categoryMatchesTransactionDirection,
+  isExcludedFromSpendCategory,
   preferredIncomeCategory,
   ruleMatches,
 } from './categorization.js';
@@ -67,5 +69,39 @@ describe('preferredIncomeCategory', () => {
     ];
 
     expect(preferredIncomeCategory(categories, 'business-1')?.id).toBe('business-income');
+  });
+});
+
+describe('categoryNameForKnownSignals', () => {
+  it('maps transfer and credit card payment hints to Transfers', () => {
+    expect(categoryNameForKnownSignals({
+      businessId: 'business-1',
+      merchant: 'Online Payment Thank You',
+      amountCents: -500000,
+      plaidCategory: ['LOAN_PAYMENTS', 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'],
+    })).toBe('Transfers');
+  });
+
+  it('maps common Plaid and merchant hints before AI is needed', () => {
+    expect(categoryNameForKnownSignals({
+      businessId: 'business-1',
+      merchant: 'Google Ads',
+      amountCents: -120000,
+      plaidCategory: ['GENERAL_SERVICES', 'ADVERTISING_AND_MARKETING'],
+    })).toBe('Advertising & Marketing');
+
+    expect(categoryNameForKnownSignals({
+      businessId: 'business-1',
+      merchant: 'Comcast Business',
+      amountCents: -12995,
+      plaidCategory: ['RENT_AND_UTILITIES', 'TELECOMMUNICATIONS'],
+    })).toBe('Utilities');
+  });
+});
+
+describe('isExcludedFromSpendCategory', () => {
+  it('identifies transfer categories that should not count as spend', () => {
+    expect(isExcludedFromSpendCategory({ name: 'Transfers', taxCode: 'exclude_transfer' })).toBe(true);
+    expect(isExcludedFromSpendCategory({ name: 'Software', taxCode: 'other_expense_software' })).toBe(false);
   });
 });

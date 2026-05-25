@@ -6,6 +6,7 @@ const rows: Transaction[] = [
   { id: '1', date: '2026-05-01', dateLabel: 'May 1', merchant: 'A', amount: -10, biz: 'b1', cat: 'Software', receipt: 'missing', src: 'Card', flag: 'no-receipt' },
   { id: '2', date: '2026-05-02', dateLabel: 'May 2', merchant: 'B', amount: -20, biz: 'b1', cat: 'Software', receipt: 'matched', src: 'Card', flag: 'dup-sub' },
   { id: '3', date: '2026-05-03', dateLabel: 'May 3', merchant: 'C', amount: 100, biz: 'b1', cat: 'Revenue', receipt: 'n/a', src: 'Bank' },
+  { id: '4', date: '2026-05-04', dateLabel: 'May 4', merchant: 'Card Payment', amount: -500, biz: 'b1', cat: 'Transfers', categoryTaxCode: 'exclude_transfer', receipt: 'n/a', src: 'Bank' },
 ];
 
 describe('dashboard calculations', () => {
