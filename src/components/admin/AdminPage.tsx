@@ -148,7 +148,7 @@ export function AdminPage({ onViewChange, onLogout, user }: Props) {
                 <BusinessesTab data={data} saveAndRefresh={saveAndRefresh} />
               </TabsContent>
               <TabsContent value="users">
-                <UsersTab data={data} user={user} saveAndRefresh={saveAndRefresh} />
+                <UsersTab data={data} businesses={businesses} user={user} saveAndRefresh={saveAndRefresh} />
               </TabsContent>
               <TabsContent value="categories">
                 <CategoriesTab data={data} businesses={businesses} saveAndRefresh={saveAndRefresh} />

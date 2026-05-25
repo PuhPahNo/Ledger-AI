@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { hashPassword } from '../auth/password.js';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
-import { accounts, auditLogs, businesses, categories, categoryRules, exportJobs, users } from '../db/schema.js';
+import { accounts, auditLogs, businesses, categories, categoryRules, exportJobs, receiptUploaders, users } from '../db/schema.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { canSetAdminActive } from '../services/adminGuards.js';
 import { audit } from '../services/audit.js';
@@ -20,18 +20,30 @@ const userPublicColumns = {
   updatedAt: users.updatedAt,
 };
 
+const receiptUploaderPublicColumns = {
+  id: receiptUploaders.id,
+  businessId: receiptUploaders.businessId,
+  username: receiptUploaders.username,
+  displayName: receiptUploaders.displayName,
+  active: receiptUploaders.active,
+  lastLoginAt: receiptUploaders.lastLoginAt,
+  createdAt: receiptUploaders.createdAt,
+  updatedAt: receiptUploaders.updatedAt,
+};
+
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/overview', async (request) => {
     await requireUser(request);
-    const [businessRows, categoryRows, ruleRows, accountRows, userRows, exportRows] = await Promise.all([
+    const [businessRows, categoryRows, ruleRows, accountRows, userRows, uploaderRows, exportRows] = await Promise.all([
       db.select().from(businesses).orderBy(businesses.name),
       db.select().from(categories).orderBy(categories.name),
       db.select().from(categoryRules).orderBy(categoryRules.priority),
       db.select().from(accounts).orderBy(accounts.name),
       db.select(userPublicColumns).from(users).orderBy(users.username),
+      db.select(receiptUploaderPublicColumns).from(receiptUploaders).orderBy(receiptUploaders.username),
       db.select().from(exportJobs).orderBy(desc(exportJobs.createdAt)).limit(10),
     ]);
-    return { businesses: businessRows, categories: categoryRows, rules: ruleRows, accounts: accountRows, users: userRows, exports: exportRows };
+    return { businesses: businessRows, categories: categoryRows, rules: ruleRows, accounts: accountRows, users: userRows, receiptUploaders: uploaderRows, exports: exportRows };
   });
 
   app.get('/admin/users', async (request) => {
@@ -110,6 +122,76 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       .returning(userPublicColumns);
     await audit(request, actor, body.active ? 'activate_user' : 'deactivate_user', 'user', params.id);
     return row;
+  });
+
+  app.get('/admin/receipt-uploaders', async (request) => {
+    await requireUser(request);
+    return db.select(receiptUploaderPublicColumns).from(receiptUploaders).orderBy(receiptUploaders.username);
+  });
+
+  app.post('/admin/receipt-uploaders', async (request) => {
+    const actor = await requireUser(request);
+    const body = z.object({
+      username: z.string().min(2),
+      displayName: z.string().min(1),
+      password: z.string().min(8),
+      businessId: z.string().uuid().nullable().optional(),
+      active: z.boolean().default(true),
+    }).parse(request.body);
+    const [row] = await db.insert(receiptUploaders).values({
+      username: body.username,
+      displayName: body.displayName,
+      passwordHash: await hashPassword(body.password),
+      businessId: body.businessId ?? null,
+      active: body.active,
+    }).returning(receiptUploaderPublicColumns);
+    await audit(request, actor, 'create_receipt_uploader', 'receipt_uploader', row.id, { username: row.username, businessId: row.businessId });
+    return row;
+  });
+
+  app.patch('/admin/receipt-uploaders/:id', async (request) => {
+    const actor = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({
+      username: z.string().min(2).optional(),
+      displayName: z.string().min(1).optional(),
+      businessId: z.string().uuid().nullable().optional(),
+      active: z.boolean().optional(),
+    }).parse(request.body);
+    const [row] = await db
+      .update(receiptUploaders)
+      .set({ ...body, updatedAt: new Date() })
+      .where(eq(receiptUploaders.id, params.id))
+      .returning(receiptUploaderPublicColumns);
+    if (!row) notFound('Receipt uploader not found');
+    await audit(request, actor, 'update_receipt_uploader', 'receipt_uploader', params.id, body);
+    return row;
+  });
+
+  app.patch('/admin/receipt-uploaders/:id/password', async (request) => {
+    const actor = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({ password: z.string().min(8) }).parse(request.body);
+    const [row] = await db
+      .update(receiptUploaders)
+      .set({ passwordHash: await hashPassword(body.password), updatedAt: new Date() })
+      .where(eq(receiptUploaders.id, params.id))
+      .returning(receiptUploaderPublicColumns);
+    if (!row) notFound('Receipt uploader not found');
+    await audit(request, actor, 'change_receipt_uploader_password', 'receipt_uploader', params.id);
+    return row;
+  });
+
+  app.delete('/admin/receipt-uploaders/:id', async (request) => {
+    const actor = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const [row] = await db
+      .delete(receiptUploaders)
+      .where(eq(receiptUploaders.id, params.id))
+      .returning(receiptUploaderPublicColumns);
+    if (!row) notFound('Receipt uploader not found');
+    await audit(request, actor, 'delete_receipt_uploader', 'receipt_uploader', params.id, { username: row.username });
+    return { ok: true };
   });
 
   app.post('/admin/businesses', async (request) => {

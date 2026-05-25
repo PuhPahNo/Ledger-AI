@@ -4,8 +4,9 @@ import { and, desc, eq, getTableColumns, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
-import { businesses, receiptMatches, receipts } from '../db/schema.js';
+import { businesses, receiptMatches, receiptUploaders, receipts, users } from '../db/schema.js';
 import { enqueue } from '../jobs/queue.js';
+import { sha256Buffer } from '../lib/crypto.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
 import { matchReceipt } from '../services/matching.js';
@@ -29,9 +30,13 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
         ...getTableColumns(receipts),
         businessKey: businesses.key,
         businessName: businesses.name,
+        uploadedByUserName: users.displayName,
+        uploadedByUploaderName: receiptUploaders.displayName,
       })
       .from(receipts)
       .leftJoin(businesses, eq(receipts.businessId, businesses.id))
+      .leftJoin(users, eq(receipts.uploadedByUserId, users.id))
+      .leftJoin(receiptUploaders, eq(receipts.uploadedByUploaderId, receiptUploaders.id))
       .where(and(
         query.status ? eq(receipts.status, query.status) : sql`true`,
         query.unmatched ? isNull(receipts.transactionId) : sql`true`,
@@ -57,9 +62,13 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
         ...getTableColumns(receipts),
         businessKey: businesses.key,
         businessName: businesses.name,
+        uploadedByUserName: users.displayName,
+        uploadedByUploaderName: receiptUploaders.displayName,
       })
       .from(receipts)
       .leftJoin(businesses, eq(receipts.businessId, businesses.id))
+      .leftJoin(users, eq(receipts.uploadedByUserId, users.id))
+      .leftJoin(receiptUploaders, eq(receipts.uploadedByUploaderId, receiptUploaders.id))
       .where(eq(receipts.id, params.id))
       .limit(1);
     if (!receipt) notFound('Receipt not found');
@@ -76,6 +85,7 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
     const buffer = Buffer.concat(chunks);
+    const fileSha256 = sha256Buffer(buffer);
     const safeName = sanitizeFileName(file.filename);
     const rawBusinessId = (file.fields as Record<string, { value?: unknown }>).businessId?.value;
     const businessId = typeof rawBusinessId === 'string' && rawBusinessId.length > 0
@@ -94,6 +104,8 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
       fileKey: key,
       fileName: safeName,
       mimeType: file.mimetype,
+      fileSha256,
+      uploadedByUserId: user.id,
       ocrJson: {},
     }).returning();
     await enqueue('receipt.extract', { receiptId: receipt.id });

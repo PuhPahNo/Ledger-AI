@@ -171,6 +171,29 @@ export const categoryRules = pgTable('category_rules', {
   priorityIdx: index('category_rules_priority_idx').on(table.businessId, table.priority),
 }));
 
+export const receiptUploaders = pgTable('receipt_uploaders', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'set null' }),
+  username: text('username').notNull().unique(),
+  displayName: text('display_name').notNull(),
+  passwordHash: text('password_hash').notNull(),
+  active: boolean('active').notNull().default(true),
+  lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+  ...timestamps,
+}, (table) => ({
+  businessIdx: index('receipt_uploaders_business_idx').on(table.businessId),
+}));
+
+export const receiptUploaderSessions = pgTable('receipt_uploader_sessions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  uploaderId: uuid('uploader_id').notNull().references(() => receiptUploaders.id, { onDelete: 'cascade' }),
+  tokenHash: text('token_hash').notNull().unique(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  uploaderIdx: index('receipt_uploader_sessions_uploader_idx').on(table.uploaderId),
+}));
+
 export const receipts = pgTable('receipts', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'set null' }),
@@ -182,8 +205,11 @@ export const receipts = pgTable('receipts', {
   fileKey: text('file_key'),
   fileName: text('file_name'),
   mimeType: text('mime_type'),
+  fileSha256: text('file_sha256'),
   gmailMessageId: text('gmail_message_id'),
   gmailAttachmentId: text('gmail_attachment_id'),
+  uploadedByUserId: uuid('uploaded_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  uploadedByUploaderId: uuid('uploaded_by_uploader_id').references(() => receiptUploaders.id, { onDelete: 'set null' }),
   transactionId: uuid('transaction_id'),
   confidence: numeric('confidence', { precision: 5, scale: 4 }),
   ocrJson: jsonb('ocr_json').$type<Record<string, unknown>>().notNull().default({}),
@@ -191,6 +217,9 @@ export const receipts = pgTable('receipts', {
 }, (table) => ({
   businessIdx: index('receipts_business_idx').on(table.businessId),
   gmailIdx: uniqueIndex('receipts_gmail_message_attachment_idx').on(table.gmailMessageId, table.gmailAttachmentId),
+  uploadedByUserIdx: index('receipts_uploaded_by_user_idx').on(table.uploadedByUserId),
+  uploadedByUploaderIdx: index('receipts_uploaded_by_uploader_idx').on(table.uploadedByUploaderId),
+  fileSha256Idx: index('receipts_file_sha256_idx').on(table.fileSha256),
 }));
 
 export const transactions = pgTable('transactions', {
@@ -357,6 +386,8 @@ export type Connection = typeof connections.$inferSelect;
 export type Account = typeof accounts.$inferSelect;
 export type Category = typeof categories.$inferSelect;
 export type CategoryRule = typeof categoryRules.$inferSelect;
+export type ReceiptUploader = typeof receiptUploaders.$inferSelect;
+export type ReceiptUploaderSession = typeof receiptUploaderSessions.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
 export type CategorizationFeedback = typeof categorizationFeedback.$inferSelect;
 export type CategorizationReviewItem = typeof categorizationReviewItems.$inferSelect;

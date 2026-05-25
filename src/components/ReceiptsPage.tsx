@@ -404,6 +404,7 @@ function ReceiptRow({
       </div>
       <div className="flex flex-wrap items-center gap-2 text-xs text-dim">
         {receipt.businessName && <span>{receipt.businessName}</span>}
+        {receipt.uploadedBy && <span>Uploaded by {receipt.uploadedBy}</span>}
         {receipt.receiptDate && <span>{receipt.receiptDate}</span>}
         {receipt.totalCents != null && <span className="font-bold text-ink">{fmt$(receipt.totalCents / 100)}</span>}
       </div>

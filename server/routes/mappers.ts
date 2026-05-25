@@ -66,6 +66,8 @@ export function toApiTransaction(row: Transaction & {
 export function toApiReceipt(row: Receipt & {
   businessKey?: string | null;
   businessName?: string | null;
+  uploadedByUserName?: string | null;
+  uploadedByUploaderName?: string | null;
 }) {
   return {
     id: row.id,
@@ -81,6 +83,9 @@ export function toApiReceipt(row: Receipt & {
     mimeType: row.mimeType,
     gmailMessageId: row.gmailMessageId,
     transactionId: row.transactionId,
+    uploadedByUserId: row.uploadedByUserId,
+    uploadedByUploaderId: row.uploadedByUploaderId,
+    uploadedBy: row.uploadedByUploaderName ?? row.uploadedByUserName ?? null,
     confidence: row.confidence == null ? null : Number(row.confidence),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

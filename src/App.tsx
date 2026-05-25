@@ -5,6 +5,7 @@ import { AccountBalancesPage } from './components/AccountBalancesPage';
 import { CashFlowPage } from './components/CashFlowPage';
 import { LoginPage } from './components/auth/LoginPage';
 import { Dashboard } from './components/Dashboard';
+import { EmployeeReceiptUploadPage } from './components/receipt-upload/EmployeeReceiptUploadPage';
 import { OwnerInsightsPage } from './components/OwnerInsightsPage';
 import { AssistantPage } from './components/AssistantPage';
 import { ReceiptsPage } from './components/ReceiptsPage';
@@ -34,6 +35,11 @@ function writeViewHash(view: AppView) {
   }
 }
 
+function isReceiptUploadPortal(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.location.pathname === '/upload' || window.location.pathname === '/receipt-upload';
+}
+
 export default function App() {
   const [user, setUser] = useState<CurrentUser | null>(useMockApi ? {
     id: 'mock-admin',
@@ -52,7 +58,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (useMockApi) return;
+    if (useMockApi || isReceiptUploadPortal()) return;
     getCurrentUser()
       .then((result) => setUser(result.user))
       .finally(() => setChecking(false));
@@ -75,6 +81,7 @@ export default function App() {
     setView('transactions');
   };
 
+  if (isReceiptUploadPortal()) return <EmployeeReceiptUploadPage />;
   if (checking) return null;
   if (!user) return <LoginPage onLogin={setUser} />;
   if (view === 'admin') return <AdminPage user={user} onViewChange={setView} onLogout={handleLogout} />;

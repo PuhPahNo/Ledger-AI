@@ -37,6 +37,9 @@ export interface ReceiptInboxItem {
   mimeType?: string | null;
   gmailMessageId?: string | null;
   transactionId?: string | null;
+  uploadedByUserId?: string | null;
+  uploadedByUploaderId?: string | null;
+  uploadedBy?: string | null;
   confidence?: number | null;
   createdAt: string;
   updatedAt: string;

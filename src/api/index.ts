@@ -5,6 +5,7 @@ export * from './businesses';
 export * from './categories';
 export * from './connections';
 export * from './receipts';
+export * from './receiptUploadPortal';
 export * from './summary';
 export * from './transactions';
 export * from './categorizationReview';

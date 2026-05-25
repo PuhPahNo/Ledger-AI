@@ -4,7 +4,7 @@ import { getEnv } from '../config/env.js';
 import { db } from '../db/client.js';
 import { connections, receipts } from '../db/schema.js';
 import { enqueue } from '../jobs/queue.js';
-import { decryptText, encryptText } from '../lib/crypto.js';
+import { decryptText, encryptText, sha256Buffer } from '../lib/crypto.js';
 import { serviceUnavailable } from '../lib/errors.js';
 import {
   buildEmailBodyCandidate,
@@ -204,6 +204,7 @@ async function insertGmailAttachmentReceipt(input: {
     fileKey: key,
     fileName,
     mimeType: input.attachment.mimeType,
+    fileSha256: sha256Buffer(input.buffer),
     gmailMessageId: input.messageId,
     gmailAttachmentId: input.attachment.attachmentId,
     ocrJson: {
@@ -241,6 +242,7 @@ async function insertGmailBodyReceipt(input: {
     fileKey: key,
     fileName: input.bodyCandidate.filename,
     mimeType: input.bodyCandidate.mimeType,
+    fileSha256: sha256Buffer(buffer),
     gmailMessageId: input.messageId,
     gmailAttachmentId: bodyPartId,
     ocrJson: {

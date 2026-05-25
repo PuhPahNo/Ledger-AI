@@ -16,6 +16,7 @@ import { accountRoutes } from './routes/accounts.js';
 import { dashboardRoutes } from './routes/dashboard.js';
 import { connectionRoutes } from './routes/connections.js';
 import { receiptRoutes } from './routes/receipts.js';
+import { receiptUploadPortalRoutes } from './routes/receiptUploadPortal.js';
 import { adminRoutes } from './routes/admin.js';
 import { assistantRoutes } from './routes/assistant.js';
 import { exportRoutes } from './routes/exports.js';
@@ -57,6 +58,7 @@ export async function buildApp() {
     await dashboardRoutes(api);
     await connectionRoutes(api);
     await receiptRoutes(api);
+    await receiptUploadPortalRoutes(api);
     await adminRoutes(api);
     await assistantRoutes(api);
     await exportRoutes(api);

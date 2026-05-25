@@ -15,10 +15,21 @@ export interface AdminOverview {
   rules: Array<{ id: string; businessId?: string | null; categoryId: string; matchKind: string; pattern: string; priority: number }>;
   accounts: Array<{ id: string; name: string; mask?: string | null; kind: string; enabled: boolean; businessId?: string | null }>;
   users: Array<{ id: string; username: string; displayName: string; active: boolean; totpEnabled: boolean }>;
+  receiptUploaders: Array<{
+    id: string;
+    businessId?: string | null;
+    username: string;
+    displayName: string;
+    active: boolean;
+    lastLoginAt?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+  }>;
   exports: Array<{ id: string; status: string; dateFrom: string; dateTo: string; createdAt: string }>;
 }
 
 export type AdminUser = AdminOverview['users'][number];
+export type AdminReceiptUploader = AdminOverview['receiptUploaders'][number];
 export type AdminBusiness = AdminOverview['businesses'][number];
 export type AdminCategory = AdminOverview['categories'][number];
 export type AdminRule = AdminOverview['rules'][number];
@@ -45,6 +56,7 @@ export function getAdminOverview(): Promise<AdminOverview> {
         enabled: true,
       })),
       users: [{ id: 'mock-admin', username: 'admin', displayName: 'Ledger Admin', active: true, totpEnabled: false }],
+      receiptUploaders: [],
       exports: [],
     });
   }
@@ -81,6 +93,47 @@ export function resetAdminUserPassword(id: string, password: string): Promise<Ad
 export function setAdminUserActive(id: string, active: boolean): Promise<AdminUser> {
   if (useMockApi) return Promise.resolve({ id, username: 'admin', displayName: 'Ledger Admin', active, totpEnabled: false });
   return http<AdminUser>(`/admin/users/${id}/active`, { method: 'PATCH', body: JSON.stringify({ active }) });
+}
+
+export function createReceiptUploader(body: {
+  username: string;
+  displayName: string;
+  password: string;
+  businessId?: string | null;
+  active?: boolean;
+}): Promise<AdminReceiptUploader> {
+  if (useMockApi) return Promise.resolve({
+    id: crypto.randomUUID(),
+    username: body.username,
+    displayName: body.displayName,
+    businessId: body.businessId,
+    active: body.active ?? true,
+  });
+  return http<AdminReceiptUploader>('/admin/receipt-uploaders', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export function updateReceiptUploader(
+  id: string,
+  body: Partial<Pick<AdminReceiptUploader, 'username' | 'displayName' | 'businessId' | 'active'>>,
+): Promise<AdminReceiptUploader> {
+  if (useMockApi) return Promise.resolve({
+    id,
+    username: body.username ?? 'employee',
+    displayName: body.displayName ?? 'Employee',
+    businessId: body.businessId,
+    active: body.active ?? true,
+  });
+  return http<AdminReceiptUploader>(`/admin/receipt-uploaders/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+}
+
+export function resetReceiptUploaderPassword(id: string, password: string): Promise<AdminReceiptUploader> {
+  if (useMockApi) return Promise.resolve({ id, username: 'employee', displayName: 'Employee', active: true });
+  return http<AdminReceiptUploader>(`/admin/receipt-uploaders/${id}/password`, { method: 'PATCH', body: JSON.stringify({ password }) });
+}
+
+export function deleteReceiptUploader(id: string): Promise<{ ok: true }> {
+  if (useMockApi) return Promise.resolve({ ok: true });
+  return http<{ ok: true }>(`/admin/receipt-uploaders/${id}`, { method: 'DELETE' });
 }
 
 export function createBusiness(body: { key?: string; name: string; short: string; color: string; hue?: number; active?: boolean }): Promise<AdminBusiness> {
