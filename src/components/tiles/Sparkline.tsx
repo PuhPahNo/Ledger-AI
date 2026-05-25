@@ -8,11 +8,19 @@ interface Segment {
   cents: number;
 }
 
+interface Series {
+  id: string;
+  label: string;
+  color: string;
+  values: number[];
+}
+
 interface Props {
   points: number[];
   values?: number[];
   labels?: string[];
   segments?: Segment[][];
+  series?: Series[];
   /** Colors for prior and current (highlighted) bars. */
   baseColor: string;
   highlightColor: string;
@@ -26,7 +34,7 @@ interface TipData {
 }
 
 /** Trailing-12 sparkline: matches the design's bar chart at the bottom of the hero tile. */
-export function Sparkline({ points, values = [], labels = [], segments = [], baseColor, highlightColor, height = 96 }: Props) {
+export function Sparkline({ points, values = [], labels = [], segments = [], series = [], baseColor, highlightColor, height = 96 }: Props) {
   const viewWidth = 420;
   const viewHeight = 120;
   const gap = 8;
@@ -46,7 +54,52 @@ export function Sparkline({ points, values = [], labels = [], segments = [], bas
         preserveAspectRatio="none"
         style={{ display: 'block', minWidth: 0 }}
       >
-        {points.map((p, i) => {
+        {series.length > 0 ? points.map((_, i) => {
+          const label = labels[i] ?? `Month ${i + 1}`;
+          const monthValues = series.map((item) => ({
+            ...item,
+            cents: item.values[i] ?? 0,
+          }));
+          const maxCents = Math.max(...series.flatMap((item) => item.values), 1);
+          const totalCents = monthValues.reduce((sum, item) => sum + Math.max(item.cents, 0), 0);
+          const data: TipData = {
+            label,
+            value: totalCents ? formatDollars(totalCents / 100) : '$0',
+            breakdown: monthValues.map((item) => ({
+              label: item.label,
+              value: formatDollars(item.cents / 100),
+              color: item.color,
+            })),
+          };
+          const x = i * (w + gap);
+          const innerGap = 2.5;
+          const seriesWidth = Math.max(3, (w - innerGap * (series.length - 1)) / series.length);
+          return (
+            <g
+              key={i}
+              onMouseEnter={(event) => show(data, event)}
+              onMouseMove={(event) => show(data, event)}
+              style={{ cursor: 'pointer' }}
+            >
+              {monthValues.map((item, seriesIndex) => {
+                const h = Math.max(item.cents > 0 ? 4 : 0, (item.cents / maxCents) * (viewHeight - 12));
+                const y = viewHeight - h;
+                return (
+                  <rect
+                    key={item.id}
+                    x={x + seriesIndex * (seriesWidth + innerGap)}
+                    y={y}
+                    width={seriesWidth}
+                    height={h}
+                    rx={4}
+                    fill={item.color}
+                    opacity={i === last ? 1 : 0.82}
+                  />
+                );
+              })}
+            </g>
+          );
+        }) : points.map((p, i) => {
           const h = Math.max(4, p * (viewHeight - 12));
           const label = labels[i] ?? `Month ${i + 1}`;
           const totalCents = values[i] ?? segments[i]?.reduce((sum, segment) => sum + segment.cents, 0) ?? 0;

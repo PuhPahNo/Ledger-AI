@@ -23,10 +23,15 @@ export function getSummary(params: {
       .filter((txn) => !params.biz || params.biz === 'all' || txn.biz === params.biz)
       .filter((txn) => !params.from || txn.date >= params.from)
       .filter((txn) => !params.to || txn.date <= params.to);
+    const inflow = rows.filter((txn) => txn.amount > 0).reduce((sum, txn) => sum + txn.amount, 0);
+    const outflow = Math.abs(rows.filter(isSpendTransaction).reduce((sum, txn) => sum + txn.amount, 0));
     return Promise.resolve({
       ...SUMMARY,
       periodLabel: params.label ?? SUMMARY.periodLabel,
-      total: Math.abs(rows.filter(isSpendTransaction).reduce((sum, txn) => sum + txn.amount, 0)),
+      total: outflow,
+      inflow,
+      outflow,
+      net: inflow - outflow,
     });
   }
   const query = new URLSearchParams();

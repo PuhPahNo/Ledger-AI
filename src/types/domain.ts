@@ -254,16 +254,42 @@ export interface SpendSummary {
   /** Total outflow for the displayed period, as a positive number. */
   total: number;
   totalCents?: number;
+  inflow?: number;
+  inflowCents?: number;
+  outflow?: number;
+  outflowCents?: number;
+  net?: number;
+  netCents?: number;
   periodLabel: string;        // "MAY"
   deltaPct: number;           // +12 = up 12% vs prior period
+  inflowDeltaPct?: number;
+  outflowDeltaPct?: number;
+  netDeltaPct?: number;
   trailingMonths: number[];   // 0..1 normalized sparkline points
   trailingMonthLabels?: string[];
   trailingMonthCents?: number[];
   trailingMonthBusinessCents?: TrailingMonthBusinessSpend[][];
+  trailingInflowMonthCents?: number[];
+  trailingOutflowMonthCents?: number[];
+  trailingNetMonthCents?: number[];
+  trailingInflowBusinessCents?: TrailingMonthBusinessSpend[][];
+  trailingOutflowBusinessCents?: TrailingMonthBusinessSpend[][];
   lastMonth: number;
   lastMonthCents?: number;
+  lastInflow?: number;
+  lastInflowCents?: number;
+  lastOutflow?: number;
+  lastOutflowCents?: number;
+  lastNet?: number;
+  lastNetCents?: number;
   avgMonth: number;
   avgMonthCents?: number;
+  avgInflow?: number;
+  avgInflowCents?: number;
+  avgOutflow?: number;
+  avgOutflowCents?: number;
+  avgNet?: number;
+  avgNetCents?: number;
 }
 
 export interface TrailingMonthBusinessSpend {

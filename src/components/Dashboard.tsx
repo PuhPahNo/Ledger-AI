@@ -11,7 +11,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Input } from '@/components/ui/input';
 import { HeaderBar } from './HeaderBar';
 import { BusinessStrip } from './BusinessStrip';
-import { SpendHeroTile } from './tiles/SpendHeroTile';
+import { SpendHeroTile, type DashboardFlowMode } from './tiles/SpendHeroTile';
 import { ReceiptDropTile } from './tiles/ReceiptDropTile';
 import { ActivityTile } from './tiles/ActivityTile';
 import { CategoriesTile } from './tiles/CategoriesTile';
@@ -48,6 +48,7 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
   const [anchorMonth, setAnchorMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [timePreset, setTimePreset] = useState<TimePreset>('month');
   const [comparisonBasis, setComparisonBasis] = useState<'month' | 'year'>('month');
+  const [dashboardFlowMode, setDashboardFlowMode] = useState<DashboardFlowMode>('outflow');
   const [refreshKey, setRefreshKey] = useState(0);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [reviewCenterOpen, setReviewCenterOpen] = useState(false);
@@ -186,7 +187,13 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
           className="grid grid-cols-12 gap-3"
           style={{ gridAutoRows: '164px' }}
         >
-          <SpendHeroTile summary={summary} contextLabel={heroContext} detailLabel={heroDetail} />
+          <SpendHeroTile
+            summary={summary}
+            contextLabel={heroContext}
+            detailLabel={heroDetail}
+            mode={dashboardFlowMode}
+            onModeChange={setDashboardFlowMode}
+          />
           <AlertsTile alerts={alerts} />
           <ConnectionsTile connections={connections} onAdd={() => setConnectionsOpen(true)} />
 

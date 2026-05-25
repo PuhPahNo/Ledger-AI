@@ -84,8 +84,17 @@ export const SUMMARY: SpendSummary = {
   trailingMonths: [0.42, 0.38, 0.51, 0.46, 0.55, 0.61, 0.58, 0.66, 0.71, 0.68, 0.78, 0.82],
   trailingMonthLabels: ['Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May'],
   trailingMonthCents: [420000, 380000, 510000, 460000, 550000, 610000, 580000, 660000, 710000, 680000, 780000, 820000],
+  trailingOutflowMonthCents: [420000, 380000, 510000, 460000, 550000, 610000, 580000, 660000, 710000, 680000, 780000, 820000],
+  trailingInflowMonthCents: [690000, 710000, 650000, 780000, 720000, 810000, 760000, 840000, 890000, 1388119, 820000, 960000],
+  trailingNetMonthCents: [270000, 330000, 140000, 320000, 170000, 200000, 180000, 180000, 180000, 708119, 40000, 140000],
   lastMonth: 10213,
+  lastInflow: 8200,
+  lastOutflow: 10213,
+  lastNet: -2013,
   avgMonth: 9418,
+  avgInflow: 8134,
+  avgOutflow: 9418,
+  avgNet: -1284,
 };
 SUMMARY.trailingMonthBusinessCents = SUMMARY.trailingMonthCents?.map((total, index) => {
   const draft = Math.round(total * (0.42 + (index % 3) * 0.04));
@@ -97,4 +106,18 @@ SUMMARY.trailingMonthBusinessCents = SUMMARY.trailingMonthCents?.map((total, ind
     { businessId: 'womens-net', businessName: 'Womens Net', color: BUSINESSES[2].color, cents: womens },
   ];
 });
+SUMMARY.trailingOutflowBusinessCents = SUMMARY.trailingMonthBusinessCents;
+SUMMARY.trailingInflowBusinessCents = SUMMARY.trailingInflowMonthCents?.map((total, index) => {
+  const draft = Math.round(total * (0.58 + (index % 2) * 0.03));
+  const points = Math.round(total * (0.24 + (index % 3) * 0.02));
+  const womens = Math.max(0, total - draft - points);
+  return [
+    { businessId: 'draft-sharks', businessName: 'Draft Sharks', color: BUSINESSES[0].color, cents: draft },
+    { businessId: 'pointsnav', businessName: 'PointsNav', color: BUSINESSES[1].color, cents: points },
+    { businessId: 'womens-net', businessName: 'Womens Net', color: BUSINESSES[2].color, cents: womens },
+  ];
+});
 SUMMARY.total = Math.abs(visibleMockTransactions(TRANSACTIONS).filter(isSpendTransaction).reduce((a, t) => a + t.amount, 0));
+SUMMARY.outflow = SUMMARY.total;
+SUMMARY.inflow = Math.abs(visibleMockTransactions(TRANSACTIONS).filter((txn) => txn.amount > 0).reduce((a, t) => a + t.amount, 0));
+SUMMARY.net = SUMMARY.inflow - SUMMARY.outflow;

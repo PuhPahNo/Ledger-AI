@@ -10,6 +10,27 @@ import { TransactionsPage } from './components/TransactionsPage';
 import type { CurrentUser } from './types/domain';
 import type { AppView, TransactionViewFilters } from './types/navigation';
 
+const views = new Set<AppView>(['dashboard', 'transactions', 'cash-flow', 'balances', 'insights', 'admin']);
+
+function viewFromHash(): AppView {
+  if (typeof window === 'undefined') return 'dashboard';
+  const value = window.location.hash.replace(/^#\/?/, '') as AppView;
+  return views.has(value) ? value : 'dashboard';
+}
+
+function writeViewHash(view: AppView) {
+  if (typeof window === 'undefined') return;
+  const nextHash = view === 'dashboard' ? '' : `#${view}`;
+  const currentHash = window.location.hash;
+  if (currentHash === nextHash || (!currentHash && !nextHash)) return;
+
+  if (nextHash) {
+    window.history.pushState(null, '', nextHash);
+  } else {
+    window.history.pushState(null, '', window.location.pathname + window.location.search);
+  }
+}
+
 export default function App() {
   const [user, setUser] = useState<CurrentUser | null>(useMockApi ? {
     id: 'mock-admin',
@@ -19,14 +40,25 @@ export default function App() {
     totpEnabled: false,
   } : null);
   const [checking, setChecking] = useState(!useMockApi);
-  const [view, setView] = useState<AppView>('dashboard');
+  const [view, setViewState] = useState<AppView>(() => viewFromHash());
   const [transactionFilters, setTransactionFilters] = useState<TransactionViewFilters | undefined>();
+
+  const setView = (nextView: AppView) => {
+    setViewState(nextView);
+    writeViewHash(nextView);
+  };
 
   useEffect(() => {
     if (useMockApi) return;
     getCurrentUser()
       .then((result) => setUser(result.user))
       .finally(() => setChecking(false));
+  }, []);
+
+  useEffect(() => {
+    const syncView = () => setViewState(viewFromHash());
+    window.addEventListener('hashchange', syncView);
+    return () => window.removeEventListener('hashchange', syncView);
   }, []);
 
   const handleLogout = async () => {

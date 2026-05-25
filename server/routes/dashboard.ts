@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
@@ -466,69 +466,65 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
       : null;
     const businessFilter = selectedBusiness ? eq(transactions.businessId, selectedBusiness.id) : sql`true`;
+    const movementFilters = [businessFilter, accountSpendFilter(accountIds)] as const;
     const spendFilters = [
+      ...movementFilters,
       sql`${transactions.amountCents} < 0`,
-      businessFilter,
-      accountSpendFilter(accountIds),
       spendCategoryFilter(),
     ] as const;
-    const [current] = await db.select({
-      totalCents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
-    }).from(transactions)
-      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
-      .leftJoin(categories, eq(transactions.categoryId, categories.id))
-      .where(and(gte(transactions.date, from), lte(transactions.date, to), ...spendFilters));
-    const [prior] = await db.select({
-      totalCents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
-    }).from(transactions)
-      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
-      .leftJoin(categories, eq(transactions.categoryId, categories.id))
-      .where(and(gte(transactions.date, priorFrom), lte(transactions.date, priorTo), ...spendFilters));
+    const inflowFilters = [
+      ...movementFilters,
+      sql`${transactions.amountCents} > 0`,
+    ] as const;
+    const current = await movementSummary(from, to, spendFilters, inflowFilters);
+    const prior = await movementSummary(priorFrom, priorTo, spendFilters, inflowFilters);
     const trailingRows = await Promise.all(labels.map(async ({ from: monthFrom, to: monthTo }) => {
-      const [row] = await db.select({
-        totalCents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
-      }).from(transactions)
-        .leftJoin(accounts, eq(transactions.accountId, accounts.id))
-        .leftJoin(categories, eq(transactions.categoryId, categories.id))
-        .where(and(gte(transactions.date, monthFrom), lte(transactions.date, monthTo), ...spendFilters));
-      return row?.totalCents ?? 0;
+      return movementSummary(monthFrom, monthTo, spendFilters, inflowFilters);
     }));
-    const trailingBusinessRows = await Promise.all(labels.map(async ({ from: monthFrom, to: monthTo }) => {
-      const rows = await db.select({
-        businessId: businesses.key,
-        businessName: businesses.name,
-        color: businesses.color,
-        cents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
-      }).from(transactions)
-        .innerJoin(businesses, eq(transactions.businessId, businesses.id))
-        .leftJoin(accounts, eq(transactions.accountId, accounts.id))
-        .leftJoin(categories, eq(transactions.categoryId, categories.id))
-        .where(and(gte(transactions.date, monthFrom), lte(transactions.date, monthTo), ...spendFilters))
-        .groupBy(businesses.key, businesses.name, businesses.color);
-      return rows
-        .map((row) => ({
-          businessId: row.businessId,
-          businessName: row.businessName,
-          color: row.color,
-          cents: Number(row.cents ?? 0),
-        }))
-        .filter((row) => row.cents > 0)
-        .sort((a, b) => b.cents - a.cents);
-    }));
-    const max = Math.max(...trailingRows, 1);
-    const avg = Math.round(trailingRows.reduce((sum, value) => sum + value, 0) / Math.max(trailingRows.length, 1));
-    const currentTotal = current?.totalCents ?? 0;
-    const priorTotal = prior?.totalCents ?? 0;
+    const [trailingOutflowBusinessRows, trailingInflowBusinessRows] = await Promise.all([
+      Promise.all(labels.map(({ from: monthFrom, to: monthTo }) => (
+        movementBusinessBreakdown(monthFrom, monthTo, spendFilters, sql`abs(sum(${transactions.amountCents}))`)
+      ))),
+      Promise.all(labels.map(({ from: monthFrom, to: monthTo }) => (
+        movementBusinessBreakdown(monthFrom, monthTo, inflowFilters, sql`sum(${transactions.amountCents})`)
+      ))),
+    ]);
+    const trailingOutflowRows = trailingRows.map((row) => row.outflowCents);
+    const trailingInflowRows = trailingRows.map((row) => row.inflowCents);
+    const trailingNetRows = trailingRows.map((row) => row.netCents);
+    const max = Math.max(...trailingOutflowRows, 1);
+    const avgOutflow = averageCents(trailingOutflowRows);
+    const avgInflow = averageCents(trailingInflowRows);
+    const avgNet = averageCents(trailingNetRows);
+    const currentTotal = current.outflowCents;
+    const priorTotal = prior.outflowCents;
     return {
       totalCents: currentTotal,
+      inflowCents: current.inflowCents,
+      outflowCents: current.outflowCents,
+      netCents: current.netCents,
       periodLabel: query.label ?? label,
       deltaPct: priorTotal > 0 ? Math.round(((currentTotal - priorTotal) / priorTotal) * 100) : 0,
-      trailingMonths: trailingRows.map((value) => Number((value / max).toFixed(3))),
-      trailingMonthCents: trailingRows.map((value) => Number(value ?? 0)),
-      trailingMonthBusinessCents: trailingBusinessRows,
+      inflowDeltaPct: prior.inflowCents > 0 ? Math.round(((current.inflowCents - prior.inflowCents) / prior.inflowCents) * 100) : 0,
+      outflowDeltaPct: priorTotal > 0 ? Math.round(((currentTotal - priorTotal) / priorTotal) * 100) : 0,
+      netDeltaPct: prior.netCents !== 0 ? Math.round(((current.netCents - prior.netCents) / Math.abs(prior.netCents)) * 100) : 0,
+      trailingMonths: trailingOutflowRows.map((value) => Number((value / max).toFixed(3))),
+      trailingMonthCents: trailingOutflowRows.map((value) => Number(value ?? 0)),
+      trailingMonthBusinessCents: trailingOutflowBusinessRows,
+      trailingInflowMonthCents: trailingInflowRows,
+      trailingOutflowMonthCents: trailingOutflowRows,
+      trailingNetMonthCents: trailingNetRows,
+      trailingInflowBusinessCents: trailingInflowBusinessRows,
+      trailingOutflowBusinessCents: trailingOutflowBusinessRows,
       trailingMonthLabels: labels.map((item) => item.label),
-      lastMonthCents: priorTotal,
-      avgMonthCents: avg,
+      lastMonthCents: prior.outflowCents,
+      lastInflowCents: prior.inflowCents,
+      lastOutflowCents: prior.outflowCents,
+      lastNetCents: prior.netCents,
+      avgMonthCents: avgOutflow,
+      avgInflowCents: avgInflow,
+      avgOutflowCents: avgOutflow,
+      avgNetCents: avgNet,
     };
   });
 
@@ -707,6 +703,73 @@ function normalizeInsightMetric(row?: { count?: number | null; cents?: number | 
     count: Number(row?.count ?? 0),
     cents: Number(row?.cents ?? 0),
   };
+}
+
+interface MovementSummaryCents {
+  inflowCents: number;
+  outflowCents: number;
+  netCents: number;
+}
+
+async function movementSummary(
+  from: string,
+  to: string,
+  spendFilters: readonly SQL[],
+  inflowFilters: readonly SQL[],
+): Promise<MovementSummaryCents> {
+  const [[outflow], [inflow]] = await Promise.all([
+    db.select({
+      cents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
+    }).from(transactions)
+      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .where(and(gte(transactions.date, from), lte(transactions.date, to), ...spendFilters)),
+    db.select({
+      cents: sql<number>`coalesce(sum(${transactions.amountCents}), 0)::int`,
+    }).from(transactions)
+      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .where(and(gte(transactions.date, from), lte(transactions.date, to), ...inflowFilters)),
+  ]);
+  const inflowCents = Number(inflow?.cents ?? 0);
+  const outflowCents = Number(outflow?.cents ?? 0);
+  return {
+    inflowCents,
+    outflowCents,
+    netCents: inflowCents - outflowCents,
+  };
+}
+
+async function movementBusinessBreakdown(
+  from: string,
+  to: string,
+  filters: readonly SQL[],
+  aggregate: SQL,
+): Promise<Array<{ businessId: string; businessName: string; color: string; cents: number }>> {
+  const rows = await db.select({
+    businessId: businesses.key,
+    businessName: businesses.name,
+    color: businesses.color,
+    cents: sql<number>`coalesce(${aggregate}, 0)::int`,
+  }).from(transactions)
+    .innerJoin(businesses, eq(transactions.businessId, businesses.id))
+    .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+    .leftJoin(categories, eq(transactions.categoryId, categories.id))
+    .where(and(gte(transactions.date, from), lte(transactions.date, to), ...filters))
+    .groupBy(businesses.key, businesses.name, businesses.color);
+  return rows
+    .map((row) => ({
+      businessId: row.businessId,
+      businessName: row.businessName,
+      color: row.color,
+      cents: Number(row.cents ?? 0),
+    }))
+    .filter((row) => row.cents > 0)
+    .sort((a, b) => b.cents - a.cents);
+}
+
+function averageCents(values: number[]): number {
+  return Math.round(values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1));
 }
 
 async function cashFlowTotals(
