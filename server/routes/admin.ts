@@ -132,17 +132,18 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.post('/admin/receipt-uploaders', async (request) => {
     const actor = await requireUser(request);
     const body = z.object({
-      username: z.string().min(2),
-      displayName: z.string().min(1),
+      username: z.string().trim().min(2),
+      displayName: z.string().trim().min(1),
       password: z.string().min(8),
-      businessId: z.string().uuid().nullable().optional(),
+      businessId: z.string().nullable().optional(),
       active: z.boolean().default(true),
     }).parse(request.body);
+    const businessId = await resolveBusinessId(body.businessId);
     const [row] = await db.insert(receiptUploaders).values({
       username: body.username,
       displayName: body.displayName,
       passwordHash: await hashPassword(body.password),
-      businessId: body.businessId ?? null,
+      businessId,
       active: body.active,
     }).returning(receiptUploaderPublicColumns);
     await audit(request, actor, 'create_receipt_uploader', 'receipt_uploader', row.id, { username: row.username, businessId: row.businessId });
@@ -153,14 +154,19 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const actor = await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({
-      username: z.string().min(2).optional(),
-      displayName: z.string().min(1).optional(),
-      businessId: z.string().uuid().nullable().optional(),
+      username: z.string().trim().min(2).optional(),
+      displayName: z.string().trim().min(1).optional(),
+      businessId: z.string().nullable().optional(),
       active: z.boolean().optional(),
     }).parse(request.body);
+    const values = {
+      ...body,
+      businessId: body.businessId === undefined ? undefined : await resolveBusinessId(body.businessId),
+      updatedAt: new Date(),
+    };
     const [row] = await db
       .update(receiptUploaders)
-      .set({ ...body, updatedAt: new Date() })
+      .set(values)
       .where(eq(receiptUploaders.id, params.id))
       .returning(receiptUploaderPublicColumns);
     if (!row) notFound('Receipt uploader not found');
@@ -305,4 +311,13 @@ function slugify(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+async function resolveBusinessId(value: string | null | undefined): Promise<string | null> {
+  if (!value || value === 'global') return null;
+  const uuid = z.string().uuid().safeParse(value);
+  if (uuid.success) return uuid.data;
+  const business = await db.query.businesses.findFirst({ where: eq(businesses.key, value) });
+  if (!business) badRequest('Choose a valid business for this uploader.');
+  return business.id;
 }

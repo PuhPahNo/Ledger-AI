@@ -31,6 +31,30 @@ export function UsersTab({ data, businesses, user, saveAndRefresh }: Props) {
   const { toast } = useToast();
   const [form, setForm] = useState({ username: '', displayName: '', password: '' });
   const [uploaderForm, setUploaderForm] = useState({ username: '', displayName: '', password: '', businessId: '' });
+  const canCreateUploader = uploaderForm.username.trim().length >= 2
+    && uploaderForm.displayName.trim().length > 0
+    && uploaderForm.password.length >= 8;
+
+  const createUploader = async () => {
+    if (!canCreateUploader) {
+      toast({
+        variant: 'destructive',
+        title: 'Uploader details incomplete',
+        description: 'Use a username, display name, and password with at least 8 characters.',
+      });
+      return;
+    }
+    const saved = await saveAndRefresh(
+      () => createReceiptUploader({
+        ...uploaderForm,
+        username: uploaderForm.username.trim(),
+        displayName: uploaderForm.displayName.trim(),
+        businessId: uploaderForm.businessId || null,
+      }),
+      'Uploader created.',
+    );
+    if (saved) setUploaderForm({ username: '', displayName: '', password: '', businessId: '' });
+  };
 
   return (
     <div className="grid gap-4 lg:grid-cols-12">
@@ -61,12 +85,8 @@ export function UsersTab({ data, businesses, user, saveAndRefresh }: Props) {
             <FieldBusiness label="Business" value={uploaderForm.businessId} businesses={businesses} onChange={(businessId) => setUploaderForm({ ...uploaderForm, businessId })} />
             <FieldText label="Password" type="password" value={uploaderForm.password} onChange={(password) => setUploaderForm({ ...uploaderForm, password })} placeholder="8+ characters" />
             <Button
-              onClick={() =>
-                saveAndRefresh(
-                  () => createReceiptUploader({ ...uploaderForm, businessId: uploaderForm.businessId || null }),
-                  'Uploader created.',
-                )
-              }
+              onClick={createUploader}
+              disabled={!canCreateUploader}
             >
               <UserPlus className="h-3.5 w-3.5" /> Create uploader
             </Button>

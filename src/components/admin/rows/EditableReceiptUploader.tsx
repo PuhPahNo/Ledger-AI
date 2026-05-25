@@ -80,7 +80,7 @@ export function EditableReceiptUploader({ uploader, businesses, onSave, onPasswo
                 onSave({
                   username: draft.username,
                   displayName: draft.displayName,
-                  businessId: draft.businessId ?? null,
+                  businessId: draft.businessId || null,
                   active: draft.active,
                 }).then((ok) => ok && setOpen(false))
               }
