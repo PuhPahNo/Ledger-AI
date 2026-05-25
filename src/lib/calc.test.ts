@@ -20,6 +20,7 @@ describe('dashboard calculations', () => {
       rows: 5,
       inflowCents: 10000,
       outflowCents: 153000,
+      operatingInflowCents: 10000,
       operatingOutflowCents: 3000,
       transferCents: 50000,
       netCents: -143000,

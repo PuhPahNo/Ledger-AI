@@ -82,10 +82,17 @@ export type TransactionDirection = 'all' | 'inflow' | 'outflow' | 'operating-out
 
 export interface TransactionRollup {
   rows: number;
+  /** Gross positive cash (includes incoming transfers). */
   inflowCents: number;
+  /** Gross negative cash (includes outgoing transfers). */
   outflowCents: number;
+  /** Inflow excluding incoming transfers — real money in. */
+  operatingInflowCents: number;
+  /** Outflow excluding outgoing transfers — real money out. */
   operatingOutflowCents: number;
+  /** Total |transfer movement| in both directions. */
   transferCents: number;
+  /** Sum of all amounts (positive - negative, including transfers). */
   netCents: number;
   missingReceipts: number;
 }

@@ -35,17 +35,23 @@ export function transactionMatchesDirection(txn: Transaction, direction: Transac
 export function summarizeTransactions(txns: Transaction[]): TransactionRollup {
   return txns.reduce<TransactionRollup>((summary, txn) => {
     summary.rows += 1;
-    if (txn.amount > 0) summary.inflowCents += Math.round(txn.amount * 100);
-    if (txn.amount < 0) summary.outflowCents += Math.abs(Math.round(txn.amount * 100));
-    if (isSpendTransaction(txn)) summary.operatingOutflowCents += Math.abs(Math.round(txn.amount * 100));
-    if (isTransferTransaction(txn)) summary.transferCents += Math.abs(Math.round(txn.amount * 100));
-    summary.netCents += Math.round(txn.amount * 100);
+    const cents = Math.round(txn.amount * 100);
+    const transfer = isTransferTransaction(txn);
+    if (cents > 0) summary.inflowCents += cents;
+    if (cents < 0) summary.outflowCents += Math.abs(cents);
+    // Operating inflow = positive cash that isn't an internal transfer (revenue counts).
+    if (cents > 0 && !transfer) summary.operatingInflowCents += cents;
+    // Operating outflow = real spend (excludes transfers AND mis-signed income/refunds).
+    if (isSpendTransaction(txn)) summary.operatingOutflowCents += Math.abs(cents);
+    if (transfer) summary.transferCents += Math.abs(cents);
+    summary.netCents += cents;
     if (txn.receipt === 'missing') summary.missingReceipts += 1;
     return summary;
   }, {
     rows: 0,
     inflowCents: 0,
     outflowCents: 0,
+    operatingInflowCents: 0,
     operatingOutflowCents: 0,
     transferCents: 0,
     netCents: 0,

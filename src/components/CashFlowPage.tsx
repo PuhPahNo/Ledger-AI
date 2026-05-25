@@ -423,7 +423,7 @@ function ChartLegend({ periods }: { periods: CashFlowPeriod[] }) {
   );
 }
 
-function CashFlowChart({ periods, height = 240 }: { periods: CashFlowPeriod[]; height?: number }) {
+function CashFlowChart({ periods, height = 260 }: { periods: CashFlowPeriod[]; height?: number }) {
   if (periods.length === 0) {
     return (
       <div className="flex items-center justify-center text-sm text-dim" style={{ height }}>
@@ -431,96 +431,149 @@ function CashFlowChart({ periods, height = 240 }: { periods: CashFlowPeriod[]; h
       </div>
     );
   }
-  const max = Math.max(...periods.map((p) => Math.max(p.outflowCents, p.inflowCents)), 1) * 1.05;
-  const netMax = Math.max(...periods.map((p) => Math.abs(p.netCents)), 1);
-  const barW = 100 / (periods.length * 2);
 
-  const netPts = periods.map((period, index) => {
-    const x = (index + 0.5) * (100 / periods.length);
-    const y = 50 - (period.netCents / netMax) * 40;
-    return [x, y] as const;
-  });
-  const netPath = netPts.map(([x, y], index) => (index === 0 ? `M${x},${y}` : `L${x},${y}`)).join(' ');
+  // The chart consists of:
+  //   1. A column per period with a stacked "inflow above midline / outflow below midline" bar.
+  //   2. A net line overlay drawn with SVG (preserveAspectRatio keeps the line undistorted because
+  //      the path uses the same coordinate system as the column positions).
+  //   3. Period labels under the columns.
+  //
+  // Bars are HTML/CSS so widths stay crisp regardless of container size.
+
+  const max = Math.max(...periods.map((p) => Math.max(p.outflowCents, p.inflowCents)), 1);
+  const netMax = Math.max(...periods.map((p) => Math.abs(p.netCents)), 1);
+  const chartArea = height - 24; // reserve room for x-axis labels
+  const half = chartArea / 2;
 
   return (
-    <div className="relative" style={{ height }}>
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
-        <line x1="0" y1="50" x2="100" y2="50" stroke="hsl(45 14% 7% / 0.15)" strokeWidth="0.15" />
-        {[10, 30, 70, 90].map((y) => (
-          <line key={y} x1="0" y1={y} x2="100" y2={y} stroke="hsl(45 14% 7% / 0.04)" strokeWidth="0.1" />
-        ))}
-
-        {periods.map((period, index) => {
-          const cx = (index + 0.5) * (100 / periods.length);
-          // Outflow stack down (negative direction)
-          let outAcc = 0;
-          // Inflow stack up
-          let inAcc = 0;
-          return (
-            <g key={period.label}>
-              {period.businessBreakdown.map((row) => {
-                const outH = period.outflowCents ? (row.outflowCents / max) * 45 : 0;
-                const inH = period.inflowCents ? (row.inflowCents / max) * 45 : 0;
-                const elements: JSX.Element[] = [];
-                if (outH > 0) {
-                  const y = 50 + outAcc;
-                  elements.push(
-                    <rect
-                      key={`out-${row.businessId}`}
-                      x={cx - barW * 0.7}
-                      y={y}
-                      width={barW * 1.4}
-                      height={outH}
-                      fill={row.color}
-                      opacity="0.85"
-                    />,
-                  );
-                  outAcc += outH;
-                }
-                if (inH > 0) {
-                  inAcc += inH;
-                  const y = 50 - inAcc;
-                  elements.push(
-                    <rect
-                      key={`in-${row.businessId}`}
-                      x={cx - barW * 0.7}
-                      y={y}
-                      width={barW * 1.4}
-                      height={inH}
-                      fill={row.color}
-                      opacity="0.55"
-                    />,
-                  );
-                }
-                return elements;
-              })}
-            </g>
-          );
-        })}
-
-        <path d={netPath} fill="none" stroke="hsl(45 14% 7%)" strokeWidth="0.4" strokeLinejoin="round" />
-        {netPts.map(([x, y], index) => (
-          <circle
-            key={index}
-            cx={x}
-            cy={y}
-            r="0.7"
-            fill="hsl(var(--color-paper))"
-            stroke="hsl(45 14% 7%)"
-            strokeWidth="0.3"
+    <div className="relative w-full" style={{ height }}>
+      {/* Gridlines (HTML so they scale cleanly) */}
+      <div className="pointer-events-none absolute inset-x-0" style={{ top: 0, height: chartArea }}>
+        {[0, 0.25, 0.5, 0.75, 1].map((position) => (
+          <div
+            key={position}
+            className="absolute inset-x-0 border-t border-ink2/5"
+            style={{ top: `${position * 100}%` }}
           />
         ))}
-      </svg>
-      <div className="absolute inset-x-0 bottom-0 flex justify-around pt-2">
+        <div
+          className="absolute inset-x-0 border-t border-ink2/20"
+          style={{ top: '50%' }}
+        />
+      </div>
+
+      {/* Columns */}
+      <div className="absolute inset-x-0 flex" style={{ top: 0, height: chartArea }}>
+        {periods.map((period) => (
+          <div key={period.label} className="relative flex flex-1 items-center justify-center">
+            {/* Inflow (sits above the midline) */}
+            <div
+              className="absolute flex w-[60%] max-w-[40px] flex-col-reverse overflow-hidden rounded-sm"
+              style={{
+                bottom: '50%',
+                height: `${(period.inflowCents / max) * half}px`,
+              }}
+            >
+              {period.businessBreakdown.map((row) => {
+                const portion = period.inflowCents ? row.inflowCents / period.inflowCents : 0;
+                if (!row.inflowCents) return null;
+                return (
+                  <div
+                    key={`in-${row.businessId}`}
+                    style={{ height: `${portion * 100}%`, background: row.color, opacity: 0.6 }}
+                  />
+                );
+              })}
+            </div>
+            {/* Outflow (drops below the midline) */}
+            <div
+              className="absolute flex w-[60%] max-w-[40px] flex-col overflow-hidden rounded-sm"
+              style={{
+                top: '50%',
+                height: `${(period.outflowCents / max) * half}px`,
+              }}
+            >
+              {period.businessBreakdown.map((row) => {
+                const portion = period.outflowCents ? row.outflowCents / period.outflowCents : 0;
+                if (!row.outflowCents) return null;
+                return (
+                  <div
+                    key={`out-${row.businessId}`}
+                    style={{ height: `${portion * 100}%`, background: row.color, opacity: 0.9 }}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Net line overlay — SVG with preserveAspectRatio="none" is OK here because the line is
+          1D (no shapes that would distort). Use a viewBox that matches our column logic. */}
+      <NetLineOverlay periods={periods} netMax={netMax} height={chartArea} half={half} />
+
+      {/* x-axis labels */}
+      <div className="absolute inset-x-0 bottom-0 flex">
         {periods.map((period) => (
           <div
             key={period.label}
-            className="text-center font-mono text-[10px] font-medium uppercase tracking-wider text-dim"
+            className="flex-1 text-center font-mono text-[10px] font-medium uppercase tracking-wider text-dim"
           >
             {period.label}
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function NetLineOverlay({
+  periods,
+  netMax,
+  height,
+  half,
+}: {
+  periods: CashFlowPeriod[];
+  netMax: number;
+  height: number;
+  half: number;
+}) {
+  if (periods.length < 2) return null;
+  const points = periods.map((period, index) => {
+    const x = ((index + 0.5) / periods.length) * 100;
+    // Map net to a position around the midline; clamp to chart area.
+    const offset = (period.netCents / netMax) * (half * 0.85);
+    const yPx = half - offset;
+    const yPct = (yPx / height) * 100;
+    return { x, y: yPct };
+  });
+  const path = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
+  return (
+    <div className="pointer-events-none absolute inset-x-0" style={{ top: 0, height }}>
+      {/* Line — SVG with non-scaling-stroke keeps the stroke crisp despite the stretched viewBox. */}
+      <svg
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        className="absolute inset-0 h-full w-full"
+      >
+        <path
+          d={path}
+          fill="none"
+          stroke="hsl(45 14% 7%)"
+          strokeWidth="1.5"
+          vectorEffect="non-scaling-stroke"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+      </svg>
+      {/* Dots — HTML divs positioned in percentage space so they stay perfectly round. */}
+      {points.map((p, i) => (
+        <div
+          key={i}
+          className="absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full border-[1.5px] border-ink bg-paper"
+          style={{ left: `${p.x}%`, top: `${p.y}%` }}
+        />
+      ))}
     </div>
   );
 }

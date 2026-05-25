@@ -287,7 +287,8 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
             </div>
             <h1 className="font-display text-3xl font-bold tracking-tight">{activeViewLabel}</h1>
             <div className="mt-1 text-sm text-dim">
-              {rollup.rows} txns · {fmt$(rollup.outflowCents / 100)} out / {fmt$(rollup.inflowCents / 100)} in
+              {rollup.rows} txns · {fmt$(rollup.operatingOutflowCents / 100)} out / {fmt$(rollup.operatingInflowCents / 100)} in
+              {rollup.transferCents > 0 && ` · ${fmt$(rollup.transferCents / 100)} transfers (excluded)`}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -453,20 +454,21 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
             <div className="mb-3 grid gap-3 sm:grid-cols-3">
               <Metric
                 label="Inflow"
-                value={fmt$(rollup.inflowCents / 100)}
+                value={fmt$(rollup.operatingInflowCents / 100)}
                 tone="positive"
+                detail={rollup.transferCents > 0 ? 'Excludes transfers' : 'Cash received'}
                 icon={<ArrowDownRight className="h-3.5 w-3.5" />}
               />
               <Metric
                 label="Outflow"
-                value={fmt$(rollup.outflowCents / 100)}
-                detail={rollup.transferCents ? `${fmt$(rollup.operatingOutflowCents / 100)} operating · ${fmt$(rollup.transferCents / 100)} transfers` : 'Operating spend'}
+                value={fmt$(rollup.operatingOutflowCents / 100)}
+                detail={rollup.transferCents > 0 ? 'Excludes transfers' : 'Operating spend'}
                 icon={<ArrowUpRight className="h-3.5 w-3.5 text-dim" />}
               />
               <Metric
                 label="Net"
-                value={fmt$(rollup.netCents / 100)}
-                tone={rollup.netCents >= 0 ? 'positive' : 'warning'}
+                value={fmt$((rollup.operatingInflowCents - rollup.operatingOutflowCents) / 100)}
+                tone={rollup.operatingInflowCents - rollup.operatingOutflowCents >= 0 ? 'positive' : 'warning'}
                 detail={rollup.missingReceipts ? `${rollup.missingReceipts} missing receipts` : 'All receipts matched'}
               />
             </div>
@@ -804,6 +806,7 @@ const emptyRollup: TransactionRollup = {
   rows: 0,
   inflowCents: 0,
   outflowCents: 0,
+  operatingInflowCents: 0,
   operatingOutflowCents: 0,
   transferCents: 0,
   netCents: 0,
