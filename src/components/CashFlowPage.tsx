@@ -1,22 +1,30 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { BarChart3, CalendarDays, ChevronDown, ChevronUp } from 'lucide-react';
-import { getCashFlow, listAccounts, listBusinesses, uploadReceipt } from '@/api';
-import type { Account, Business, CashFlowGroup, CashFlowPeriod, CashFlowSummary, CurrentUser } from '@/types/domain';
+import {
+  ChevronDown,
+  ChevronUp,
+  Download,
+  TrendingDown,
+  TrendingUp,
+} from 'lucide-react';
+import { getCashFlow, listAccounts, listBusinesses, listCategories, uploadReceipt } from '@/api';
+import type {
+  Account,
+  Business,
+  CashFlowPeriod,
+  CashFlowSummary,
+  Category,
+  CurrentUser,
+} from '@/types/domain';
 import type { AppView } from '@/types/navigation';
 import { accountLabel } from '@/lib/account';
-import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
-import { Badge } from '@/components/ui/badge';
+import { AppShell } from './AppShell';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/cn';
-import { HeaderBar } from './HeaderBar';
 
 interface Props {
   user?: CurrentUser;
@@ -50,11 +58,11 @@ export function CashFlowPage({ user, onViewChange, onLogout }: Props) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [business, setBusiness] = useState('all');
   const [accountIds, setAccountIds] = useState<string[]>([]);
-  const [group, setGroup] = useState<CashFlowGroup>('month');
   const [includeTransfers, setIncludeTransfers] = useState(false);
   const [from, setFrom] = useState(defaultFrom());
   const [to, setTo] = useState(today());
   const [summary, setSummary] = useState<CashFlowSummary>(emptyCashFlow);
+  const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
@@ -74,7 +82,7 @@ export function CashFlowPage({ user, onViewChange, onLogout }: Props) {
     getCashFlow({
       from,
       to,
-      group,
+      group: 'month',
       includeTransfers,
       biz: business,
       accountIds,
@@ -82,15 +90,31 @@ export function CashFlowPage({ user, onViewChange, onLogout }: Props) {
       .then(setSummary)
       .catch((loadError: Error) => setError(loadError.message))
       .finally(() => setLoading(false));
-  }, [accountIds, business, from, group, includeTransfers, refreshKey, to]);
+  }, [accountIds, business, from, includeTransfers, refreshKey, to]);
 
-  const visibleAccounts = business === 'all' ? accounts : accounts.filter((account) => account.biz === business);
+  // Pull category mix for the currently selected month (latest period in the response).
+  useEffect(() => {
+    const latest = summary.periods.at(-1);
+    if (!latest) {
+      setCategories([]);
+      return;
+    }
+    listCategories({
+      from: latest.from,
+      to: latest.to,
+      biz: business,
+      accountIds,
+    })
+      .then((rows) =>
+        [...rows]
+          .sort((a, b) => (b.amountCents ?? Math.round(b.amount * 100)) - (a.amountCents ?? Math.round(a.amount * 100)))
+          .slice(0, 8),
+      )
+      .then(setCategories)
+      .catch(() => setCategories([]));
+  }, [accountIds, business, summary.periods]);
+
   const selectedBusinessDbId = business === 'all' ? undefined : businesses.find((item) => item.id === business)?.dbId;
-  const maxInflow = Math.max(...summary.periods.map((period) => period.inflowCents), 1);
-  const maxOutflow = Math.max(...summary.periods.map((period) => period.outflowCents), 1);
-  const displayPeriods = [...summary.periods].reverse();
-  const selectedBusinessName = business === 'all' ? 'All businesses' : businesses.find((item) => item.id === business)?.name ?? business;
-  const modeLabel = includeTransfers ? 'All cash movement' : 'Operating cash flow';
 
   const handleUpload = async (file: File) => {
     try {
@@ -106,274 +130,446 @@ export function CashFlowPage({ user, onViewChange, onLogout }: Props) {
     }
   };
 
-  const focusMarchComparison = () => {
-    setGroup('month');
-    setFrom('2026-03-01');
-    setTo('2026-03-31');
-  };
+  // Periods are returned chronologically (oldest first). Newest = "this month".
+  const periods = summary.periods;
+  const thisMonth = periods.at(-1) ?? null;
+  const lastMonth = periods.length >= 2 ? periods.at(-2)! : null;
+
+  const moDelta = lastMonth && lastMonth.netCents !== 0
+    ? Math.round(((thisMonth!.netCents - lastMonth.netCents) / Math.abs(lastMonth.netCents)) * 100)
+    : 0;
+  const yoyDelta = thisMonth?.netDeltaPct ?? 0;
+
+  const compareCards: ComparisonCardData[] = useMemo(() => {
+    if (!thisMonth) return [];
+    return [
+      {
+        label: 'This month',
+        sub: `${thisMonth.label} · net cash`,
+        inflowCents: thisMonth.inflowCents,
+        outflowCents: thisMonth.outflowCents,
+        netCents: thisMonth.netCents,
+        current: true,
+        moDelta,
+        yoyDelta,
+      },
+      {
+        label: 'Last month',
+        sub: lastMonth ? `${lastMonth.label} · net cash` : 'no prior month',
+        inflowCents: lastMonth?.inflowCents ?? 0,
+        outflowCents: lastMonth?.outflowCents ?? 0,
+        netCents: lastMonth?.netCents ?? 0,
+        current: false,
+      },
+      {
+        label: 'Same month, last year',
+        sub: `${prevYearLabel(thisMonth.label)} · net cash`,
+        inflowCents: thisMonth.previousInflowCents,
+        outflowCents: thisMonth.previousOutflowCents,
+        netCents: thisMonth.previousNetCents,
+        current: false,
+      },
+    ];
+  }, [thisMonth, lastMonth, moDelta, yoyDelta]);
+
+  const focusedTitle = thisMonth ? `How does ${thisMonth.label} compare?` : 'Cash flow';
+
+  const visibleAccounts = business === 'all' ? accounts : accounts.filter((account) => account.biz === business);
 
   return (
-    <div className="min-h-screen bg-bg text-ink">
-      <div className="mx-auto flex max-w-[1500px] flex-col gap-4 p-4">
-        <HeaderBar
-          onUploadReceipt={handleUpload}
-          currentView="cash-flow"
-          onViewChange={onViewChange}
-          onLogout={onLogout}
-          user={user}
-          businesses={businesses}
-          selectedBusiness={business}
-          onBusinessChange={(value) => {
-            setBusiness(value);
-            setAccountIds([]);
-          }}
-        />
-
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">Cash-basis reporting</div>
-            <h1 className="font-display text-3xl font-bold tracking-tight">Inflow vs outflow</h1>
-            <div className="mt-1 text-sm text-dim">{selectedBusinessName} · {summary.from || from} to {summary.to || to}</div>
+    <AppShell
+      currentView="cash-flow"
+      onViewChange={onViewChange}
+      onLogout={onLogout}
+      user={user}
+      onUploadReceipt={handleUpload}
+      contextEyebrow="Cash-basis reporting"
+      contextTitle="Cash flow"
+      businesses={businesses}
+      selectedBusiness={business}
+      onBusinessChange={(value) => {
+        setBusiness(value);
+        setAccountIds([]);
+      }}
+      contextActions={
+        <label className="hidden items-center gap-2 text-xs font-bold text-ink lg:flex">
+          <Switch checked={includeTransfers} onCheckedChange={setIncludeTransfers} />
+          Include transfers
+        </label>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        {/* Header */}
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">
+              Period scorecard
+            </div>
+            <h1 className="font-display text-3xl font-bold tracking-tight">{focusedTitle}</h1>
+            <div className="mt-1 text-sm text-dim">
+              {(business === 'all' ? 'All businesses' : businesses.find((b) => b.id === business)?.name ?? business)} · vs prior month and prior year
+            </div>
           </div>
-          <Button variant="outline" onClick={focusMarchComparison} className="w-full sm:w-auto">
-            <CalendarDays className="h-4 w-4" />
-            <span className="hidden sm:inline">March 2026 vs 2025</span>
-            <span className="sm:hidden">Compare March</span>
-          </Button>
+          <div className="flex items-center gap-2">
+            <RangePicker from={from} to={to} onChange={({ from: f, to: t }) => { setFrom(f); setTo(t); }} />
+            <Button variant="outline" size="sm" onClick={() => exportCashFlowCsv(summary)}>
+              <Download className="h-3.5 w-3.5" />
+              Export
+            </Button>
+          </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          <Metric label="Inflow" cents={summary.totals.inflowCents} tone="positive" detail="Cash received" />
-          <Metric label="Outflow" cents={summary.totals.outflowCents} detail="Operating spend" />
-          <Metric label="Net cash" cents={summary.totals.netCents} signed tone={summary.totals.netCents >= 0 ? 'positive' : 'warning'} detail={modeLabel} />
-          <Metric label="YoY net change" cents={summary.totals.netDeltaCents} signed tone={summary.totals.netDeltaCents >= 0 ? 'positive' : 'warning'} detail={`${summary.totals.netDeltaPct}% vs prior year`} />
-          <Metric label="Transfers" cents={summary.totals.transferCents} tone="muted" detail={includeTransfers ? 'Included' : 'Excluded by default'} />
-        </div>
+        {/* Account filter chips */}
+        {visibleAccounts.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-ink2/10 bg-paper p-2 shadow-sm">
+            <span className="px-1 font-mono text-[10px] font-medium uppercase tracking-wider text-dim">
+              Accounts
+            </span>
+            <FilterChip
+              active={accountIds.length === 0}
+              onClick={() => setAccountIds([])}
+            >
+              All
+            </FilterChip>
+            {visibleAccounts.map((account) => (
+              <FilterChip
+                key={account.id}
+                active={accountIds.includes(account.id)}
+                muted={!account.enabled}
+                onClick={() => setAccountIds((current) => toggle(account.id, current))}
+              >
+                {accountLabel(account)}
+              </FilterChip>
+            ))}
+          </div>
+        )}
 
-        <div className="grid gap-3 rounded-xl border border-ink2/10 bg-paper p-3 shadow-sm xl:grid-cols-[220px_minmax(280px,1fr)_160px_160px_auto]">
-          <Field label="View">
-            <ToggleGroup type="single" value={group} onValueChange={(value) => value && setGroup(value as CashFlowGroup)}>
-              <ToggleGroupItem value="month">Monthly</ToggleGroupItem>
-              <ToggleGroupItem value="year">Annual</ToggleGroupItem>
-            </ToggleGroup>
-          </Field>
-          <Field label="Accounts">
-            <div className="flex flex-wrap gap-1.5">
-              {visibleAccounts.map((account) => (
-                <FilterChip
-                  key={account.id}
-                  active={accountIds.includes(account.id)}
-                  muted={!account.enabled}
-                  onClick={() => setAccountIds((current) => toggle(account.id, current))}
-                >
-                  {accountLabel(account)}
-                </FilterChip>
-              ))}
-              {visibleAccounts.length === 0 && <span className="text-sm text-dim">No accounts</span>}
+        {error && (
+          <div className="rounded-xl border border-coral/30 bg-coral/10 p-4 text-sm font-bold text-coral-ink">{error}</div>
+        )}
+
+        {/* 3-up scorecard */}
+        {thisMonth ? (
+          <div className="grid gap-3 lg:grid-cols-3">
+            {compareCards.map((c) => <ComparisonCard key={c.label} data={c} />)}
+          </div>
+        ) : !loading ? (
+          <Card className="p-8">
+            <EmptyState title="No cash flow for this range" />
+          </Card>
+        ) : null}
+
+        {/* 12-month trend chart */}
+        <Card className="p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">Trend</div>
+              <h2 className="font-display text-xl font-bold text-ink">12-month cash movement</h2>
             </div>
-          </Field>
-          <Field label="From">
-            <Input id="cash-flow-from" type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
-          </Field>
-          <Field label="To">
-            <Input id="cash-flow-to" type="date" value={to} onChange={(event) => setTo(event.target.value)} />
-          </Field>
-          <label className="flex items-end gap-2 pb-2 text-sm font-bold">
-            <Switch checked={includeTransfers} onCheckedChange={setIncludeTransfers} />
-            Include transfers
-          </label>
-        </div>
+            <ChartLegend periods={periods} />
+          </div>
+          <CashFlowChart periods={periods} height={260} />
+        </Card>
 
-        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_430px]">
-          <section className="overflow-hidden rounded-xl border border-ink2/10 bg-paper shadow-sm">
-            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-ink2/10 px-4 py-3">
-              <div>
-                <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">Trend</div>
-                <h2 className="font-display text-xl font-bold">Cash movement</h2>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="muted">{group === 'month' ? 'Monthly' : 'Annual'}</Badge>
-                <Badge variant={includeTransfers ? 'warning' : 'secondary'}>{modeLabel}</Badge>
-              </div>
+        {/* Category mix + top movers */}
+        <div className="grid gap-3 lg:grid-cols-2">
+          <Card className="p-4">
+            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">
+              Category mix{thisMonth ? ` · ${thisMonth.label}` : ''}
             </div>
-            <BusinessLegend periods={displayPeriods} />
-            {error ? (
-              <div className="p-4">
-                <div className="rounded-lg border border-coral/30 bg-coral/10 p-4 text-sm font-bold text-coral-ink">{error}</div>
-              </div>
+            <h3 className="mb-3 font-display text-lg font-bold text-ink">Where outflow went</h3>
+            {categories.length === 0 ? (
+              <div className="py-8 text-center text-sm text-dim">No spend categorized yet.</div>
             ) : (
-              <div className="grid gap-3 p-4">
-                {displayPeriods.map((period) => (
-                  <PeriodBars key={`${period.from}-${period.to}`} period={period} maxInflow={maxInflow} maxOutflow={maxOutflow} />
-                ))}
-                {!loading && displayPeriods.length === 0 && <EmptyState title="No cash flow for this range" icon={<BarChart3 className="h-5 w-5" />} />}
-                {loading && <div className="py-8 text-center text-sm text-dim">Loading cash flow...</div>}
+              <div className="flex flex-col gap-2">
+                {categories.map((category, index) => {
+                  const max = categories[0].amountCents ?? Math.round(categories[0].amount * 100);
+                  const cents = category.amountCents ?? Math.round(category.amount * 100);
+                  const width = max ? (cents / max) * 100 : 0;
+                  const palette = ['#D97757', '#2A6FDB', '#1F8A5B', '#caa6f0', '#f1b6c5', '#ecd95a', '#9fc6e8', '#abc89a'];
+                  return (
+                    <div
+                      key={`${category.name}-${index}`}
+                      className="grid grid-cols-[120px_1fr_88px] items-center gap-3"
+                    >
+                      <span className="truncate text-xs font-bold text-ink">{category.name}</span>
+                      <div className="h-3 overflow-hidden rounded-full bg-[hsl(var(--color-sunken))]">
+                        <div
+                          className="h-full rounded-full"
+                          style={{ width: `${width}%`, background: palette[index % palette.length] }}
+                        />
+                      </div>
+                      <div className="text-right">
+                        <div className="font-display text-sm font-bold tabular-nums">
+                          {fmtCompactCents(cents)}
+                        </div>
+                        <Delta label={category.delta} />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
-          </section>
+          </Card>
 
-          <section className="overflow-hidden rounded-xl border border-ink2/10 bg-paper shadow-sm">
-            <div className="border-b border-ink2/10 px-4 py-3">
-              <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">Detail</div>
-              <h2 className="font-display text-xl font-bold">Period detail</h2>
+          <Card className="p-4">
+            <div className="mb-3 flex items-start justify-between">
+              <div>
+                <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">
+                  Top movers{thisMonth ? ` · ${thisMonth.label}` : ''}
+                </div>
+                <h3 className="font-display text-lg font-bold text-ink">By business</h3>
+              </div>
             </div>
-            <Table className="table-fixed">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-20">Period</TableHead>
-                  <TableHead className="w-20 text-right">In</TableHead>
-                  <TableHead className="w-20 text-right">Out</TableHead>
-                  <TableHead className="w-20 text-right">Net</TableHead>
-                  <TableHead className="w-20 text-right">YoY</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {displayPeriods.map((period) => (
-                  <TableRow key={period.label}>
-                    <TableCell className="font-bold">{period.label}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCents(period.inflowCents)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{formatCents(period.outflowCents)}</TableCell>
-                    <TableCell className={cn('text-right font-bold tabular-nums', period.netCents >= 0 ? 'text-sage-ink' : 'text-coral-ink')}>
-                      {formatCents(period.netCents, true)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Delta value={period.netDeltaCents} pct={period.netDeltaPct} compact />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            {!loading && displayPeriods.length === 0 && (
-              <div className="p-4">
-                <EmptyState title="No periods to show" icon={<BarChart3 className="h-5 w-5" />} />
-              </div>
-            )}
-          </section>
+            <BusinessBreakdown periods={periods} />
+          </Card>
         </div>
       </div>
-    </div>
+    </AppShell>
   );
 }
 
-function PeriodBars({ period, maxInflow, maxOutflow }: { period: CashFlowPeriod; maxInflow: number; maxOutflow: number }) {
-  return (
-    <div className="grid gap-3 rounded-lg border border-ink2/10 bg-[hsl(var(--color-sunken))] p-3">
-      <div className="flex items-baseline justify-between gap-3">
-        <div>
-          <div className="font-bold">{period.label}</div>
-          <div className="text-xs text-dim">{period.from} to {period.to}</div>
-        </div>
-        <div className="text-sm text-dim">
-          Net <span className={cn('font-bold tabular-nums', period.netCents >= 0 ? 'text-sage-ink' : 'text-coral-ink')}>{formatCents(period.netCents, true)}</span>
-        </div>
-      </div>
-      <StackedBar label="In" cents={period.inflowCents} max={maxInflow} businesses={period.businessBreakdown} mode="inflow" />
-      <StackedBar label="Out" cents={period.outflowCents} max={maxOutflow} businesses={period.businessBreakdown} mode="outflow" />
-      <div className="flex items-center justify-between text-xs text-dim">
-        <span>Prior year net {formatCents(period.previousNetCents, true)}</span>
-        <Delta value={period.netDeltaCents} pct={period.netDeltaPct} compact />
-      </div>
-    </div>
-  );
-}
-
-function StackedBar({
-  label,
-  cents,
-  max,
-  businesses,
-  mode,
-}: {
+interface ComparisonCardData {
   label: string;
-  cents: number;
-  max: number;
-  businesses: CashFlowPeriod['businessBreakdown'];
-  mode: 'inflow' | 'outflow';
-}) {
-  const totalWidth = Math.max(3, (cents / max) * 100);
+  sub: string;
+  inflowCents: number;
+  outflowCents: number;
+  netCents: number;
+  current: boolean;
+  moDelta?: number;
+  yoyDelta?: number;
+}
+
+function ComparisonCard({ data }: { data: ComparisonCardData }) {
+  const current = data.current;
   return (
-    <div className="grid grid-cols-[34px_minmax(0,1fr)_92px] items-center gap-2 text-xs">
-      <span className="font-bold text-dim">{label}</span>
-      <div className="h-3 overflow-hidden rounded-full bg-paper ring-1 ring-ink2/10">
-        <div className="flex h-full overflow-hidden rounded-full" style={{ width: `${totalWidth}%` }}>
-          {businesses.map((business) => {
-            const value = mode === 'inflow' ? business.inflowCents : business.outflowCents;
-            if (!value || !cents) return null;
-            return (
-              <div
-                key={business.businessId}
-                title={`${business.businessName}: ${formatCents(value)}`}
-                style={{ width: `${(value / cents) * 100}%`, background: business.color }}
-              />
-            );
-          })}
+    <div
+      className={cn(
+        'overflow-hidden rounded-xl border shadow-sm',
+        current ? 'border-ink2/30 bg-ink text-paper' : 'border-ink2/10 bg-paper',
+      )}
+    >
+      <div className={cn('px-4 py-3', current ? 'border-b border-paper/15' : 'border-b border-ink2/10')}>
+        <div className={cn('font-mono text-[10px] uppercase tracking-wider', current ? 'text-paper/60' : 'text-dim')}>
+          {data.label}
+        </div>
+        <div
+          className={cn(
+            'font-display text-2xl font-bold tabular-nums',
+            data.netCents < 0 && !current && 'text-coral-ink',
+          )}
+        >
+          {fmtCompactCents(data.netCents, { signed: true })}
+        </div>
+        <div className={cn('text-xs', current ? 'text-paper/60' : 'text-dim')}>{data.sub}</div>
+      </div>
+      <div className={cn('grid grid-cols-2 divide-x', current ? 'divide-paper/15' : 'divide-ink2/10')}>
+        <div className="px-4 py-3">
+          <div className={cn('font-mono text-[10px] uppercase tracking-wider', current ? 'text-paper/60' : 'text-dim')}>
+            Inflow
+          </div>
+          <div className={cn('font-bold tabular-nums', current ? 'text-paper' : 'text-sage-ink')}>
+            +{fmtCompactCents(data.inflowCents)}
+          </div>
+        </div>
+        <div className="px-4 py-3">
+          <div className={cn('font-mono text-[10px] uppercase tracking-wider', current ? 'text-paper/60' : 'text-dim')}>
+            Outflow
+          </div>
+          <div className={cn('font-bold tabular-nums', current ? 'text-paper' : 'text-ink')}>
+            −{fmtCompactCents(data.outflowCents)}
+          </div>
         </div>
       </div>
-      <span className="text-right font-bold tabular-nums">{formatCents(cents)}</span>
+      {current && (
+        <div className="grid grid-cols-2 divide-x divide-paper/15 border-t border-paper/15">
+          <div className="px-4 py-3">
+            <div className="font-mono text-[10px] uppercase tracking-wider text-paper/60">vs Last month</div>
+            <DeltaPct value={data.moDelta ?? 0} />
+          </div>
+          <div className="px-4 py-3">
+            <div className="font-mono text-[10px] uppercase tracking-wider text-paper/60">vs Last year</div>
+            <DeltaPct value={data.yoyDelta ?? 0} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function BusinessLegend({ periods }: { periods: CashFlowPeriod[] }) {
-  const businesses = new Map<string, { name: string; color: string }>();
+function ChartLegend({ periods }: { periods: CashFlowPeriod[] }) {
+  const colors = new Map<string, { name: string; color: string }>();
   periods.forEach((period) => {
-    period.businessBreakdown.forEach((business) => {
-      if (!businesses.has(business.businessId)) {
-        businesses.set(business.businessId, { name: business.businessName, color: business.color });
+    period.businessBreakdown.forEach((row) => {
+      if (!colors.has(row.businessId)) {
+        colors.set(row.businessId, { name: row.businessName, color: row.color });
       }
     });
   });
-
-  if (businesses.size === 0) return null;
-
+  if (colors.size === 0) return null;
   return (
-    <div className="flex flex-wrap gap-2 border-b border-ink2/10 px-4 py-3">
-      {[...businesses.entries()].map(([id, business]) => (
-        <span key={id} className="inline-flex items-center gap-1.5 rounded-full bg-cream px-2.5 py-1 text-xs font-bold text-ink">
-          <span className="h-2 w-2 rounded-full" style={{ background: business.color }} />
-          {business.name}
+    <div className="flex flex-wrap items-center gap-3 text-xs font-medium text-dim">
+      {[...colors.values()].map((entry) => (
+        <span key={entry.name} className="inline-flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-full" style={{ background: entry.color }} />
+          {entry.name}
         </span>
       ))}
+      <span className="inline-flex items-center gap-1.5">
+        <span className="h-px w-4 bg-ink" />
+        Net
+      </span>
     </div>
   );
 }
 
-function Metric({
-  label,
-  cents,
-  signed,
-  tone = 'default',
-  detail,
-}: {
-  label: string;
-  cents: number;
-  signed?: boolean;
-  tone?: 'default' | 'positive' | 'warning' | 'muted';
-  detail?: string;
-}) {
+function CashFlowChart({ periods, height = 240 }: { periods: CashFlowPeriod[]; height?: number }) {
+  if (periods.length === 0) {
+    return (
+      <div className="flex items-center justify-center text-sm text-dim" style={{ height }}>
+        No periods to chart.
+      </div>
+    );
+  }
+  const max = Math.max(...periods.map((p) => Math.max(p.outflowCents, p.inflowCents)), 1) * 1.05;
+  const netMax = Math.max(...periods.map((p) => Math.abs(p.netCents)), 1);
+  const barW = 100 / (periods.length * 2);
+
+  const netPts = periods.map((period, index) => {
+    const x = (index + 0.5) * (100 / periods.length);
+    const y = 50 - (period.netCents / netMax) * 40;
+    return [x, y] as const;
+  });
+  const netPath = netPts.map(([x, y], index) => (index === 0 ? `M${x},${y}` : `L${x},${y}`)).join(' ');
+
   return (
-    <div className={cn(
-      'min-h-[86px] rounded-lg border px-3 py-2.5 shadow-sm',
-      tone === 'positive' && 'border-sage/40 bg-sage/10 text-sage-ink',
-      tone === 'warning' && 'border-coral/40 bg-coral/10 text-coral-ink',
-      tone === 'muted' && 'border-ink2/10 bg-paper text-dim',
-      tone === 'default' && 'border-ink2/10 bg-paper',
-    )}>
-      <div className="font-mono text-[10px] uppercase tracking-wider text-dim">{label}</div>
-      <div className="font-display text-xl font-bold tabular-nums">{formatCents(cents, signed)}</div>
-      {detail && <div className="mt-1 truncate text-xs font-medium text-dim">{detail}</div>}
+    <div className="relative" style={{ height }}>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 h-full w-full">
+        <line x1="0" y1="50" x2="100" y2="50" stroke="hsl(45 14% 7% / 0.15)" strokeWidth="0.15" />
+        {[10, 30, 70, 90].map((y) => (
+          <line key={y} x1="0" y1={y} x2="100" y2={y} stroke="hsl(45 14% 7% / 0.04)" strokeWidth="0.1" />
+        ))}
+
+        {periods.map((period, index) => {
+          const cx = (index + 0.5) * (100 / periods.length);
+          // Outflow stack down (negative direction)
+          let outAcc = 0;
+          // Inflow stack up
+          let inAcc = 0;
+          return (
+            <g key={period.label}>
+              {period.businessBreakdown.map((row) => {
+                const outH = period.outflowCents ? (row.outflowCents / max) * 45 : 0;
+                const inH = period.inflowCents ? (row.inflowCents / max) * 45 : 0;
+                const elements: JSX.Element[] = [];
+                if (outH > 0) {
+                  const y = 50 + outAcc;
+                  elements.push(
+                    <rect
+                      key={`out-${row.businessId}`}
+                      x={cx - barW * 0.7}
+                      y={y}
+                      width={barW * 1.4}
+                      height={outH}
+                      fill={row.color}
+                      opacity="0.85"
+                    />,
+                  );
+                  outAcc += outH;
+                }
+                if (inH > 0) {
+                  inAcc += inH;
+                  const y = 50 - inAcc;
+                  elements.push(
+                    <rect
+                      key={`in-${row.businessId}`}
+                      x={cx - barW * 0.7}
+                      y={y}
+                      width={barW * 1.4}
+                      height={inH}
+                      fill={row.color}
+                      opacity="0.55"
+                    />,
+                  );
+                }
+                return elements;
+              })}
+            </g>
+          );
+        })}
+
+        <path d={netPath} fill="none" stroke="hsl(45 14% 7%)" strokeWidth="0.4" strokeLinejoin="round" />
+        {netPts.map(([x, y], index) => (
+          <circle
+            key={index}
+            cx={x}
+            cy={y}
+            r="0.7"
+            fill="hsl(var(--color-paper))"
+            stroke="hsl(45 14% 7%)"
+            strokeWidth="0.3"
+          />
+        ))}
+      </svg>
+      <div className="absolute inset-x-0 bottom-0 flex justify-around pt-2">
+        {periods.map((period) => (
+          <div
+            key={period.label}
+            className="text-center font-mono text-[10px] font-medium uppercase tracking-wider text-dim"
+          >
+            {period.label}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-function Delta({ value, pct, compact }: { value: number; pct: number; compact?: boolean }) {
-  const positive = value >= 0;
-  const Icon = positive ? ChevronUp : ChevronDown;
+function BusinessBreakdown({ periods }: { periods: CashFlowPeriod[] }) {
+  const latest = periods.at(-1);
+  if (!latest || latest.businessBreakdown.length === 0) {
+    return <div className="py-6 text-center text-sm text-dim">No business breakdown.</div>;
+  }
+  const sorted = [...latest.businessBreakdown].sort((a, b) => b.netCents - a.netCents);
   return (
-    <span className={cn('inline-flex items-center justify-end gap-1 font-bold tabular-nums', positive ? 'text-sage-ink' : 'text-coral-ink')}>
-      <Icon className="h-3.5 w-3.5" />
-      {compact ? formatCompactCents(value, true) : `${formatCents(value, true)} (${pct}%)`}
-    </span>
+    <div className="flex flex-col gap-2">
+      {sorted.map((row) => {
+        const positive = row.netCents >= 0;
+        return (
+          <div key={row.businessId} className="flex items-center gap-3 rounded-lg bg-[hsl(var(--color-sunken))] p-3">
+            <div
+              className="flex h-9 w-9 items-center justify-center rounded-lg"
+              style={{ background: `${row.color}22` }}
+            >
+              {positive ? (
+                <TrendingUp className="h-4 w-4" style={{ color: row.color }} />
+              ) : (
+                <TrendingDown className="h-4 w-4" style={{ color: row.color }} />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-bold text-ink">{row.businessName}</div>
+              <div className="mt-0.5 flex items-center gap-2 text-[11px] text-dim">
+                <span className="text-sage-ink">+{fmtCompactCents(row.inflowCents)}</span>
+                <span>·</span>
+                <span>−{fmtCompactCents(row.outflowCents)}</span>
+              </div>
+            </div>
+            <div className="text-right">
+              <div
+                className={cn(
+                  'font-display text-sm font-bold tabular-nums',
+                  positive ? 'text-sage-ink' : 'text-coral-ink',
+                )}
+              >
+                {fmtCompactCents(row.netCents, { signed: true })}
+              </div>
+              <div className="font-mono text-[10px] uppercase tracking-wider text-dim">Net</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -403,33 +599,114 @@ function FilterChip({
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function DeltaPct({ value }: { value: number }) {
+  const positive = value >= 0;
+  const Icon = positive ? ChevronUp : ChevronDown;
   return (
-    <div className="grid gap-1.5">
-      <Label className="font-mono text-[10px] uppercase tracking-wider text-dim">{label}</Label>
-      {children}
+    <span className={cn('inline-flex items-center gap-1 font-bold tabular-nums', positive ? 'text-sage' : 'text-coral')}>
+      <Icon className="h-3.5 w-3.5" />
+      {value}%
+    </span>
+  );
+}
+
+function Delta({ label }: { label?: string }) {
+  if (!label) return null;
+  const positive = !label.startsWith('-');
+  const Icon = positive ? ChevronUp : ChevronDown;
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center justify-end gap-1 font-bold tabular-nums text-[10px]',
+        positive ? 'text-sage-ink' : 'text-coral-ink',
+      )}
+    >
+      <Icon className="h-3 w-3" />
+      {label.replace(/^[+-]/, '')}
+    </span>
+  );
+}
+
+function RangePicker({
+  from,
+  to,
+  onChange,
+}: {
+  from: string;
+  to: string;
+  onChange: (range: { from: string; to: string }) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 rounded-full border border-ink2/15 bg-paper px-2 py-1 text-xs">
+      <input
+        type="date"
+        value={from}
+        onChange={(event) => onChange({ from: event.target.value, to })}
+        className="h-7 rounded-md border-transparent bg-transparent px-2 text-xs"
+      />
+      <span className="text-dim">→</span>
+      <input
+        type="date"
+        value={to}
+        onChange={(event) => onChange({ from, to: event.target.value })}
+        className="h-7 rounded-md border-transparent bg-transparent px-2 text-xs"
+      />
     </div>
   );
 }
 
+function exportCashFlowCsv(summary: CashFlowSummary) {
+  const headers = ['period', 'from', 'to', 'inflow_cents', 'outflow_cents', 'transfer_cents', 'net_cents', 'prev_inflow_cents', 'prev_outflow_cents', 'prev_net_cents', 'net_delta_pct'];
+  const lines = [headers.join(',')];
+  summary.periods.forEach((period) => {
+    lines.push([
+      period.label,
+      period.from,
+      period.to,
+      period.inflowCents,
+      period.outflowCents,
+      period.transferCents,
+      period.netCents,
+      period.previousInflowCents,
+      period.previousOutflowCents,
+      period.previousNetCents,
+      period.netDeltaPct,
+    ].join(','));
+  });
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `cash-flow-${summary.from}-to-${summary.to}.csv`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+function fmtCompactCents(cents: number, options: { signed?: boolean } = {}): string {
+  const amount = cents / 100;
+  const absAmount = Math.abs(amount);
+  const sign = options.signed ? (amount >= 0 ? '+' : '−') : amount < 0 ? '−' : '';
+  if (absAmount >= 1000) {
+    return `${sign}$${new Intl.NumberFormat('en-US', {
+      notation: 'compact',
+      maximumFractionDigits: 1,
+    }).format(absAmount)}`;
+  }
+  return `${sign}$${absAmount.toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+}
+
+function prevYearLabel(label: string): string {
+  // Best-effort "May 25 → May 24" style stub; backend returns labels like "May 26".
+  const match = label.match(/^(\w+) ?(\d{2,4})?$/);
+  if (!match) return label;
+  const month = match[1];
+  const year = match[2];
+  if (!year) return `${month} (prior year)`;
+  const fullYear = year.length === 2 ? 2000 + Number(year) : Number(year);
+  return `${month} ${String(fullYear - 1).slice(-2)}`;
+}
+
 function toggle<T>(value: T, values: T[]): T[] {
   return values.includes(value) ? values.filter((item) => item !== value) : [...values, value];
-}
-
-function formatCents(cents: number, signed = false): string {
-  const amount = cents / 100;
-  return signed ? fmt$(amount) : fmt$(Math.abs(amount));
-}
-
-function formatCompactCents(cents: number, signed = false): string {
-  if (Math.abs(cents) < 100_000) return formatCents(cents, signed);
-  const amount = signed ? cents / 100 : Math.abs(cents / 100);
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  }).format(amount);
 }
 
 function today(): string {

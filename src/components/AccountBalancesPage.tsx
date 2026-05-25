@@ -8,7 +8,7 @@ import { accountLabel } from '@/lib/account';
 import { summarizeAccountBalances } from '@/lib/calc';
 import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
-import { HeaderBar } from './HeaderBar';
+import { AppShell } from './AppShell';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -80,18 +80,17 @@ export function AccountBalancesPage({ user, onViewChange, onLogout }: Props) {
   };
 
   return (
-    <div className="min-h-screen bg-bg text-ink">
-      <div className="mx-auto flex max-w-[1400px] flex-col gap-4 p-4">
-        <HeaderBar
-          onUploadReceipt={handleUpload}
-          currentView="balances"
-          onViewChange={onViewChange}
-          onLogout={onLogout}
-          user={user}
-          query={query}
-          onQueryChange={setQuery}
-        />
-
+    <AppShell
+      currentView="balances"
+      onViewChange={onViewChange}
+      onLogout={onLogout}
+      user={user}
+      onUploadReceipt={handleUpload}
+      contextEyebrow="Plaid balances"
+      contextTitle="Account Balances"
+      search={{ query, onQueryChange: setQuery, placeholder: 'Search accounts…' }}
+    >
+      <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-0 flex-1">
             <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">Plaid balances</div>
@@ -234,7 +233,7 @@ export function AccountBalancesPage({ user, onViewChange, onLogout }: Props) {
           </aside>
         </div>
       </div>
-    </div>
+    </AppShell>
   );
 }
 

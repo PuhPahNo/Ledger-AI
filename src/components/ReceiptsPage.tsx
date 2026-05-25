@@ -15,7 +15,7 @@ import type { Business, CurrentUser, ReceiptInboxItem, ReceiptSource, Transactio
 import { fmt$ } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { useToast } from '@/hooks/useToast';
-import { HeaderBar } from './HeaderBar';
+import { AppShell } from './AppShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -183,18 +183,17 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
   };
 
   return (
-    <div className="min-h-screen bg-bg text-ink">
-      <div className="mx-auto flex max-w-[1500px] flex-col gap-4 p-4">
-        <HeaderBar
-          onUploadReceipt={handleUpload}
-          currentView="receipts"
-          onViewChange={onViewChange}
-          onLogout={onLogout}
-          user={user}
-          query={query}
-          onQueryChange={setQuery}
-        />
-
+    <AppShell
+      currentView="receipts"
+      onViewChange={onViewChange}
+      onLogout={onLogout}
+      user={user}
+      onUploadReceipt={handleUpload}
+      contextEyebrow="Workspace"
+      contextTitle="Receipts"
+      search={{ query, onQueryChange: setQuery, placeholder: 'Search merchants…' }}
+    >
+      <div className="flex flex-col gap-4">
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-0 flex-1">
             <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">Workspace</div>
@@ -360,7 +359,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
           </div>
         )}
       </div>
-    </div>
+    </AppShell>
   );
 }
 

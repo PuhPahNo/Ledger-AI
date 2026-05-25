@@ -1,5 +1,5 @@
 import type { BusinessId, OwnerInsightsSummary, Transaction } from '@/types/domain';
-import { isExcludedFromSpend, isSpendTransaction } from '@/lib/calc';
+import { isSpendTransaction, isTransferTransaction } from '@/lib/calc';
 import { http, useMockApi } from './client';
 import { mapTransaction, type ApiTransaction } from './mapper';
 import { BUSINESSES, TRANSACTIONS, visibleMockTransactions } from './mocks';
@@ -35,8 +35,10 @@ function mockOwnerInsights(params: OwnerInsightsParams): OwnerInsightsSummary {
     .filter((row) => !params.biz || params.biz === 'all' || row.biz === params.biz)
     .filter((row) => row.date >= from && row.date <= to);
   const spendRows = rows.filter(isSpendTransaction);
-  const inflows = rows.filter((row) => row.amount > 0 && !isExcludedFromSpend(row));
-  const transferRows = rows.filter(isExcludedFromSpend);
+  // Inflow = any positive cash movement that is NOT an internal transfer.
+  // Revenue counts; refunds count; transfers between own accounts don't.
+  const inflows = rows.filter((row) => row.amount > 0 && !isTransferTransaction(row));
+  const transferRows = rows.filter(isTransferTransaction);
   const incomeByBusiness = BUSINESSES.map((business) => {
     const businessInflows = inflows.filter((row) => row.biz === business.id);
     return {
@@ -47,6 +49,7 @@ function mockOwnerInsights(params: OwnerInsightsParams): OwnerInsightsSummary {
       count: businessInflows.length,
     };
   }).filter((row) => row.cents > 0);
+  // Outflow = operating spend only (transfers excluded). Inflow = all non-transfer positives.
   const outflowCents = Math.abs(centsTotal(spendRows));
   const inflowCents = centsTotal(inflows);
 

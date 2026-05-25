@@ -658,15 +658,19 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         .innerJoin(businesses, eq(transactions.businessId, businesses.id))
         .leftJoin(categories, eq(transactions.categoryId, categories.id))
         .leftJoin(accounts, eq(transactions.accountId, accounts.id))
-        .where(and(...baseFilters, sql`${transactions.amountCents} > 0`, categoryIsVisibleSpend()))
+        // Inflow by business: any positive cash that isn't an internal transfer (so Revenue counts).
+        .where(and(...baseFilters, sql`${transactions.amountCents} > 0`, sql`NOT (${transferCategoryFilter()})`))
         .groupBy(businesses.key, businesses.name, businesses.color)
         .orderBy(desc(sql`sum(${transactions.amountCents})`)),
       db
         .select({
           transactionCount: sql<number>`count(${transactions.id})::int`,
-          inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${categoryIsVisibleSpend()} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+          // Inflow = all non-transfer positives (includes Revenue).
+          inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND NOT (${transferCategoryFilter()}) THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+          // Outflow = operating spend only (transfers excluded).
           outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${categoryIsVisibleSpend()} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
-          netCents: sql<number>`coalesce(sum(CASE WHEN ${categoryIsVisibleSpend()} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+          // Net = inflow − outflow, both computed under the same exclusions as above.
+          netCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND NOT (${transferCategoryFilter()}) THEN ${transactions.amountCents} WHEN ${transactions.amountCents} < 0 AND ${categoryIsVisibleSpend()} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
         })
         .from(transactions)
         .leftJoin(categories, eq(transactions.categoryId, categories.id))

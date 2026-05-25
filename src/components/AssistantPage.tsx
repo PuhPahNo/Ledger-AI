@@ -12,7 +12,7 @@ import type { AppView } from '@/types/navigation';
 import { fmt$ } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { useToast } from '@/hooks/useToast';
-import { HeaderBar } from './HeaderBar';
+import { AppShell } from './AppShell';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -144,16 +144,16 @@ export function AssistantPage({ user, onViewChange, onLogout }: Props) {
   };
 
   return (
-    <div className="min-h-screen bg-bg text-ink">
-      <div className="mx-auto flex min-h-screen max-w-[1500px] flex-col gap-4 p-4">
-        <HeaderBar
-          onUploadReceipt={handleUpload}
-          currentView="assistant"
-          onViewChange={onViewChange}
-          onLogout={onLogout}
-          user={user}
-        />
-
+    <AppShell
+      currentView="assistant"
+      onViewChange={onViewChange}
+      onLogout={onLogout}
+      user={user}
+      onUploadReceipt={handleUpload}
+      contextEyebrow="Workspace"
+      contextTitle="Assistant"
+    >
+      <div className="flex min-h-[calc(100vh-120px)] flex-col gap-4">
         <main className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[280px_1fr]">
           <aside className="rounded-xl border border-ink2/10 bg-paper p-4 shadow-sm">
             <div className="flex items-center gap-2">
@@ -234,7 +234,7 @@ export function AssistantPage({ user, onViewChange, onLogout }: Props) {
           </section>
         </main>
       </div>
-    </div>
+    </AppShell>
   );
 }
 

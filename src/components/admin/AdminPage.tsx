@@ -13,7 +13,7 @@ import { useToast } from '@/hooks/useToast';
 import { SectionHeader } from '@/components/ui/section-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { HeaderBar } from '../HeaderBar';
+import { AppShell } from '../AppShell';
 import { ConnectionsManager } from '../ConnectionsManager';
 import { AuditTab } from './tabs/AuditTab';
 import { BusinessesTab } from './tabs/BusinessesTab';
@@ -108,18 +108,16 @@ export function AdminPage({ onViewChange, onLogout, user }: Props) {
   );
 
   return (
-    <div className="min-h-screen bg-bg text-ink">
-      <div className="mx-auto flex max-w-[1400px] flex-col gap-5 p-4">
-        <HeaderBar
-          onUploadReceipt={() => undefined}
-          currentView="admin"
-          onViewChange={onViewChange}
-          onLogout={onLogout}
-          user={user}
-          query={query}
-          onQueryChange={setQuery}
-        />
-
+    <AppShell
+      currentView="admin"
+      onViewChange={onViewChange}
+      onLogout={onLogout}
+      user={user}
+      contextEyebrow="Workspace"
+      contextTitle="Admin"
+      search={{ query, onQueryChange: setQuery, placeholder: 'Search admin…' }}
+    >
+      <div className="flex flex-col gap-5">
         <SectionHeader
           eyebrow="Workspace"
           title="Admin settings"
@@ -177,6 +175,6 @@ export function AdminPage({ onViewChange, onLogout, user }: Props) {
           refresh().catch((error: Error) => toast({ variant: 'destructive', title: 'Refresh failed', description: error.message }))
         }
       />
-    </div>
+    </AppShell>
   );
 }

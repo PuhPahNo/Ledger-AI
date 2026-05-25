@@ -1,6 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { ArrowDownUp, ChevronLeft, ChevronRight, Search } from 'lucide-react';
+import {
+  ArrowDownRight,
+  ArrowUpRight,
+  Boxes,
+  Calendar,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  CreditCard,
+  Download,
+  Filter,
+  Landmark,
+  Wallet,
+} from 'lucide-react';
 import {
   getTransactionRollup,
   listAccounts,
@@ -23,18 +38,13 @@ import type { AppView, TransactionViewFilters } from '@/types/navigation';
 import { accountLabel } from '@/lib/account';
 import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
-import { HeaderBar } from './HeaderBar';
+import { AppShell } from './AppShell';
 import { TransactionDrawer } from './TransactionDrawer';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/cn';
-
-type SortKey = 'date' | 'amount' | 'largest' | 'merchant' | 'business' | 'category' | 'account';
 
 interface Props {
   user?: CurrentUser;
@@ -43,7 +53,20 @@ interface Props {
   initialFilters?: TransactionViewFilters;
 }
 
-const receiptOptions: ReceiptStatus[] = ['missing', 'pending', 'matched', 'n/a'];
+interface SavedView {
+  id: string;
+  label: string;
+  filter: () => Partial<{ direction: TransactionDirection; receipts: ReceiptStatus[]; range?: 'this-month' }>;
+}
+
+const SAVED_VIEWS: SavedView[] = [
+  { id: 'all', label: 'All', filter: () => ({ direction: 'all', receipts: [] }) },
+  { id: 'needs-receipt', label: 'Needs receipt', filter: () => ({ direction: 'outflow', receipts: ['missing'] }) },
+  { id: 'this-month', label: 'This month', filter: () => ({ direction: 'all', receipts: [], range: 'this-month' }) },
+  { id: 'large', label: 'Large outflows', filter: () => ({ direction: 'outflow', receipts: [] }) },
+  { id: 'inflows', label: 'Inflows', filter: () => ({ direction: 'inflow', receipts: [] }) },
+];
+
 const limit = 100;
 
 export function TransactionsPage({ user, onViewChange, onLogout, initialFilters }: Props) {
@@ -51,6 +74,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [activeView, setActiveView] = useState<string>('all');
   const [business, setBusiness] = useState(initialFilters?.business ?? 'all');
   const [accountIds, setAccountIds] = useState<string[]>(initialFilters?.accountIds ?? []);
   const [categoryName, setCategoryName] = useState('all');
@@ -59,8 +83,6 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
   const [query, setQuery] = useState(initialFilters?.query ?? '');
   const [from, setFrom] = useState(initialFilters?.from ?? defaultFrom());
   const [to, setTo] = useState(initialFilters?.to ?? today());
-  const [sort, setSort] = useState<SortKey>('date');
-  const [dir, setDir] = useState<'asc' | 'desc'>('desc');
   const [offset, setOffset] = useState(0);
   const [rows, setRows] = useState<Transaction[]>([]);
   const [rollup, setRollup] = useState<TransactionRollup>(emptyRollup);
@@ -68,6 +90,14 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
   const [error, setError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [railOpen, setRailOpen] = useState(true);
+  const [openGroups, setOpenGroups] = useState({
+    business: true,
+    accounts: true,
+    category: true,
+    receipt: false,
+  });
+  const [missingOutflowCount, setMissingOutflowCount] = useState(0);
 
   useEffect(() => {
     setBusiness(initialFilters?.business ?? 'all');
@@ -85,15 +115,14 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
         setAccounts(accountRows);
         setCategories(categoryRows);
       })
-      .catch((loadError: Error) => {
-        setError(loadError.message);
-      });
+      .catch((loadError: Error) => setError(loadError.message));
   }, []);
 
   useEffect(() => {
     const categoryNames = categoryName === 'all' ? [] : [categoryName];
     setLoading(true);
     setError('');
+    const sortKey = activeView === 'large' ? 'largest' : 'date';
     Promise.all([
       listTransactions({
         biz: business,
@@ -104,8 +133,8 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
         q: query || undefined,
         from: from || undefined,
         to: to || undefined,
-        sort,
-        dir,
+        sort: sortKey,
+        dir: 'desc',
         limit,
         offset,
       }),
@@ -126,7 +155,14 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
       })
       .catch((loadError: Error) => setError(loadError.message))
       .finally(() => setLoading(false));
-  }, [accountIds, business, categoryName, dir, direction, from, offset, query, receipts, refreshKey, sort, to]);
+  }, [accountIds, activeView, business, categoryName, direction, from, offset, query, receipts, refreshKey, to]);
+
+  // Independently track "needs receipt" count so the saved-view badge stays live.
+  useEffect(() => {
+    getTransactionRollup({ from, to, direction: 'outflow', receipts: ['missing'] })
+      .then((summary) => setMissingOutflowCount(summary.rows))
+      .catch(() => setMissingOutflowCount(0));
+  }, [from, to, refreshKey]);
 
   const businessById = useMemo(() => new Map(businesses.map((item) => [item.id, item])), [businesses]);
   const accountById = useMemo(() => new Map(accounts.map((item) => [item.id, item])), [accounts]);
@@ -139,28 +175,17 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
     return [...names].sort((a, b) => a.localeCompare(b));
   }, [categories, categoryName, rows]);
 
-  const openLargestDraftSharksEntertainment = () => {
-    const draftSharks = businesses.find((item) => item.id === 'draft-sharks' || item.name.toLowerCase() === 'draft sharks');
-    setBusiness(draftSharks?.id ?? 'draft-sharks');
-    setAccountIds([]);
-    setCategoryName('Entertainment');
-    setDirection('operating-outflow');
-    setSort('largest');
-    setDir('desc');
-    setOffset(0);
-  };
-
-  const clearFilters = () => {
-    setBusiness('all');
-    setAccountIds([]);
-    setCategoryName('all');
-    setReceipts([]);
-    setDirection('all');
-    setQuery('');
-    setFrom(defaultFrom());
-    setTo(today());
-    setSort('date');
-    setDir('desc');
+  const applySavedView = (viewId: string) => {
+    const view = SAVED_VIEWS.find((v) => v.id === viewId);
+    if (!view) return;
+    setActiveView(viewId);
+    const filter = view.filter();
+    setDirection(filter.direction ?? 'all');
+    setReceipts(filter.receipts ?? []);
+    if (filter.range === 'this-month') {
+      setFrom(startOfMonth());
+      setTo(today());
+    }
     setOffset(0);
   };
 
@@ -179,211 +204,391 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
     }
   };
 
+  const exportCsv = () => {
+    const headers = ['date', 'merchant', 'business', 'account', 'category', 'amount', 'receipt'];
+    const lines = [headers.join(',')];
+    rows.forEach((tx) => {
+      const biz = businessById.get(tx.biz)?.name ?? tx.biz;
+      const acct = tx.accountId ? accountById.get(tx.accountId) : undefined;
+      lines.push([
+        tx.date,
+        csvEscape(tx.merchant),
+        csvEscape(biz),
+        csvEscape(acct ? accountLabel(acct) : tx.src),
+        csvEscape(tx.cat),
+        tx.amount.toFixed(2),
+        tx.receipt,
+      ].join(','));
+    });
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `transactions-${from}-to-${to}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  const toggleGroup = (key: keyof typeof openGroups) => setOpenGroups((g) => ({ ...g, [key]: !g[key] }));
+  const activeViewLabel = SAVED_VIEWS.find((v) => v.id === activeView)?.label ?? 'All';
+
   return (
-    <div className="min-h-screen bg-bg text-ink">
-      <div className="mx-auto flex max-w-[1500px] flex-col gap-4 p-4">
-        <HeaderBar
-          onUploadReceipt={handleUpload}
-          currentView="transactions"
-          onViewChange={onViewChange}
-          onLogout={onLogout}
-          user={user}
-          query={query}
-          onQueryChange={(value) => {
-            setQuery(value);
-            setOffset(0);
-          }}
-        />
-
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">Workspace</div>
-            <h1 className="font-display text-3xl font-bold tracking-tight">Transactions</h1>
-          </div>
-          <Button variant="outline" onClick={openLargestDraftSharksEntertainment}>
-            <Search className="h-4 w-4" />
-            Draft Sharks Entertainment
-          </Button>
-          <Button variant="ghost" onClick={clearFilters}>Clear</Button>
+    <AppShell
+      currentView="transactions"
+      onViewChange={onViewChange}
+      onLogout={onLogout}
+      user={user}
+      onUploadReceipt={handleUpload}
+      contextEyebrow="Workspace"
+      contextTitle="Transactions"
+      search={{ query, onQueryChange: (value) => { setQuery(value); setOffset(0); }, placeholder: 'Search merchants…' }}
+      businesses={businesses}
+      selectedBusiness={business}
+      onBusinessChange={(value) => {
+        setBusiness(value);
+        setAccountIds([]);
+        setOffset(0);
+      }}
+    >
+      <div className="flex flex-col gap-3">
+        {/* Saved view tabs */}
+        <div className="flex items-center gap-1 overflow-x-auto rounded-xl border border-ink2/10 bg-paper p-1.5 shadow-sm">
+          {SAVED_VIEWS.map((view) => {
+            const active = activeView === view.id;
+            const badge = view.id === 'needs-receipt' ? missingOutflowCount : undefined;
+            return (
+              <button
+                key={view.id}
+                type="button"
+                onClick={() => applySavedView(view.id)}
+                className={cn(
+                  'inline-flex h-8 shrink-0 items-center gap-2 rounded-lg px-3 text-xs font-bold transition-colors',
+                  active ? 'bg-ink text-lemon' : 'text-ink hover:bg-cream',
+                )}
+              >
+                {view.label}
+                {badge !== undefined && badge > 0 && (
+                  <span className={cn(
+                    'rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none',
+                    active ? 'bg-lemon text-ink' : 'bg-coral/20 text-coral-ink',
+                  )}>
+                    {badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
-        <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <Metric label="Inflow" value={fmt$(rollup.inflowCents / 100)} tone="positive" />
-          <Metric label="Operating Outflow" value={fmt$(rollup.operatingOutflowCents / 100)} />
-          <Metric label="Total Outflow" value={fmt$(rollup.outflowCents / 100)} />
-          <Metric label="Net" value={fmt$(rollup.netCents / 100)} tone={rollup.netCents >= 0 ? 'positive' : 'warning'} />
-          <Metric label="Transfers" value={fmt$(rollup.transferCents / 100)} tone="muted" />
-          <Metric label="Rows / Missing" value={`${rollup.rows} / ${rollup.missingReceipts}`} tone={rollup.missingReceipts > 0 ? 'warning' : 'muted'} />
-        </div>
-
-        <div className="grid gap-3 rounded-xl border border-ink2/10 bg-paper p-3 shadow-sm lg:grid-cols-[180px_180px_180px_180px_1fr]">
-          <Field label="Business">
-            <Select
-              value={business}
-              onValueChange={(value) => {
-                setBusiness(value);
-                setAccountIds([]);
-                setOffset(0);
-              }}
-            >
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All businesses</SelectItem>
-                {businesses.map((item) => (
-                  <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Direction">
-            <Select value={direction} onValueChange={(value) => { setDirection(value as TransactionDirection); setOffset(0); }}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All movement</SelectItem>
-                <SelectItem value="inflow">Inflows</SelectItem>
-                <SelectItem value="outflow">Outflows</SelectItem>
-                <SelectItem value="operating-outflow">Operating outflows</SelectItem>
-                <SelectItem value="transfer">Transfers</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Category">
-            <Select value={categoryName} onValueChange={(value) => { setCategoryName(value); setOffset(0); }}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All categories</SelectItem>
-                {categoryOptions.map((name) => (
-                  <SelectItem key={name} value={name}>{name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field label="Sort">
-            <Select value={sort} onValueChange={(value) => { setSort(value as SortKey); setOffset(0); }}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="date">Date</SelectItem>
-                <SelectItem value="largest">Largest amount</SelectItem>
-                <SelectItem value="amount">Signed amount</SelectItem>
-                <SelectItem value="merchant">Merchant</SelectItem>
-                <SelectItem value="business">Business</SelectItem>
-                <SelectItem value="category">Category</SelectItem>
-                <SelectItem value="account">Account</SelectItem>
-              </SelectContent>
-            </Select>
-          </Field>
-          <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
-            <Field label="From">
-              <Input type="date" value={from} onChange={(event) => { setFrom(event.target.value); setOffset(0); }} />
-            </Field>
-            <Field label="To">
-              <Input type="date" value={to} onChange={(event) => { setTo(event.target.value); setOffset(0); }} />
-            </Field>
-            <div className="flex items-end">
-              <Button variant="outline" className="w-full" onClick={() => setDir((value) => (value === 'asc' ? 'desc' : 'asc'))}>
-                <ArrowDownUp className="h-4 w-4" />
-                {dir.toUpperCase()}
-              </Button>
+        {/* Page header */}
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">
+              Saved view
+            </div>
+            <h1 className="font-display text-3xl font-bold tracking-tight">{activeViewLabel}</h1>
+            <div className="mt-1 text-sm text-dim">
+              {rollup.rows} txns · {fmt$(rollup.outflowCents / 100)} out / {fmt$(rollup.inflowCents / 100)} in
             </div>
           </div>
-
-          <div className="lg:col-span-5">
-            <FilterGroup label="Accounts">
-              {visibleAccounts.length ? visibleAccounts.map((account) => (
-                <FilterChip
-                  key={account.id}
-                  active={accountIds.includes(account.id)}
-                  muted={!account.enabled}
-                  onClick={() => {
-                    setAccountIds((current) => toggle(account.id, current));
-                    setOffset(0);
-                  }}
-                >
-                  {accountLabel(account)}
-                  {account.mask ? ` ${account.mask}` : ''}
-                </FilterChip>
-              )) : <span className="text-xs text-dim">No accounts match this business.</span>}
-            </FilterGroup>
-            <FilterGroup label="Receipts">
-              {receiptOptions.map((receipt) => (
-                <FilterChip
-                  key={receipt}
-                  active={receipts.includes(receipt)}
-                  onClick={() => {
-                    setReceipts((current) => toggle(receipt, current));
-                    setOffset(0);
-                  }}
-                >
-                  {receipt}
-                </FilterChip>
-              ))}
-            </FilterGroup>
+          <div className="flex items-center gap-2">
+            <DateRangePill from={from} to={to} onChange={({ from: f, to: t }) => { setFrom(f); setTo(t); setOffset(0); }} />
+            <Button variant="outline" size="sm" onClick={exportCsv}>
+              <Download className="h-3.5 w-3.5" />
+              Export
+            </Button>
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-xl border border-ink2/10 bg-paper shadow-sm">
-          {error ? (
-            <div className="p-4 text-sm font-bold text-coral-ink">{error}</div>
-          ) : (
-            <>
-              <Table className="table-fixed">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-28">Date</TableHead>
-                    <TableHead>Merchant</TableHead>
-                    <TableHead className="w-44">Business</TableHead>
-                    <TableHead className="w-48">Account</TableHead>
-                    <TableHead className="w-40">Category</TableHead>
-                    <TableHead className="w-32 text-right">Amount</TableHead>
-                    <TableHead className="w-28">Receipt</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {rows.map((transaction) => {
-                    const rowBusiness = businessById.get(transaction.biz);
-                    const account = transaction.accountId ? accountById.get(transaction.accountId) : undefined;
+        {/* Body: rail + content */}
+        <div className="flex gap-3">
+          {railOpen ? (
+            <aside className="hidden w-[240px] shrink-0 rounded-xl border border-ink2/10 bg-paper p-3 shadow-sm lg:block">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="font-mono text-[10px] font-medium uppercase tracking-wider text-dim">Filters</div>
+                <button
+                  type="button"
+                  onClick={() => setRailOpen(false)}
+                  className="text-dim hover:text-ink"
+                  title="Collapse"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              <FacetGroup label="Direction" open onToggle={undefined}>
+                <div className="grid grid-cols-2 gap-1">
+                  {([
+                    { value: 'all', label: 'All' },
+                    { value: 'outflow', label: 'Out' },
+                    { value: 'inflow', label: 'In' },
+                    { value: 'transfer', label: 'Transfer' },
+                  ] as const).map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => { setDirection(opt.value); setOffset(0); }}
+                      className={cn(
+                        'rounded-md px-2 py-1 text-xs font-bold transition-colors',
+                        direction === opt.value ? 'bg-ink text-lemon' : 'bg-cream/40 text-ink hover:bg-cream',
+                      )}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </FacetGroup>
+
+              <FacetGroup
+                label={`Accounts${accountIds.length ? ` · ${accountIds.length}` : ''}`}
+                open={openGroups.accounts}
+                onToggle={() => toggleGroup('accounts')}
+              >
+                <div className="max-h-48 overflow-y-auto">
+                  {visibleAccounts.length === 0 && (
+                    <div className="px-2 text-xs text-dim">No accounts</div>
+                  )}
+                  {visibleAccounts.map((account) => {
+                    const checked = accountIds.includes(account.id);
                     return (
-                      <TableRow key={transaction.id} onClick={() => setSelectedTransaction(transaction)} className="cursor-pointer">
-                        <TableCell className="whitespace-nowrap text-dim">{transaction.date}</TableCell>
-                        <TableCell>
-                          <div className="min-w-0 truncate font-bold" title={transaction.merchant}>{transaction.merchant}</div>
-                          {transaction.note && <div className="truncate text-xs text-dim">{transaction.note}</div>}
-                        </TableCell>
-                        <TableCell className="truncate">{rowBusiness?.name ?? transaction.biz}</TableCell>
-                        <TableCell className="truncate text-dim">{account ? accountLabel(account) : transaction.src}</TableCell>
-                        <TableCell className="truncate">{transaction.cat}</TableCell>
-                        <TableCell className={cn('text-right font-display font-bold tabular-nums', transaction.amount > 0 && 'text-sage-ink')}>
-                          {fmt$(transaction.amount)}
-                        </TableCell>
-                        <TableCell><ReceiptPill status={transaction.receipt} /></TableCell>
-                      </TableRow>
+                      <button
+                        key={account.id}
+                        type="button"
+                        onClick={() => {
+                          setAccountIds((current) => toggle(account.id, current));
+                          setOffset(0);
+                        }}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs hover:bg-cream/60',
+                          !account.enabled && 'opacity-60',
+                        )}
+                      >
+                        <span className={cn(
+                          'flex h-3.5 w-3.5 items-center justify-center rounded border',
+                          checked ? 'border-ink bg-ink text-lemon' : 'border-ink2/25',
+                        )}>
+                          {checked && <Check className="h-2.5 w-2.5" />}
+                        </span>
+                        <AccountTypeIcon kind={account.kind} className="h-3 w-3 text-dim" />
+                        <span className="flex-1 truncate font-medium text-ink">{accountLabel(account)}</span>
+                        {account.mask && (
+                          <span className="font-mono text-[10px] text-dim">·{account.mask}</span>
+                        )}
+                      </button>
                     );
                   })}
-                </TableBody>
-              </Table>
-              {loading && <div className="p-6 text-center text-sm text-dim">Loading transactions...</div>}
-              {!loading && rows.length === 0 && (
-                <div className="p-8">
-                  <EmptyState title="No transactions" description="No rows match the current filters." />
                 </div>
-              )}
-            </>
-          )}
-        </div>
+              </FacetGroup>
 
-        <div className="flex items-center justify-between">
-          <div className="text-sm text-dim">
-            Showing {rollup.rows === 0 ? 0 : offset + 1}-{Math.min(offset + rows.length, rollup.rows)} of {rollup.rows}
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" disabled={offset === 0 || loading} onClick={() => setOffset(Math.max(0, offset - limit))}>
-              <ChevronLeft className="h-4 w-4" />
-              Previous
-            </Button>
-            <Button variant="outline" disabled={offset + rows.length >= rollup.rows || loading} onClick={() => setOffset(offset + limit)}>
-              Next
-              <ChevronRight className="h-4 w-4" />
-            </Button>
+              <FacetGroup
+                label="Category"
+                open={openGroups.category}
+                onToggle={() => toggleGroup('category')}
+              >
+                <div className="max-h-48 overflow-y-auto">
+                  <button
+                    type="button"
+                    onClick={() => { setCategoryName('all'); setOffset(0); }}
+                    className={cn(
+                      'flex w-full items-center justify-between rounded-md px-2 py-1 text-xs font-medium transition-colors',
+                      categoryName === 'all' ? 'bg-cream text-ink' : 'text-ink hover:bg-cream/60',
+                    )}
+                  >
+                    All
+                    {categoryName === 'all' && <Check className="h-3 w-3" />}
+                  </button>
+                  {categoryOptions.map((name) => (
+                    <button
+                      key={name}
+                      type="button"
+                      onClick={() => { setCategoryName(name); setOffset(0); }}
+                      className={cn(
+                        'flex w-full items-center justify-between rounded-md px-2 py-1 text-xs font-medium transition-colors',
+                        categoryName === name ? 'bg-cream text-ink' : 'text-ink hover:bg-cream/60',
+                      )}
+                    >
+                      <span className="truncate">{name}</span>
+                      {categoryName === name && <Check className="h-3 w-3 shrink-0" />}
+                    </button>
+                  ))}
+                </div>
+              </FacetGroup>
+
+              <FacetGroup
+                label="Receipt status"
+                open={openGroups.receipt}
+                onToggle={() => toggleGroup('receipt')}
+              >
+                <div className="grid grid-cols-2 gap-1">
+                  {(['missing', 'pending', 'matched', 'n/a'] as const).map((status) => (
+                    <button
+                      key={status}
+                      type="button"
+                      onClick={() => {
+                        setReceipts((current) => toggle(status, current));
+                        setOffset(0);
+                      }}
+                      className={cn(
+                        'rounded-md px-2 py-1 text-xs font-bold transition-colors',
+                        receipts.includes(status)
+                          ? 'bg-ink text-lemon'
+                          : 'bg-cream/40 text-ink hover:bg-cream',
+                      )}
+                    >
+                      {status}
+                    </button>
+                  ))}
+                </div>
+              </FacetGroup>
+            </aside>
+          ) : (
+            <div className="hidden lg:block">
+              <Button variant="outline" size="sm" onClick={() => setRailOpen(true)}>
+                <Filter className="h-3.5 w-3.5" />
+                Filters
+              </Button>
+            </div>
+          )}
+
+          <div className="min-w-0 flex-1">
+            <div className="mb-3 grid gap-3 sm:grid-cols-3">
+              <Metric
+                label="Inflow"
+                value={fmt$(rollup.inflowCents / 100)}
+                tone="positive"
+                icon={<ArrowDownRight className="h-3.5 w-3.5" />}
+              />
+              <Metric
+                label="Outflow"
+                value={fmt$(rollup.outflowCents / 100)}
+                detail={rollup.transferCents ? `${fmt$(rollup.operatingOutflowCents / 100)} operating · ${fmt$(rollup.transferCents / 100)} transfers` : 'Operating spend'}
+                icon={<ArrowUpRight className="h-3.5 w-3.5 text-dim" />}
+              />
+              <Metric
+                label="Net"
+                value={fmt$(rollup.netCents / 100)}
+                tone={rollup.netCents >= 0 ? 'positive' : 'warning'}
+                detail={rollup.missingReceipts ? `${rollup.missingReceipts} missing receipts` : 'All receipts matched'}
+              />
+            </div>
+
+            <div className="overflow-hidden rounded-xl border border-ink2/10 bg-paper shadow-sm">
+              {error ? (
+                <div className="p-4 text-sm font-bold text-coral-ink">{error}</div>
+              ) : (
+                <>
+                  <Table className="table-fixed">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-28">Date</TableHead>
+                        <TableHead>Merchant</TableHead>
+                        <TableHead className="w-44">Business</TableHead>
+                        <TableHead className="w-48">Account</TableHead>
+                        <TableHead className="w-40">Category</TableHead>
+                        <TableHead className="w-32 text-right">Amount</TableHead>
+                        <TableHead className="w-28">Receipt</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {rows.map((transaction) => {
+                        const rowBusiness = businessById.get(transaction.biz);
+                        const account = transaction.accountId ? accountById.get(transaction.accountId) : undefined;
+                        return (
+                          <TableRow
+                            key={transaction.id}
+                            onClick={() => setSelectedTransaction(transaction)}
+                            className="cursor-pointer"
+                          >
+                            <TableCell className="whitespace-nowrap text-dim">
+                              <div className="font-mono text-[11px]">{transaction.date}</div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-2">
+                                {transaction.amount > 0 ? (
+                                  <ArrowDownRight className="h-3.5 w-3.5 shrink-0 text-sage-ink" />
+                                ) : (
+                                  <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-dim" />
+                                )}
+                                <div className="min-w-0">
+                                  <div className="truncate font-bold text-ink" title={transaction.merchant}>
+                                    {transaction.merchant}
+                                  </div>
+                                  {transaction.note && (
+                                    <div className="truncate text-[11px] text-dim">{transaction.note}</div>
+                                  )}
+                                </div>
+                              </div>
+                            </TableCell>
+                            <TableCell className="truncate">
+                              <span className="inline-flex items-center gap-1.5 text-xs">
+                                <span
+                                  className="h-1.5 w-1.5 rounded-full"
+                                  style={{ background: rowBusiness?.color ?? '#ccc' }}
+                                />
+                                <span className="text-dim">{rowBusiness?.name ?? transaction.biz}</span>
+                              </span>
+                            </TableCell>
+                            <TableCell className="truncate text-dim">
+                              {account ? (
+                                <span className="inline-flex items-center gap-1.5">
+                                  <AccountTypeIcon kind={account.kind} className="h-3 w-3" />
+                                  <span className="truncate text-xs">{accountLabel(account)}</span>
+                                </span>
+                              ) : (
+                                <span className="text-xs">{transaction.src}</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="truncate text-xs">{transaction.cat}</TableCell>
+                            <TableCell
+                              className={cn(
+                                'text-right font-display font-bold tabular-nums',
+                                transaction.amount > 0 ? 'text-sage-ink' : 'text-ink',
+                              )}
+                            >
+                              {fmt$(transaction.amount)}
+                            </TableCell>
+                            <TableCell>
+                              <ReceiptPill status={transaction.receipt} />
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                  {loading && <div className="p-6 text-center text-sm text-dim">Loading transactions...</div>}
+                  {!loading && rows.length === 0 && (
+                    <div className="p-8">
+                      <EmptyState title="No transactions" description="No rows match the current filters." />
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="mt-3 flex items-center justify-between text-xs text-dim">
+              <div>
+                Showing {rollup.rows === 0 ? 0 : offset + 1}–{Math.min(offset + rows.length, rollup.rows)} of {rollup.rows}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={offset === 0 || loading}
+                  onClick={() => setOffset(Math.max(0, offset - limit))}
+                >
+                  <ChevronLeft className="h-3 w-3" />
+                  Previous
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={offset + rows.length >= rollup.rows || loading}
+                  onClick={() => setOffset(offset + limit)}
+                >
+                  Next
+                  <ChevronRight className="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -395,15 +600,33 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
         onClose={() => setSelectedTransaction(null)}
         onSaved={() => setRefreshKey((key) => key + 1)}
       />
-    </div>
+    </AppShell>
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function FacetGroup({
+  label,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string;
+  open?: boolean;
+  onToggle?: () => void;
+  children: ReactNode;
+}) {
   return (
-    <div className="grid gap-1.5">
-      <Label className="font-mono text-[10px] uppercase tracking-wider text-dim">{label}</Label>
-      {children}
+    <div className="border-t border-ink2/8 py-2 first:border-t-0 first:pt-0">
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={!onToggle}
+        className="mb-1.5 flex w-full items-center justify-between font-mono text-[10px] font-medium uppercase tracking-wider text-dim hover:text-ink"
+      >
+        <span>{label}</span>
+        {onToggle && (open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />)}
+      </button>
+      {open !== false && children}
     </div>
   );
 }
@@ -412,63 +635,141 @@ function Metric({
   label,
   value,
   tone = 'default',
+  detail,
+  icon,
 }: {
   label: string;
   value: string;
   tone?: 'default' | 'positive' | 'warning' | 'muted';
+  detail?: string;
+  icon?: ReactNode;
 }) {
   return (
-    <div className={cn(
-      'rounded-lg border px-3 py-2 shadow-sm',
-      tone === 'positive' && 'border-sage/40 bg-sage/10 text-sage-ink',
-      tone === 'warning' && 'border-coral/40 bg-coral/10 text-coral-ink',
-      tone === 'muted' && 'border-ink2/10 bg-paper text-dim',
-      tone === 'default' && 'border-ink2/10 bg-paper',
-    )}>
-      <div className="font-mono text-[10px] uppercase tracking-wider text-dim">{label}</div>
-      <div className="font-display text-xl font-bold tabular-nums">{value}</div>
-    </div>
-  );
-}
-
-function FilterGroup({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="mt-3 flex flex-wrap items-center gap-1.5">
-      <span className="mr-1 font-mono text-[10px] uppercase tracking-wider text-dim">{label}</span>
-      {children}
-    </div>
-  );
-}
-
-function FilterChip({
-  active,
-  muted,
-  children,
-  onClick,
-}: {
-  active: boolean;
-  muted?: boolean;
-  children: ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
+    <div
       className={cn(
-        'rounded-full border px-2.5 py-1 text-xs font-bold transition-colors',
-        active ? 'border-ink bg-ink text-lemon' : 'border-ink2/20 bg-cream/70 text-ink hover:border-ink2/40',
-        muted && 'opacity-60',
+        'rounded-xl border px-4 py-3 shadow-sm',
+        tone === 'positive' && 'border-sage/40 bg-sage/10 text-sage-ink',
+        tone === 'warning' && 'border-coral/40 bg-coral/10 text-coral-ink',
+        tone === 'muted' && 'border-ink2/10 bg-paper text-dim',
+        tone === 'default' && 'border-ink2/10 bg-paper',
       )}
     >
-      {children}
-    </button>
+      <div className="flex items-center justify-between">
+        <div className="font-mono text-[10px] uppercase tracking-wider text-dim">{label}</div>
+        {icon}
+      </div>
+      <div className="mt-1 font-display text-xl font-bold tabular-nums">{value}</div>
+      {detail && <div className="mt-1 truncate text-xs font-medium text-dim">{detail}</div>}
+    </div>
   );
 }
 
 function ReceiptPill({ status }: { status: ReceiptStatus }) {
-  const variant = status === 'missing' ? 'danger' : status === 'matched' ? 'success' : status === 'pending' ? 'warning' : 'muted';
+  const variant =
+    status === 'missing'
+      ? 'danger'
+      : status === 'matched'
+        ? 'success'
+        : status === 'pending'
+          ? 'warning'
+          : 'muted';
   return <Badge variant={variant}>{status}</Badge>;
+}
+
+function AccountTypeIcon({ kind, className }: { kind: Account['kind']; className?: string }) {
+  if (kind === 'credit') return <CreditCard className={className} />;
+  if (kind === 'savings') return <Wallet className={className} />;
+  if (kind === 'checking') return <Landmark className={className} />;
+  return <Boxes className={className} />;
+}
+
+function DateRangePill({
+  from,
+  to,
+  onChange,
+}: {
+  from: string;
+  to: string;
+  onChange: (range: { from: string; to: string }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const presets = useMemo(() => {
+    const t = today();
+    return [
+      { label: 'Last 7 days', from: shiftDays(t, -7), to: t },
+      { label: 'Last 30 days', from: shiftDays(t, -30), to: t },
+      { label: 'This month', from: startOfMonth(), to: t },
+      { label: 'Last 90 days', from: shiftDays(t, -90), to: t },
+      { label: 'YTD', from: `${t.slice(0, 4)}-01-01`, to: t },
+      { label: 'Last 12 months', from: shiftMonths(t, -12), to: t },
+    ];
+  }, []);
+  const matched = presets.find((p) => p.from === from && p.to === to);
+  const label = matched ? matched.label : `${from} → ${to}`;
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="inline-flex h-9 items-center gap-2 rounded-full border border-ink2/15 bg-paper px-3 text-xs font-bold text-ink hover:border-ink2/30"
+      >
+        <Calendar className="h-3.5 w-3.5 text-dim" />
+        {label}
+        <ChevronDown className="h-3 w-3 opacity-60" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full z-40 mt-1 w-[280px] rounded-xl border border-ink2/10 bg-paper p-2 shadow-lg">
+            {presets.map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                onClick={() => {
+                  onChange({ from: preset.from, to: preset.to });
+                  setOpen(false);
+                }}
+                className={cn(
+                  'flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs font-bold transition-colors',
+                  from === preset.from && to === preset.to ? 'bg-cream' : 'hover:bg-cream',
+                )}
+              >
+                <span>{preset.label}</span>
+                <span className="font-mono text-[10px] text-dim">
+                  {preset.from.slice(5)} → {preset.to.slice(5)}
+                </span>
+              </button>
+            ))}
+            <div className="mt-2 grid grid-cols-2 gap-2 border-t border-ink2/10 pt-2">
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-dim">From</span>
+                <input
+                  type="date"
+                  value={from}
+                  onChange={(event) => onChange({ from: event.target.value, to })}
+                  className="h-8 rounded-md border border-ink2/10 bg-paper px-2 text-xs"
+                />
+              </label>
+              <label className="grid gap-1">
+                <span className="font-mono text-[10px] uppercase tracking-wider text-dim">To</span>
+                <input
+                  type="date"
+                  value={to}
+                  onChange={(event) => onChange({ from, to: event.target.value })}
+                  className="h-8 rounded-md border border-ink2/10 bg-paper px-2 text-xs"
+                />
+              </label>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function csvEscape(value: string): string {
+  if (/[",\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
 }
 
 function toggle<T>(value: T, values: T[]): T[] {
@@ -479,10 +780,24 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+function startOfMonth(): string {
+  return `${new Date().toISOString().slice(0, 7)}-01`;
+}
+
+function shiftDays(value: string, delta: number): string {
+  const date = new Date(`${value}T00:00:00`);
+  date.setDate(date.getDate() + delta);
+  return date.toISOString().slice(0, 10);
+}
+
+function shiftMonths(value: string, delta: number): string {
+  const date = new Date(`${value}T00:00:00`);
+  date.setMonth(date.getMonth() + delta);
+  return date.toISOString().slice(0, 10);
+}
+
 function defaultFrom(): string {
-  const start = new Date();
-  start.setMonth(start.getMonth() - 12);
-  return start.toISOString().slice(0, 10);
+  return shiftMonths(today(), -12);
 }
 
 const emptyRollup: TransactionRollup = {

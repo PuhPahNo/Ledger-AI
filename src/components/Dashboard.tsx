@@ -9,7 +9,7 @@ import { useToast } from '@/hooks/useToast';
 import { Button } from '@/components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Input } from '@/components/ui/input';
-import { HeaderBar } from './HeaderBar';
+import { AppShell } from './AppShell';
 import { BusinessStrip } from './BusinessStrip';
 import { SpendHeroTile, type DashboardFlowMode } from './tiles/SpendHeroTile';
 import { ReceiptDropTile } from './tiles/ReceiptDropTile';
@@ -154,23 +154,22 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
   };
 
   return (
-    <div className="min-h-screen bg-bg text-ink">
-      <div className="mx-auto flex max-w-[1600px] flex-col gap-4 p-4">
-        <HeaderBar
-          onUploadReceipt={handleUpload}
-          currentView="dashboard"
-          onViewChange={onViewChange}
-          onLogout={onLogout}
-          user={user}
-          businesses={businesses}
-          selectedBusiness={businessFilter}
-          onBusinessChange={handleBusinessChange}
-          query={query}
-          onQueryChange={setQuery}
-          reviewCount={categorizationReviewItems.length}
-          onOpenReviewCenter={() => setReviewCenterOpen(true)}
-        />
-
+    <AppShell
+      currentView="dashboard"
+      onViewChange={onViewChange}
+      onLogout={onLogout}
+      user={user}
+      onUploadReceipt={handleUpload}
+      contextEyebrow="Workspace"
+      contextTitle="Dashboard"
+      search={{ query, onQueryChange: setQuery, placeholder: 'Search merchants…' }}
+      businesses={businesses}
+      selectedBusiness={businessFilter}
+      onBusinessChange={handleBusinessChange}
+      reviewCount={categorizationReviewItems.length}
+      onOpenReviewCenter={() => setReviewCenterOpen(true)}
+    >
+      <div className="flex flex-col gap-4">
         <BusinessStrip
           businesses={businesses}
           transactions={transactions}
@@ -257,7 +256,7 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
         onClose={() => setSelectedTransaction(null)}
         onSaved={refreshDashboard}
       />
-    </div>
+    </AppShell>
   );
 }
 
