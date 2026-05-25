@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import type { Business, CategorizationReviewItem, CurrentUser } from '@/types/domain';
 import type { AppView } from '@/types/navigation';
-import { enableTotp, listCategorizationReviewItems, resetAdminUserPassword, setupTotp } from '@/api';
+import { enableTotp, listCategorizationReviewItems, listReceipts, resetAdminUserPassword, setupTotp } from '@/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
@@ -99,6 +99,7 @@ export function AppShell({
   const fileInput = useRef<HTMLInputElement>(null);
   const [internalReviewOpen, setInternalReviewOpen] = useState(false);
   const [internalReviewItems, setInternalReviewItems] = useState<CategorizationReviewItem[]>([]);
+  const [unmatchedReceiptCount, setUnmatchedReceiptCount] = useState(0);
   const usesExternalReviewCenter = Boolean(onOpenReviewCenter);
 
   const refreshInternalReviewItems = () => {
@@ -119,6 +120,16 @@ export function AppShell({
     };
   }, [usesExternalReviewCenter]);
 
+  useEffect(() => {
+    let mounted = true;
+    listReceipts({ status: 'pending' })
+      .then((rows) => mounted && setUnmatchedReceiptCount(rows.length))
+      .catch(() => mounted && setUnmatchedReceiptCount(0));
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const displayedReviewCount = usesExternalReviewCenter ? (reviewCount ?? 0) : internalReviewItems.length;
   const openReviewCenter = onOpenReviewCenter ?? (() => setInternalReviewOpen(true));
 
@@ -131,7 +142,7 @@ export function AppShell({
           user={user}
           onLogout={onLogout}
           search={search}
-          reviewCount={displayedReviewCount}
+          unmatchedReceiptCount={unmatchedReceiptCount}
         />
 
         <main className="flex min-w-0 flex-1 flex-col gap-3">
@@ -185,10 +196,10 @@ interface SidebarProps {
   user?: CurrentUser;
   onLogout?: () => void;
   search?: { query: string; onQueryChange: (value: string) => void; placeholder?: string };
-  reviewCount: number;
+  unmatchedReceiptCount: number;
 }
 
-function Sidebar({ currentView, onViewChange, user, onLogout, search, reviewCount }: SidebarProps) {
+function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedReceiptCount }: SidebarProps) {
   return (
     <aside className="sticky top-3 hidden h-[calc(100vh-24px)] w-[220px] shrink-0 flex-col rounded-xl border border-ink2/10 bg-paper shadow-sm md:flex">
       <div className="flex items-center gap-2.5 border-b border-ink2/10 px-4 py-3">
@@ -232,14 +243,14 @@ function Sidebar({ currentView, onViewChange, user, onLogout, search, reviewCoun
             >
               <Icon className={cn('h-4 w-4', active ? 'text-lemon' : 'text-dim group-hover:text-ink')} />
               <span>{item.label}</span>
-              {item.id === 'receipts' && reviewCount > 0 && (
+              {item.id === 'receipts' && unmatchedReceiptCount > 0 && (
                 <span
                   className={cn(
                     'ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none',
                     active ? 'bg-lemon text-ink' : 'bg-coral text-coral-ink',
                   )}
                 >
-                  {reviewCount > 9 ? '9+' : reviewCount}
+                  {unmatchedReceiptCount > 9 ? '9+' : unmatchedReceiptCount}
                 </span>
               )}
             </button>
