@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Bell, KeyRound, LogOut, Search, Settings, ShieldCheck, Upload, UserRound } from 'lucide-react';
-import type { Business, CurrentUser } from '@/types/domain';
+import type { Business, CategorizationReviewItem, CurrentUser } from '@/types/domain';
 import type { AppView } from '@/types/navigation';
-import { enableTotp, resetAdminUserPassword, setupTotp } from '@/api';
+import { enableTotp, listCategorizationReviewItems, resetAdminUserPassword, setupTotp } from '@/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -15,6 +15,7 @@ import {
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useToast } from '@/hooks/useToast';
 import { cn } from '@/lib/cn';
+import { CategorizationReviewCenter } from './CategorizationReviewCenter';
 
 interface Props {
   onUploadReceipt: (file: File) => void;
@@ -46,95 +47,129 @@ export function HeaderBar({
   onOpenReviewCenter,
 }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
+  const [internalReviewOpen, setInternalReviewOpen] = useState(false);
+  const [internalReviewItems, setInternalReviewItems] = useState<CategorizationReviewItem[]>([]);
+  const usesExternalReviewCenter = Boolean(onOpenReviewCenter);
+
+  const refreshInternalReviewItems = () => {
+    if (usesExternalReviewCenter) return;
+    listCategorizationReviewItems()
+      .then(setInternalReviewItems)
+      .catch(() => setInternalReviewItems([]));
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    if (usesExternalReviewCenter) return;
+    listCategorizationReviewItems()
+      .then((items) => mounted && setInternalReviewItems(items))
+      .catch(() => mounted && setInternalReviewItems([]));
+    return () => {
+      mounted = false;
+    };
+  }, [usesExternalReviewCenter]);
+
+  const displayedReviewCount = usesExternalReviewCenter ? reviewCount : internalReviewItems.length;
+  const openReviewCenter = onOpenReviewCenter ?? (() => setInternalReviewOpen(true));
 
   return (
-    <header className="flex flex-wrap items-center gap-2 rounded-xl border border-ink2/8 bg-paper px-3 py-2 shadow-sm lg:flex-nowrap">
-      <div className="flex shrink-0 items-center gap-2">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-ink font-display text-lg font-bold text-lemon">
-          L
+    <>
+      <header className="flex flex-wrap items-center gap-2 rounded-xl border border-ink2/8 bg-paper px-3 py-2 shadow-sm lg:flex-nowrap">
+        <div className="flex shrink-0 items-center gap-2">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-ink font-display text-lg font-bold text-lemon">
+            L
+          </div>
+          <div className="hidden font-display text-lg font-bold tracking-tight text-ink sm:block">Ledger AI</div>
+          <span className="hidden rounded-full bg-cream px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-dim 2xl:inline-flex">
+            internal v1
+          </span>
         </div>
-        <div className="hidden font-display text-lg font-bold tracking-tight text-ink sm:block">Ledger AI</div>
-        <span className="hidden rounded-full bg-cream px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-dim 2xl:inline-flex">
-          internal v1
-        </span>
-      </div>
 
-      <ToggleGroup
-        type="single"
-        value={currentView}
-        onValueChange={(value) => value && onViewChange?.(value as AppView)}
-        className="min-w-0 shrink overflow-x-auto"
-      >
-        <ToggleGroupItem value="dashboard">Dashboard</ToggleGroupItem>
-        <ToggleGroupItem value="transactions">Transactions</ToggleGroupItem>
-        <ToggleGroupItem value="receipts">Receipts</ToggleGroupItem>
-        <ToggleGroupItem value="cash-flow">Cash Flow</ToggleGroupItem>
-        <ToggleGroupItem value="balances">Balances</ToggleGroupItem>
-        <ToggleGroupItem value="insights">Insights</ToggleGroupItem>
-        <ToggleGroupItem value="assistant">Assistant</ToggleGroupItem>
-      </ToggleGroup>
+        <ToggleGroup
+          type="single"
+          value={currentView}
+          onValueChange={(value) => value && onViewChange?.(value as AppView)}
+          className="min-w-0 shrink overflow-x-auto"
+        >
+          <ToggleGroupItem value="dashboard">Dashboard</ToggleGroupItem>
+          <ToggleGroupItem value="transactions">Transactions</ToggleGroupItem>
+          <ToggleGroupItem value="receipts">Receipts</ToggleGroupItem>
+          <ToggleGroupItem value="cash-flow">Cash Flow</ToggleGroupItem>
+          <ToggleGroupItem value="balances">Balances</ToggleGroupItem>
+          <ToggleGroupItem value="insights">Insights</ToggleGroupItem>
+          <ToggleGroupItem value="assistant">Assistant</ToggleGroupItem>
+        </ToggleGroup>
 
-      {currentView === 'dashboard' && businesses.length > 0 && onBusinessChange && (
-        <Select value={selectedBusiness} onValueChange={onBusinessChange}>
-          <SelectTrigger className="h-9 w-36 shrink-0 rounded-full border-transparent bg-cream/70 text-xs font-bold 2xl:w-40">
-            <SelectValue placeholder="Business" />
-          </SelectTrigger>
-          <SelectContent align="end" className="w-56">
-            <SelectItem value="all">All businesses</SelectItem>
-            {businesses.map((business) => (
-              <SelectItem key={business.id} value={business.id}>
-                {business.short} · {business.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+        {currentView === 'dashboard' && businesses.length > 0 && onBusinessChange && (
+          <Select value={selectedBusiness} onValueChange={onBusinessChange}>
+            <SelectTrigger className="h-9 w-36 shrink-0 rounded-full border-transparent bg-cream/70 text-xs font-bold 2xl:w-40">
+              <SelectValue placeholder="Business" />
+            </SelectTrigger>
+            <SelectContent align="end" className="w-56">
+              <SelectItem value="all">All businesses</SelectItem>
+              {businesses.map((business) => (
+                <SelectItem key={business.id} value={business.id}>
+                  {business.short} · {business.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
 
-      <div className="relative order-last w-full min-w-0 sm:order-none sm:ml-auto sm:w-64 sm:max-w-xs lg:flex-none 2xl:w-72">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-dim" />
-        <Input
-          value={query}
-          onChange={(event) => onQueryChange?.(event.target.value)}
-          placeholder="Search merchants, categories, notes"
-          className="h-9 rounded-full pl-9 bg-cream/70 border-transparent focus-visible:bg-paper"
-        />
-      </div>
+        <div className="relative order-last w-full min-w-0 sm:order-none sm:ml-auto sm:w-64 sm:max-w-xs lg:flex-none 2xl:w-72">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-dim" />
+          <Input
+            value={query}
+            onChange={(event) => onQueryChange?.(event.target.value)}
+            placeholder="Search merchants, categories, notes"
+            className="h-9 rounded-full pl-9 bg-cream/70 border-transparent focus-visible:bg-paper"
+          />
+        </div>
 
-      {onOpenReviewCenter && (
         <Button
           variant="secondary"
           size="icon-sm"
-          onClick={onOpenReviewCenter}
+          onClick={openReviewCenter}
           title="Notifications"
           className="relative"
         >
           <Bell className="h-4 w-4" />
-          {reviewCount > 0 && (
+          {displayedReviewCount > 0 && (
             <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-coral px-1 text-[10px] font-bold leading-none text-coral-ink">
-              {reviewCount > 9 ? '9+' : reviewCount}
+              {displayedReviewCount > 9 ? '9+' : displayedReviewCount}
             </span>
           )}
         </Button>
+
+        <input
+          ref={fileInput}
+          type="file"
+          accept="image/*,application/pdf,text/plain,text/html,.txt,.html,.htm"
+          hidden
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) onUploadReceipt(file);
+            event.target.value = '';
+          }}
+        />
+        <Button size="sm" onClick={() => fileInput.current?.click()} title="Upload receipt">
+          <Upload className="h-4 w-4" />
+          <span className="hidden 2xl:inline">Upload</span>
+        </Button>
+
+        <ProfileMenu user={user} onLogout={onLogout} onViewChange={onViewChange} />
+      </header>
+
+      {!usesExternalReviewCenter && (
+        <CategorizationReviewCenter
+          open={internalReviewOpen}
+          items={internalReviewItems}
+          businesses={businesses}
+          onClose={() => setInternalReviewOpen(false)}
+          onResolved={refreshInternalReviewItems}
+        />
       )}
-
-      <input
-        ref={fileInput}
-        type="file"
-        accept="image/*,application/pdf,text/plain,text/html,.txt,.html,.htm"
-        hidden
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (file) onUploadReceipt(file);
-          event.target.value = '';
-        }}
-      />
-      <Button size="sm" onClick={() => fileInput.current?.click()} title="Upload receipt">
-        <Upload className="h-4 w-4" />
-        <span className="hidden 2xl:inline">Upload</span>
-      </Button>
-
-      <ProfileMenu user={user} onLogout={onLogout} onViewChange={onViewChange} />
-    </header>
+    </>
   );
 }
 
