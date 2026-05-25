@@ -1,4 +1,4 @@
-export type AppView = 'dashboard' | 'transactions' | 'cash-flow' | 'admin';
+export type AppView = 'dashboard' | 'transactions' | 'cash-flow' | 'balances' | 'admin';
 
 export interface TransactionViewFilters {
   business?: string;

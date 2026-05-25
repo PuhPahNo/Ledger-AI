@@ -160,6 +160,7 @@ export interface Account {
   availableBalanceCents?: number | null;
   connectionLabel?: string;
   connectionStatus?: ConnectionStatus;
+  connectionLastSyncAt?: string | null;
 }
 
 export type AlertKind = 'dup' | 'missing' | 'orphan' | 'spike' | 'reauth';

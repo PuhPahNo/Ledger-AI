@@ -28,6 +28,7 @@ export async function accountRoutes(app: FastifyInstance): Promise<void> {
         availableBalanceCents: accounts.availableBalanceCents,
         connectionLabel: connections.label,
         connectionStatus: connections.status,
+        connectionLastSyncAt: connections.lastSyncAt,
       })
       .from(accounts)
       .innerJoin(connections, eq(accounts.connectionId, connections.id))
@@ -41,6 +42,7 @@ export async function accountRoutes(app: FastifyInstance): Promise<void> {
       ...row,
       mask: row.mask ? `•• ${row.mask.replace(/^••\s*/, '')}` : null,
       biz: row.businessKey ?? 'all',
+      connectionLastSyncAt: row.connectionLastSyncAt?.toISOString() ?? null,
     }));
   });
 

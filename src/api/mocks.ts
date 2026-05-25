@@ -58,9 +58,9 @@ export const CONNECTIONS: Connection[] = [
 ];
 
 export const ACCOUNTS: Account[] = [
-  { id: 'acct-1', connectionId: 'conn-1', name: 'Amex Platinum', mask: '** 4002', kind: 'credit', enabled: true, biz: 'draft-sharks', businessId: 'draft-sharks', connectionLabel: 'Amex Platinum', connectionStatus: 'live' },
-  { id: 'acct-2', connectionId: 'conn-2', name: 'Chase Sapphire', mask: '** 6711', kind: 'credit', enabled: true, biz: 'pointsnav', businessId: 'pointsnav', connectionLabel: 'Chase Sapphire', connectionStatus: 'live' },
-  { id: 'acct-3', connectionId: 'conn-3', name: 'Operations Checking', mask: '** 9981', kind: 'checking', enabled: true, biz: 'womens-net', businessId: 'womens-net', connectionLabel: 'Chase Business', connectionStatus: 'live' },
+  { id: 'acct-1', connectionId: 'conn-1', name: 'Amex Platinum', mask: '** 4002', kind: 'credit', enabled: true, biz: 'draft-sharks', businessId: 'draft-sharks', currentBalanceCents: 1842067, availableBalanceCents: 4200000, connectionLabel: 'Amex Platinum', connectionStatus: 'live', connectionLastSyncAt: '2026-05-24T18:05:00.000Z' },
+  { id: 'acct-2', connectionId: 'conn-2', name: 'Chase Sapphire', mask: '** 6711', kind: 'credit', enabled: true, biz: 'pointsnav', businessId: 'pointsnav', currentBalanceCents: 726120, availableBalanceCents: 2100000, connectionLabel: 'Chase Sapphire', connectionStatus: 'live', connectionLastSyncAt: '2026-05-24T17:52:00.000Z' },
+  { id: 'acct-3', connectionId: 'conn-3', name: 'Operations Checking', mask: '** 9981', kind: 'checking', enabled: true, biz: 'womens-net', businessId: 'womens-net', currentBalanceCents: 24890142, availableBalanceCents: 24890142, connectionLabel: 'Chase Business', connectionStatus: 'live', connectionLastSyncAt: '2026-05-24T18:03:00.000Z' },
 ];
 
 export function visibleMockTransactions(rows: Transaction[] = TRANSACTIONS, accountIds: string[] = []): Transaction[] {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { countDuplicateSubs, countNeedsReceipt, summarizeTransactions, totalSpend, transactionMatchesDirection } from './calc';
-import type { Transaction } from '@/types/domain';
+import { countDuplicateSubs, countNeedsReceipt, summarizeAccountBalances, summarizeTransactions, totalSpend, transactionMatchesDirection } from './calc';
+import type { Account, Transaction } from '@/types/domain';
 
 const rows: Transaction[] = [
   { id: '1', date: '2026-05-01', dateLabel: 'May 1', merchant: 'A', amount: -10, biz: 'b1', cat: 'Software', receipt: 'missing', src: 'Card', flag: 'no-receipt' },
@@ -36,5 +36,22 @@ describe('dashboard calculations', () => {
   it('counts missing receipts and duplicate subscription flags', () => {
     expect(countNeedsReceipt(rows, 'b1')).toBe(1);
     expect(countDuplicateSubs(rows, 'b1')).toBe(1);
+  });
+});
+
+describe('account balance calculations', () => {
+  it('separates depository balances from credit balances', () => {
+    const accounts: Account[] = [
+      { id: 'a1', connectionId: 'c1', biz: 'b1', kind: 'checking', name: 'Checking', enabled: true, currentBalanceCents: 120000, availableBalanceCents: 100000 },
+      { id: 'a2', connectionId: 'c1', biz: 'b1', kind: 'credit', name: 'Card', enabled: true, currentBalanceCents: 25000, availableBalanceCents: 75000 },
+      { id: 'a3', connectionId: 'c2', biz: 'b1', kind: 'savings', name: 'Savings', enabled: false, currentBalanceCents: 300000 },
+    ];
+    expect(summarizeAccountBalances(accounts)).toMatchObject({
+      bankBalanceCents: 420000,
+      creditBalanceCents: 25000,
+      netCashCents: 395000,
+      watched: 2,
+      ignored: 1,
+    });
   });
 });

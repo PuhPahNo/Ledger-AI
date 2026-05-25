@@ -1,4 +1,4 @@
-import type { BusinessId, Transaction, TransactionDirection, TransactionRollup } from '@/types/domain';
+import type { Account, BusinessId, Transaction, TransactionDirection, TransactionRollup } from '@/types/domain';
 
 export function isExcludedFromSpend(txn: Transaction): boolean {
   return Boolean(txn.categoryTaxCode?.startsWith('exclude_')) || txn.cat.toLowerCase() === 'transfers';
@@ -62,4 +62,30 @@ export function countNeedsReceipt(txns: Transaction[], biz: BusinessId): number 
 
 export function countDuplicateSubs(txns: Transaction[], biz: BusinessId): number {
   return txns.filter((t) => t.biz === biz && t.flag === 'dup-sub').length;
+}
+
+export function summarizeAccountBalances(accounts: Account[]) {
+  return accounts.reduce((summary, account) => {
+    if (account.enabled) summary.watched += 1;
+    else summary.ignored += 1;
+    const current = account.currentBalanceCents ?? 0;
+    const available = account.availableBalanceCents ?? 0;
+    if (account.kind === 'credit') {
+      summary.creditBalanceCents += current;
+      summary.creditAvailableCents += available;
+    } else {
+      summary.bankBalanceCents += current;
+      summary.bankAvailableCents += available;
+    }
+    summary.netCashCents = summary.bankBalanceCents - summary.creditBalanceCents;
+    return summary;
+  }, {
+    bankBalanceCents: 0,
+    bankAvailableCents: 0,
+    creditBalanceCents: 0,
+    creditAvailableCents: 0,
+    netCashCents: 0,
+    watched: 0,
+    ignored: 0,
+  });
 }
