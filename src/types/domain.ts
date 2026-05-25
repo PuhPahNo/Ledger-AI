@@ -53,6 +53,18 @@ export interface Transaction {
   flag?: TransactionFlag;
 }
 
+export type TransactionDirection = 'all' | 'inflow' | 'outflow' | 'operating-outflow' | 'transfer';
+
+export interface TransactionRollup {
+  rows: number;
+  inflowCents: number;
+  outflowCents: number;
+  operatingOutflowCents: number;
+  transferCents: number;
+  netCents: number;
+  missingReceipts: number;
+}
+
 export interface Category {
   id?: string;
   businessId?: string | null;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { countDuplicateSubs, countNeedsReceipt, totalSpend } from './calc';
+import { countDuplicateSubs, countNeedsReceipt, summarizeTransactions, totalSpend, transactionMatchesDirection } from './calc';
 import type { Transaction } from '@/types/domain';
 
 const rows: Transaction[] = [
@@ -12,6 +12,25 @@ const rows: Transaction[] = [
 describe('dashboard calculations', () => {
   it('sums only outflows', () => {
     expect(totalSpend(rows)).toBe(-30);
+  });
+
+  it('summarizes cash movement without mixing transfers into operating spend', () => {
+    expect(summarizeTransactions(rows)).toMatchObject({
+      rows: 4,
+      inflowCents: 10000,
+      outflowCents: 53000,
+      operatingOutflowCents: 3000,
+      transferCents: 50000,
+      netCents: -43000,
+      missingReceipts: 1,
+    });
+  });
+
+  it('matches transaction direction filters', () => {
+    expect(transactionMatchesDirection(rows[2], 'inflow')).toBe(true);
+    expect(transactionMatchesDirection(rows[0], 'operating-outflow')).toBe(true);
+    expect(transactionMatchesDirection(rows[3], 'transfer')).toBe(true);
+    expect(transactionMatchesDirection(rows[3], 'operating-outflow')).toBe(false);
   });
 
   it('counts missing receipts and duplicate subscription flags', () => {

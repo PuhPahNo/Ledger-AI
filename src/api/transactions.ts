@@ -1,7 +1,8 @@
-import type { BusinessId, ReceiptStatus, Transaction } from '@/types/domain';
+import type { BusinessId, ReceiptStatus, Transaction, TransactionDirection, TransactionRollup } from '@/types/domain';
 import { http, useMockApi } from './client';
 import { mapTransaction, type ApiTransaction } from './mapper';
 import { TRANSACTIONS, visibleMockTransactions } from './mocks';
+import { summarizeTransactions, transactionMatchesDirection } from '@/lib/calc';
 
 export interface ListTransactionsParams {
   biz?: BusinessId | 'all';
@@ -12,10 +13,12 @@ export interface ListTransactionsParams {
   /** Free-text search across merchant/category/note. */
   q?: string;
   limit?: number;
+  offset?: number;
   accountIds?: string[];
   categories?: string[];
   receipts?: ReceiptStatus[];
-  sort?: 'date' | 'amount' | 'merchant' | 'business' | 'category' | 'account';
+  direction?: TransactionDirection;
+  sort?: 'date' | 'amount' | 'largest' | 'merchant' | 'business' | 'category' | 'account';
   dir?: 'asc' | 'desc';
 }
 
@@ -31,6 +34,9 @@ export function listTransactions(params: ListTransactionsParams = {}): Promise<T
     if (params.to) rows = rows.filter((t) => t.date <= params.to!);
     if (params.categories?.length) rows = rows.filter((t) => params.categories?.includes(t.cat));
     if (params.receipts?.length) rows = rows.filter((t) => params.receipts?.includes(t.receipt));
+    if (params.direction && params.direction !== 'all') {
+      rows = rows.filter((t) => transactionMatchesDirection(t, params.direction ?? 'all'));
+    }
     if (params.q) {
       const q = params.q.toLowerCase();
       rows = rows.filter((t) => (
@@ -41,6 +47,7 @@ export function listTransactions(params: ListTransactionsParams = {}): Promise<T
       ));
     }
     if (params.sort) rows.sort((a, b) => compareTransactions(a, b, params.sort ?? 'date', params.dir ?? 'desc'));
+    if (params.offset) rows = rows.slice(params.offset);
     if (params.limit) rows = rows.slice(0, params.limit);
     return Promise.resolve(rows);
   }
@@ -53,6 +60,21 @@ export function listTransactions(params: ListTransactionsParams = {}): Promise<T
   if (params.categories?.length) query.set('categories', params.categories.join(','));
   if (params.receipts?.length) query.set('receipts', params.receipts.join(','));
   return http<ApiTransaction[]>(`/transactions?${query.toString()}`).then((rows) => rows.map(mapTransaction));
+}
+
+export function getTransactionRollup(params: Omit<ListTransactionsParams, 'limit' | 'offset' | 'sort' | 'dir'> = {}): Promise<TransactionRollup> {
+  if (useMockApi) {
+    return listTransactions({ ...params, limit: undefined, offset: undefined }).then(summarizeTransactions);
+  }
+  const query = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v == null || k === 'accountIds' || k === 'categories' || k === 'receipts') continue;
+    query.set(k, String(v));
+  }
+  if (params.accountIds?.length) query.set('accounts', params.accountIds.join(','));
+  if (params.categories?.length) query.set('categories', params.categories.join(','));
+  if (params.receipts?.length) query.set('receipts', params.receipts.join(','));
+  return http<TransactionRollup>(`/transactions/rollup?${query.toString()}`);
 }
 
 /**
@@ -104,6 +126,8 @@ function valueForSort(transaction: Transaction, sort: NonNullable<ListTransactio
   switch (sort) {
     case 'amount':
       return transaction.amount;
+    case 'largest':
+      return Math.abs(transaction.amount);
     case 'merchant':
       return transaction.merchant;
     case 'business':

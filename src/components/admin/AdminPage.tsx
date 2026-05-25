@@ -8,6 +8,7 @@ import {
   type AuditLogRow,
 } from '@/api';
 import type { Account, Business, Connection, CurrentUser } from '@/types/domain';
+import type { AppView } from '@/types/navigation';
 import { useToast } from '@/hooks/useToast';
 import { SectionHeader } from '@/components/ui/section-header';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -23,7 +24,7 @@ import { UsersTab } from './tabs/UsersTab';
 import type { SaveAndRefresh } from './fields';
 
 interface Props {
-  onViewChange?: (view: 'dashboard' | 'admin') => void;
+  onViewChange?: (view: AppView) => void;
   onLogout?: () => void;
   user?: CurrentUser;
 }

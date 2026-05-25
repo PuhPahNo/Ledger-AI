@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Business, CurrentUser, Transaction } from '@/types/domain';
+import type { AppView, TransactionViewFilters } from '@/types/navigation';
 import { countDuplicateSubs, countNeedsReceipt } from '@/lib/calc';
 import { useDashboard } from '@/hooks/useDashboard';
 import { uploadReceipt } from '@/api';
@@ -21,7 +22,6 @@ import { AnalysisTile } from './tiles/AnalysisTile';
 import { ConnectionsManager } from './ConnectionsManager';
 import { CategorizationReviewCenter } from './CategorizationReviewCenter';
 import { TransactionDrawer } from './TransactionDrawer';
-import { TransactionExplorer } from './TransactionExplorer';
 
 type TimePreset = 'month' | 'last3' | 'last12' | 'ytd';
 
@@ -35,12 +35,13 @@ function captionFor(biz: Business, txns: Transaction[]): string {
 }
 
 interface DashboardProps {
-  onViewChange?: (view: 'dashboard' | 'admin') => void;
+  onViewChange?: (view: AppView) => void;
+  onOpenTransactions?: (filters: TransactionViewFilters) => void;
   onLogout?: () => void;
   user?: CurrentUser;
 }
 
-export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
+export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: DashboardProps) {
   const { toast } = useToast();
   const [businessFilter, setBusinessFilter] = useState('all');
   const [query, setQuery] = useState('');
@@ -50,7 +51,6 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [reviewCenterOpen, setReviewCenterOpen] = useState(false);
-  const [transactionsOpen, setTransactionsOpen] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<{
@@ -138,6 +138,15 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
         : [...current, accountId]
     ));
   };
+  const openTransactions = () => {
+    onOpenTransactions?.({
+      business: businessFilter,
+      accountIds: selectedAccountIds,
+      query,
+      from: timeWindow.from,
+      to: timeWindow.to,
+    });
+  };
 
   return (
     <div className="min-h-screen bg-bg text-ink">
@@ -191,7 +200,7 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
             businesses={businesses}
             accounts={accounts}
             transactions={transactions}
-            onOpenTransactions={() => setTransactionsOpen(true)}
+            onOpenTransactions={openTransactions}
           />
 
           <ActivityTile
@@ -199,7 +208,7 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
             businesses={businesses}
             totalCount={transactions.length}
             onSelect={setSelectedTransaction}
-            onViewAll={() => setTransactionsOpen(true)}
+            onViewAll={openTransactions}
           />
           <ReceiptDropTile onFile={handleUpload} status={receiptStatus} />
 
@@ -236,19 +245,6 @@ export function Dashboard({ onViewChange, onLogout, user }: DashboardProps) {
         categories={categories}
         onClose={() => setSelectedTransaction(null)}
         onSaved={() => setRefreshKey((key) => key + 1)}
-      />
-      <TransactionExplorer
-        open={transactionsOpen}
-        businesses={businesses}
-        accounts={accounts}
-        categories={categories}
-        initialBusiness={businessFilter}
-        initialAccountIds={selectedAccountIds}
-        initialQuery={query}
-        onClose={() => setTransactionsOpen(false)}
-        onSelect={(transaction) => {
-          setSelectedTransaction(transaction);
-        }}
       />
     </div>
   );

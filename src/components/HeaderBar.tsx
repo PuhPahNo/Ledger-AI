@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Bell, KeyRound, LogOut, Search, ShieldCheck, Upload, UserRound } from 'lucide-react';
 import type { Business, CurrentUser } from '@/types/domain';
+import type { AppView } from '@/types/navigation';
 import { enableTotp, resetAdminUserPassword, setupTotp } from '@/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,8 +17,8 @@ import { cn } from '@/lib/cn';
 
 interface Props {
   onUploadReceipt: (file: File) => void;
-  currentView?: 'dashboard' | 'admin';
-  onViewChange?: (view: 'dashboard' | 'admin') => void;
+  currentView?: AppView;
+  onViewChange?: (view: AppView) => void;
   onLogout?: () => void;
   user?: CurrentUser;
   businesses?: Business[];
@@ -58,10 +59,11 @@ export function HeaderBar({
       <ToggleGroup
         type="single"
         value={currentView}
-        onValueChange={(value) => value && onViewChange?.(value as 'dashboard' | 'admin')}
+        onValueChange={(value) => value && onViewChange?.(value as AppView)}
         className="ml-2"
       >
         <ToggleGroupItem value="dashboard">Dashboard</ToggleGroupItem>
+        <ToggleGroupItem value="transactions">Transactions</ToggleGroupItem>
         <ToggleGroupItem value="admin">Admin</ToggleGroupItem>
       </ToggleGroup>
 

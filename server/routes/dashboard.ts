@@ -40,7 +40,9 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       accounts: z.string().optional(),
       categories: z.string().optional(),
       receipts: z.string().optional(),
-      sort: z.enum(['date', 'amount', 'merchant', 'business', 'category', 'account']).default('date'),
+      direction: z.enum(['all', 'inflow', 'outflow', 'operating-outflow', 'transfer']).default('all'),
+      offset: z.coerce.number().int().min(0).default(0),
+      sort: z.enum(['date', 'amount', 'largest', 'merchant', 'business', 'category', 'account']).default('date'),
       dir: z.enum(['asc', 'desc']).default('desc'),
     }).parse(request.query);
     const accountIds = parseAccountIds(query.accounts);
@@ -87,6 +89,7 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         accountSpendFilter(accountIds),
         categoryNames.length ? inArray(categories.name, categoryNames) : sql`true`,
         receiptStatuses.length ? inArray(transactions.receiptStatus, receiptStatuses) : sql`true`,
+        transactionDirectionFilter(query.direction),
         query.q ? or(
           ilike(transactions.merchant, `%${query.q}%`),
           ilike(transactions.sourceLabel, `%${query.q}%`),
@@ -95,8 +98,65 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         ) : sql`true`,
       ))
       .orderBy(sortDirection(sortColumn), desc(transactions.createdAt))
-      .limit(Math.min(query.limit ?? 100, 2000));
+      .limit(Math.min(query.limit ?? 100, 2000))
+      .offset(query.offset);
     return rows.map(toApiTransaction);
+  });
+
+  app.get('/transactions/rollup', async (request) => {
+    await requireUser(request);
+    const query = z.object({
+      biz: z.string().optional(),
+      from: z.string().optional(),
+      to: z.string().optional(),
+      q: z.string().optional(),
+      accounts: z.string().optional(),
+      categories: z.string().optional(),
+      receipts: z.string().optional(),
+      direction: z.enum(['all', 'inflow', 'outflow', 'operating-outflow', 'transfer']).default('all'),
+    }).parse(request.query);
+    const accountIds = parseAccountIds(query.accounts);
+    const categoryNames = parseList(query.categories);
+    const receiptStatuses = parseList(query.receipts).filter(isReceiptStatus);
+    const [row] = await db
+      .select({
+        rows: sql<number>`count(${transactions.id})::int`,
+        inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+        outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
+        operatingOutflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${categoryIsVisibleSpend()} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
+        transferCents: sql<number>`coalesce(sum(CASE WHEN ${transferCategoryFilter()} THEN abs(${transactions.amountCents}) ELSE 0 END), 0)::int`,
+        netCents: sql<number>`coalesce(sum(${transactions.amountCents}), 0)::int`,
+        missingReceipts: sql<number>`count(${transactions.id}) FILTER (WHERE ${transactions.receiptStatus} = 'missing')::int`,
+      })
+      .from(transactions)
+      .innerJoin(businesses, eq(transactions.businessId, businesses.id))
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+      .where(and(
+        query.biz && query.biz !== 'all' ? eq(businesses.key, query.biz) : sql`true`,
+        query.from ? gte(transactions.date, query.from) : sql`true`,
+        query.to ? lte(transactions.date, query.to) : sql`true`,
+        accountSpendFilter(accountIds),
+        categoryNames.length ? inArray(categories.name, categoryNames) : sql`true`,
+        receiptStatuses.length ? inArray(transactions.receiptStatus, receiptStatuses) : sql`true`,
+        transactionDirectionFilter(query.direction),
+        query.q ? or(
+          ilike(transactions.merchant, `%${query.q}%`),
+          ilike(transactions.sourceLabel, `%${query.q}%`),
+          ilike(transactions.note, `%${query.q}%`),
+          ilike(categories.name, `%${query.q}%`),
+        ) : sql`true`,
+      ));
+
+    return {
+      rows: Number(row?.rows ?? 0),
+      inflowCents: Number(row?.inflowCents ?? 0),
+      outflowCents: Number(row?.outflowCents ?? 0),
+      operatingOutflowCents: Number(row?.operatingOutflowCents ?? 0),
+      transferCents: Number(row?.transferCents ?? 0),
+      netCents: Number(row?.netCents ?? 0),
+      missingReceipts: Number(row?.missingReceipts ?? 0),
+    };
   });
 
   app.patch('/transactions/:id', async (request) => {
@@ -615,17 +675,39 @@ function spendCategoryFilter() {
 }
 
 function categoryIsVisibleSpend() {
-  return sql`coalesce(${categories.taxCode}, '') NOT LIKE 'exclude_%'`;
+  return sql`NOT (${transferCategoryFilter()})`;
+}
+
+function transferCategoryFilter() {
+  return sql`coalesce(${categories.taxCode}, '') LIKE 'exclude_%'
+    OR lower(coalesce(${categories.name}, '')) = 'transfers'`;
+}
+
+function transactionDirectionFilter(direction: TransactionDirection) {
+  switch (direction) {
+    case 'inflow':
+      return sql`${transactions.amountCents} > 0`;
+    case 'outflow':
+      return sql`${transactions.amountCents} < 0`;
+    case 'operating-outflow':
+      return sql`${transactions.amountCents} < 0 AND ${categoryIsVisibleSpend()}`;
+    case 'transfer':
+      return transferCategoryFilter();
+    default:
+      return sql`true`;
+  }
 }
 
 function joinedTransactionSpendFilter(accountIds: string[]) {
   return sql`${transactions.id} IS NULL OR (${accountSpendFilter(accountIds)})`;
 }
 
-function transactionSortColumn(sort: 'date' | 'amount' | 'merchant' | 'business' | 'category' | 'account') {
+function transactionSortColumn(sort: 'date' | 'amount' | 'largest' | 'merchant' | 'business' | 'category' | 'account') {
   switch (sort) {
     case 'amount':
       return transactions.amountCents;
+    case 'largest':
+      return sql`abs(${transactions.amountCents})`;
     case 'merchant':
       return transactions.merchant;
     case 'business':
@@ -638,6 +720,8 @@ function transactionSortColumn(sort: 'date' | 'amount' | 'merchant' | 'business'
       return transactions.date;
   }
 }
+
+type TransactionDirection = 'all' | 'inflow' | 'outflow' | 'operating-outflow' | 'transfer';
 
 const receiptStatuses = ['matched', 'pending', 'missing', 'n/a'] as const;
 type ReceiptStatus = typeof receiptStatuses[number];
