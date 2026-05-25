@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Business, CurrentUser, Transaction } from '@/types/domain';
 import type { AppView, TransactionViewFilters } from '@/types/navigation';
 import { countDuplicateSubs, countNeedsReceipt } from '@/lib/calc';
-import { useDashboard } from '@/hooks/useDashboard';
+import { clearDashboardCache, useDashboard } from '@/hooks/useDashboard';
 import { uploadReceipt } from '@/api';
 import { useToast } from '@/hooks/useToast';
 import { Button } from '@/components/ui/button';
@@ -121,7 +121,7 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
         title: result.matched ? 'Receipt matched' : 'Receipt queued',
         description: result.matched ? `Matched ${result.matched.merchant}.` : 'OCR and matching job queued.',
       });
-      setRefreshKey((key) => key + 1);
+      refreshDashboard();
     } catch (uploadError) {
       const message = uploadError instanceof Error ? uploadError.message : 'Upload failed.';
       setReceiptStatus({ state: 'error', message });
@@ -147,6 +147,10 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
       from: timeWindow.from,
       to: timeWindow.to,
     });
+  };
+  const refreshDashboard = () => {
+    clearDashboardCache();
+    setRefreshKey((key) => key + 1);
   };
 
   return (
@@ -237,21 +241,21 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
         connections={connections}
         accounts={accounts}
         onClose={() => setConnectionsOpen(false)}
-        onRefresh={() => setRefreshKey((key) => key + 1)}
+        onRefresh={refreshDashboard}
       />
       <CategorizationReviewCenter
         open={reviewCenterOpen}
         items={categorizationReviewItems}
         businesses={businesses}
         onClose={() => setReviewCenterOpen(false)}
-        onResolved={() => setRefreshKey((key) => key + 1)}
+        onResolved={refreshDashboard}
       />
       <TransactionDrawer
         transaction={selectedTransaction}
         businesses={businesses}
         categories={categories}
         onClose={() => setSelectedTransaction(null)}
-        onSaved={() => setRefreshKey((key) => key + 1)}
+        onSaved={refreshDashboard}
       />
     </div>
   );

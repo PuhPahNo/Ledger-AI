@@ -8,6 +8,7 @@ import { Dashboard } from './components/Dashboard';
 import { OwnerInsightsPage } from './components/OwnerInsightsPage';
 import { AssistantPage } from './components/AssistantPage';
 import { TransactionsPage } from './components/TransactionsPage';
+import { clearDashboardCache } from './hooks/useDashboard';
 import type { CurrentUser } from './types/domain';
 import type { AppView, TransactionViewFilters } from './types/navigation';
 
@@ -64,6 +65,7 @@ export default function App() {
 
   const handleLogout = async () => {
     await logout();
+    clearDashboardCache();
     setUser(null);
     setView('dashboard');
   };
