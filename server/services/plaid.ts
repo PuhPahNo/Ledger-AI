@@ -154,7 +154,7 @@ async function upsertTransaction(connectionId: string, fallbackBusinessId: strin
   const account = await db.query.accounts.findFirst({ where: eq(accounts.plaidAccountId, raw.account_id) });
   const businessId = resolveTransactionBusinessId(account?.businessId, fallbackBusinessId);
   if (!businessId) return;
-  const amountCents = -Math.round(Number(raw.amount) * 100);
+  const amountCents = plaidAmountCents(raw);
   const categorization = await categorizeTransactionWithDetails({
     businessId,
     merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant',
@@ -255,6 +255,32 @@ export function plaidBalanceCents(value: unknown): number | null {
   const amount = Number(value);
   if (!Number.isFinite(amount)) return null;
   return Math.round(amount * 100);
+}
+
+export function plaidAmountCents(raw: Record<string, any>): number {
+  const plaidAmount = Number(raw.amount);
+  if (!Number.isFinite(plaidAmount)) return 0;
+  const defaultCents = -Math.round(plaidAmount * 100);
+  const direction = plaidDirectionHint(raw);
+  if (direction === 'inflow') return Math.abs(defaultCents);
+  if (direction === 'outflow') return -Math.abs(defaultCents);
+  return defaultCents;
+}
+
+function plaidDirectionHint(raw: Record<string, any>): 'inflow' | 'outflow' | null {
+  const personalFinanceCategory = raw.personal_finance_category ?? {};
+  const primary = normalizePlaidToken(personalFinanceCategory.primary);
+  const detailed = normalizePlaidToken(personalFinanceCategory.detailed);
+  if (primary.startsWith('income') || detailed.startsWith('income')) return 'inflow';
+  if (primary === 'transfer in' || detailed.startsWith('transfer in')) return 'inflow';
+  if (primary === 'transfer out' || detailed.startsWith('transfer out')) return 'outflow';
+  return null;
+}
+
+function normalizePlaidToken(value: unknown): string {
+  return typeof value === 'string'
+    ? value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+    : '';
 }
 
 function mapAccountKind(type?: string, subtype?: string): 'checking' | 'savings' | 'credit' | 'other' {

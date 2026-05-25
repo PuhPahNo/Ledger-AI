@@ -74,17 +74,6 @@ export async function categorizeTransactionWithDetails(input: CategorizeInput): 
       .orderBy(asc(categories.name)),
   ]);
 
-  const incomeCategory = preferredIncomeCategory(availableCategories, input.businessId);
-  if (input.amountCents > 0) {
-    const categoryId = incomeCategory?.id ?? (await fallbackUncategorizedCategory());
-    return {
-      categoryId,
-      source: categoryId === incomeCategory?.id ? 'auto_rule' : 'uncategorized',
-      confidence: categoryId === incomeCategory?.id ? 1 : null,
-      evidence: { reason: 'inflow_direction_guard' },
-    };
-  }
-
   const categoryById = new Map(availableCategories.map((category) => [category.id, category]));
   const merchant = normalize(input.merchant);
   const plaidCategory = normalize(input.plaidCategory?.join(' ') ?? '');
@@ -127,6 +116,17 @@ export async function categorizeTransactionWithDetails(input: CategorizeInput): 
         categoryName: signalCategory.name,
         signals: [input.merchant, ...(input.plaidCategory ?? [])],
       },
+    };
+  }
+
+  const incomeCategory = preferredIncomeCategory(availableCategories, input.businessId);
+  if (input.amountCents > 0) {
+    const categoryId = incomeCategory?.id ?? (await fallbackUncategorizedCategory());
+    return {
+      categoryId,
+      source: categoryId === incomeCategory?.id ? 'auto_rule' : 'uncategorized',
+      confidence: categoryId === incomeCategory?.id ? 1 : null,
+      evidence: { reason: 'inflow_direction_guard' },
     };
   }
 
@@ -222,6 +222,7 @@ export function isIncomeCategory(category: CategoryCandidate): boolean {
 }
 
 export function categoryMatchesTransactionDirection(category: CategoryCandidate, amountCents: number): boolean {
+  if (isExcludedFromSpendCategory(category)) return true;
   if (amountCents < 0) return !isIncomeCategory(category);
   if (amountCents > 0) return isIncomeCategory(category);
   return true;
@@ -240,13 +241,13 @@ export function isExcludedFromSpendCategory(category: Pick<CategoryCandidate, 'n
 }
 
 export function categoryNameForKnownSignals(input: CategorizeInput): string | null {
-  if (input.amountCents >= 0) return null;
   const signal = normalize([
     input.merchant,
     ...(input.plaidCategory ?? []),
   ].join(' '));
 
   if (hasAny(signal, [
+    'transfer in',
     'transfer out',
     'account transfer',
     'credit card payment',
@@ -255,6 +256,8 @@ export function categoryNameForKnownSignals(input: CategorizeInput): string | nu
     'savings transfer',
     'withdrawal transfer',
   ])) return 'Transfers';
+
+  if (input.amountCents >= 0) return null;
 
   if (hasAny(signal, ['advertising', 'marketing', 'google ads', 'facebook ads', 'meta ads', 'linkedin ads', 'mailchimp', 'klaviyo'])) return 'Advertising & Marketing';
   if (hasAny(signal, ['aws', 'amazon web services', 'google cloud', 'gcp', 'azure', 'cloudflare', 'digital ocean', 'heroku', 'render', 'vercel', 'netlify', 'supabase'])) return 'Cloud';

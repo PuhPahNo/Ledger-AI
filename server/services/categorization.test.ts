@@ -49,6 +49,7 @@ describe('ruleMatches', () => {
 describe('categoryMatchesTransactionDirection', () => {
   const revenue = { id: 'revenue', businessId: null, name: 'Revenue', taxCode: 'income' };
   const commissions = { id: 'fees', businessId: null, name: 'Commissions & Fees', taxCode: 'schedule_c_line_10' };
+  const transfers = { id: 'transfers', businessId: null, name: 'Transfers', taxCode: 'exclude_transfer' };
 
   it('keeps inflows in income categories only', () => {
     expect(categoryMatchesTransactionDirection(revenue, 125000)).toBe(true);
@@ -58,6 +59,11 @@ describe('categoryMatchesTransactionDirection', () => {
   it('keeps outflows out of income categories', () => {
     expect(categoryMatchesTransactionDirection(revenue, -2500)).toBe(false);
     expect(categoryMatchesTransactionDirection(commissions, -2500)).toBe(true);
+  });
+
+  it('allows transfer categories in either direction so they stay out of spend', () => {
+    expect(categoryMatchesTransactionDirection(transfers, 125000)).toBe(true);
+    expect(categoryMatchesTransactionDirection(transfers, -125000)).toBe(true);
   });
 });
 
@@ -79,6 +85,13 @@ describe('categoryNameForKnownSignals', () => {
       merchant: 'Online Payment Thank You',
       amountCents: -500000,
       plaidCategory: ['LOAN_PAYMENTS', 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'],
+    })).toBe('Transfers');
+
+    expect(categoryNameForKnownSignals({
+      businessId: 'business-1',
+      merchant: 'ACH Credit',
+      amountCents: 500000,
+      plaidCategory: ['TRANSFER_IN', 'TRANSFER_IN_DEPOSIT'],
     })).toBe('Transfers');
   });
 

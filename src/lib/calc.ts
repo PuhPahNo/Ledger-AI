@@ -1,6 +1,15 @@
 import type { Account, BusinessId, Transaction, TransactionDirection, TransactionRollup } from '@/types/domain';
 
 export function isExcludedFromSpend(txn: Transaction): boolean {
+  const category = txn.cat.toLowerCase();
+  return isTransferTransaction(txn)
+    || txn.categoryTaxCode === 'income'
+    || category === 'transfers'
+    || category === 'income'
+    || category === 'revenue';
+}
+
+export function isTransferTransaction(txn: Transaction): boolean {
   return Boolean(txn.categoryTaxCode?.startsWith('exclude_')) || txn.cat.toLowerCase() === 'transfers';
 }
 
@@ -17,7 +26,7 @@ export function transactionMatchesDirection(txn: Transaction, direction: Transac
     case 'operating-outflow':
       return isSpendTransaction(txn);
     case 'transfer':
-      return isExcludedFromSpend(txn);
+      return isTransferTransaction(txn);
     default:
       return true;
   }
@@ -29,7 +38,7 @@ export function summarizeTransactions(txns: Transaction[]): TransactionRollup {
     if (txn.amount > 0) summary.inflowCents += Math.round(txn.amount * 100);
     if (txn.amount < 0) summary.outflowCents += Math.abs(Math.round(txn.amount * 100));
     if (isSpendTransaction(txn)) summary.operatingOutflowCents += Math.abs(Math.round(txn.amount * 100));
-    if (isExcludedFromSpend(txn)) summary.transferCents += Math.abs(Math.round(txn.amount * 100));
+    if (isTransferTransaction(txn)) summary.transferCents += Math.abs(Math.round(txn.amount * 100));
     summary.netCents += Math.round(txn.amount * 100);
     if (txn.receipt === 'missing') summary.missingReceipts += 1;
     return summary;

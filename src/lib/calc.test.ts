@@ -7,6 +7,7 @@ const rows: Transaction[] = [
   { id: '2', date: '2026-05-02', dateLabel: 'May 2', merchant: 'B', amount: -20, biz: 'b1', cat: 'Software', receipt: 'matched', src: 'Card', flag: 'dup-sub' },
   { id: '3', date: '2026-05-03', dateLabel: 'May 3', merchant: 'C', amount: 100, biz: 'b1', cat: 'Revenue', receipt: 'n/a', src: 'Bank' },
   { id: '4', date: '2026-05-04', dateLabel: 'May 4', merchant: 'Card Payment', amount: -500, biz: 'b1', cat: 'Transfers', categoryTaxCode: 'exclude_transfer', receipt: 'n/a', src: 'Bank' },
+  { id: '5', date: '2026-05-05', dateLabel: 'May 5', merchant: 'Mis-signed Deposit', amount: -1000, biz: 'b1', cat: 'Revenue', categoryTaxCode: 'income', receipt: 'n/a', src: 'Bank' },
 ];
 
 describe('dashboard calculations', () => {
@@ -16,12 +17,12 @@ describe('dashboard calculations', () => {
 
   it('summarizes cash movement without mixing transfers into operating spend', () => {
     expect(summarizeTransactions(rows)).toMatchObject({
-      rows: 4,
+      rows: 5,
       inflowCents: 10000,
-      outflowCents: 53000,
+      outflowCents: 153000,
       operatingOutflowCents: 3000,
       transferCents: 50000,
-      netCents: -43000,
+      netCents: -143000,
       missingReceipts: 1,
     });
   });

@@ -20,8 +20,10 @@ async function generateMissingReceiptAlerts(): Promise<void> {
     .leftJoin(categories, eq(transactions.categoryId, categories.id))
     .where(and(
       eq(transactions.receiptStatus, 'missing'),
+      sql`${transactions.amountCents} < 0`,
       lt(transactions.date, sql`current_date - interval '7 days'`),
       sql`coalesce(${categories.taxCode}, '') NOT LIKE 'exclude_%'`,
+      sql`NOT (coalesce(${categories.taxCode}, '') = 'income' OR lower(coalesce(${categories.name}, '')) IN ('income', 'revenue'))`,
     ))
     .groupBy(transactions.businessId);
 
@@ -69,6 +71,7 @@ async function generateDuplicateSubscriptionAlerts(): Promise<void> {
     LEFT JOIN categories ON transactions.category_id = categories.id
     WHERE amount_cents < 0
       AND coalesce(categories.tax_code, '') NOT LIKE 'exclude_%'
+      AND NOT (coalesce(categories.tax_code, '') = 'income' OR lower(coalesce(categories.name, '')) IN ('income', 'revenue'))
       AND date >= current_date - interval '45 days'
     GROUP BY merchant_key
     HAVING count(DISTINCT business_id) > 1 AND count(*) > 1
@@ -99,6 +102,7 @@ async function generateSpendSpikeAlerts(): Promise<void> {
         WHERE business_id = ${business.id}
           AND amount_cents < 0
           AND coalesce(categories.tax_code, '') NOT LIKE 'exclude_%'
+          AND NOT (coalesce(categories.tax_code, '') = 'income' OR lower(coalesce(categories.name, '')) IN ('income', 'revenue'))
           AND date >= date_trunc('month', current_date) - interval '1 month'
         GROUP BY category_id, month
       )

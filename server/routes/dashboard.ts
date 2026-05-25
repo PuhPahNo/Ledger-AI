@@ -866,7 +866,11 @@ function spendCategoryFilter() {
 }
 
 function categoryIsVisibleSpend() {
-  return sql`NOT (${transferCategoryFilter()})`;
+  return sql`NOT (${transferCategoryFilter()})
+    AND NOT (
+      coalesce(${categories.taxCode}, '') = 'income'
+      OR lower(coalesce(${categories.name}, '')) IN ('income', 'revenue')
+    )`;
 }
 
 function transferCategoryFilter() {
