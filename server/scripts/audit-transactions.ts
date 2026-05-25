@@ -34,6 +34,7 @@ async function main(): Promise<void> {
     SELECT
       count(*) FILTER (
         WHERE transactions.amount_cents > 0
+          AND coalesce(categories.tax_code, '') NOT LIKE 'exclude_%'
           AND (
             categories.id IS NULL
             OR NOT (categories.tax_code = 'income' OR lower(categories.name) IN ('income', 'revenue'))

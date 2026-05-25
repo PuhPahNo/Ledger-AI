@@ -80,7 +80,6 @@ export async function syncPlaidConnection(
   options: {
     resetCursor?: boolean;
     daysRequested?: number;
-    skipExistingCategorization?: boolean;
     allowAiCategorization?: boolean;
   } = {},
 ): Promise<number> {
@@ -106,14 +105,12 @@ export async function syncPlaidConnection(
     for (const txn of data.added ?? []) {
       const inserted = await upsertTransaction(connectionId, connection.businessId ?? undefined, txn, {
         allowAiCategorization: options.allowAiCategorization,
-        skipExistingCategorization: options.skipExistingCategorization,
       });
       if (inserted) addedCount += 1;
     }
     for (const txn of data.modified ?? []) {
       await upsertTransaction(connectionId, connection.businessId ?? undefined, txn, {
         allowAiCategorization: options.allowAiCategorization,
-        skipExistingCategorization: options.skipExistingCategorization,
       });
     }
     for (const removed of data.removed ?? []) {
@@ -165,31 +162,18 @@ async function upsertTransaction(
   connectionId: string,
   fallbackBusinessId: string | undefined,
   raw: Record<string, any>,
-  options: { skipExistingCategorization?: boolean; allowAiCategorization?: boolean } = {},
+  options: { allowAiCategorization?: boolean } = {},
 ): Promise<boolean> {
   const account = await db.query.accounts.findFirst({ where: eq(accounts.plaidAccountId, raw.account_id) });
   const businessId = resolveTransactionBusinessId(account?.businessId, fallbackBusinessId);
   if (!businessId) return false;
   const amountCents = plaidAmountCents(raw);
-  if (options.skipExistingCategorization && raw.transaction_id) {
-    const existing = await db.query.transactions.findFirst({
+  const existing = raw.transaction_id
+    ? await db.query.transactions.findFirst({
       where: eq(transactions.plaidTransactionId, raw.transaction_id),
       columns: { id: true },
-    });
-    if (existing) {
-      await db.update(transactions).set({
-        date: raw.date,
-        authorizedDate: raw.authorized_date,
-        merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant',
-        amountCents,
-        pending: Boolean(raw.pending),
-        raw,
-        updatedAt: new Date(),
-      }).where(eq(transactions.id, existing.id));
-      return false;
-    }
-  }
-
+    })
+    : null;
   const categorization = await categorizeTransactionWithDetails({
     businessId,
     merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant',
@@ -246,6 +230,11 @@ async function upsertTransaction(
           THEN ${transactions.categoryConfidence}
         ELSE excluded.category_confidence
       END`,
+      receiptStatus: sql`CASE
+        WHEN ${transactions.categorySource} IN ('manual', 'user_confirmed_rule', 'receipt_evidence')
+          THEN ${transactions.receiptStatus}
+        ELSE excluded.receipt_status
+      END`,
       categoryEvidence: sql`CASE
         WHEN ${transactions.categorySource} IN ('manual', 'user_confirmed_rule', 'receipt_evidence')
           THEN ${transactions.categoryEvidence}
@@ -260,7 +249,7 @@ async function upsertTransaction(
   if (shouldReviewAi && saved?.categorySource === 'uncategorized') {
     await createAiCategorySuggestionReview(saved, categorization);
   }
-  return true;
+  return !existing;
 }
 
 async function receiptStatusForPlaidTransaction(amountCents: number, categoryId: string | null): Promise<'missing' | 'n/a'> {

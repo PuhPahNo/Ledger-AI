@@ -19,7 +19,6 @@ export async function handleJob(type: string, payload: Record<string, unknown>):
     await syncPlaidConnection(String(payload.connectionId), {
       resetCursor: Boolean(payload.resetCursor),
       daysRequested: typeof payload.daysRequested === 'number' ? payload.daysRequested : undefined,
-      skipExistingCategorization: Boolean(payload.resetCursor),
       allowAiCategorization: payload.resetCursor ? false : undefined,
     });
     return;
