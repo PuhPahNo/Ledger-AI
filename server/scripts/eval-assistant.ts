@@ -111,19 +111,9 @@ console.log(`Assistant eval passed ${cases.length} mock-only scenarios.`);
 
 function responseFixture(answer: string, artifacts: unknown[]): AssistantApiResponse {
   artifacts.forEach((artifact) => assistantArtifactSchema.parse(artifact));
-  const structuredArtifacts = artifacts.map((artifact) => ({
-    metrics: null,
-    columns: null,
-    rows: null,
-    chartType: null,
-    valueType: null,
-    labels: null,
-    series: null,
-    ...(artifact as Record<string, unknown>),
-  }));
   return {
     answer,
-    artifacts: structuredArtifacts as AssistantApiResponse['artifacts'],
+    artifacts: artifacts as AssistantApiResponse['artifacts'],
     approvalRequests: [],
     followUpSuggestions: [],
     toolEvents: [],

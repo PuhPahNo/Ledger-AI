@@ -486,9 +486,9 @@ function TableArtifact({ artifact }: { artifact: Extract<AssistantArtifact, { ty
         <TableBody>
           {artifact.rows.map((row, index) => (
             <TableRow key={index}>
-              {artifact.columns.map((column) => (
+              {artifact.columns.map((column, columnIndex) => (
                 <TableCell key={column.key} className={column.align === 'right' ? 'text-right' : ''}>
-                  {row[column.key] ?? ''}
+                  {row.cells[columnIndex] ?? ''}
                 </TableCell>
               ))}
             </TableRow>

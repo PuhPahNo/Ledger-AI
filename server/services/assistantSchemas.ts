@@ -21,7 +21,9 @@ const assistantTableColumnSchema = z.object({
   align: z.enum(['left', 'right']).default('left'),
 });
 
-const assistantArtifactRowSchema = z.record(z.string(), z.union([z.string(), z.number(), z.null()]));
+const assistantTableRowSchema = z.object({
+  cells: z.array(z.string()).max(8),
+});
 const assistantChartTypeSchema = z.enum(['bar', 'stacked_bar', 'line', 'donut']);
 const assistantValueTypeSchema = z.enum(['currency_cents', 'count', 'percent']);
 
@@ -37,7 +39,7 @@ export const assistantArtifactSchema = z.discriminatedUnion('type', [
     id: z.string(),
     title: z.string(),
     columns: z.array(assistantTableColumnSchema).max(8),
-    rows: z.array(assistantArtifactRowSchema).max(50),
+    rows: z.array(assistantTableRowSchema).max(50),
   }),
   z.object({
     type: z.literal('transactions'),
@@ -65,13 +67,25 @@ export const assistantArtifactSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
+const assistantStructuredArtifactRowSchema = z.object({
+  id: z.string().nullable(),
+  date: z.string().nullable(),
+  merchant: z.string().nullable(),
+  business: z.string().nullable(),
+  category: z.string().nullable(),
+  account: z.string().nullable(),
+  amountCents: z.number().int().nullable(),
+  receiptStatus: z.string().nullable(),
+  cells: z.array(z.string()).max(8).nullable(),
+});
+
 const assistantStructuredArtifactSchema = z.object({
   type: z.enum(['metric_grid', 'table', 'transactions', 'chart']),
   id: z.string(),
   title: z.string(),
   metrics: z.array(assistantMetricSchema).max(12).nullable(),
   columns: z.array(assistantTableColumnSchema).max(8).nullable(),
-  rows: z.array(assistantArtifactRowSchema).max(100).nullable(),
+  rows: z.array(assistantStructuredArtifactRowSchema).max(100).nullable(),
   chartType: assistantChartTypeSchema.nullable(),
   valueType: assistantValueTypeSchema.nullable(),
   labels: z.array(z.string()).max(36).nullable(),
@@ -82,6 +96,13 @@ const assistantStructuredArtifactSchema = z.object({
   }
   if (artifact.type === 'table' && (!artifact.columns || !artifact.rows)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['rows'], message: 'Table artifacts require columns and rows.' });
+  }
+  if (artifact.type === 'table') {
+    artifact.rows?.forEach((row, index) => {
+      if (!row.cells) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['rows', index, 'cells'], message: 'Table rows require ordered cells.' });
+      }
+    });
   }
   if (artifact.type === 'transactions') {
     if (!artifact.rows) {
@@ -134,7 +155,14 @@ export const assistantStructuredOutputSchema = z.object({
   followUpSuggestions: z.array(z.string()).max(4).default([]),
 });
 
-export const assistantApiResponseSchema = assistantStructuredOutputSchema.extend({
+export const assistantOutputSchema = z.object({
+  answer: z.string(),
+  artifacts: z.array(assistantArtifactSchema).default([]),
+  approvalRequests: z.array(assistantApprovalSchema).default([]),
+  followUpSuggestions: z.array(z.string()).max(4).default([]),
+});
+
+export const assistantApiResponseSchema = assistantOutputSchema.extend({
   toolEvents: z.array(assistantToolEventSchema).default([]),
   nextResponseId: z.string().nullable().default(null),
 });
@@ -142,16 +170,87 @@ export const assistantApiResponseSchema = assistantStructuredOutputSchema.extend
 export type AssistantArtifact = z.infer<typeof assistantArtifactSchema>;
 export type AssistantApprovalRequest = z.infer<typeof assistantApprovalSchema>;
 export type AssistantApiResponse = z.infer<typeof assistantApiResponseSchema>;
-export type AssistantStructuredOutput = z.infer<typeof assistantStructuredOutputSchema>;
+export type AssistantStructuredOutput = z.infer<typeof assistantOutputSchema>;
 export type AssistantToolEvent = z.infer<typeof assistantToolEventSchema>;
 
 export function sanitizeAssistantOutput(input: unknown): AssistantStructuredOutput {
+  const direct = assistantOutputSchema.safeParse(input);
+  if (direct.success) return direct.data;
   const parsed = assistantStructuredOutputSchema.safeParse(input);
-  if (parsed.success) return parsed.data;
+  if (parsed.success) {
+    return assistantOutputSchema.parse({
+      ...parsed.data,
+      artifacts: parsed.data.artifacts.map(normalizeStructuredArtifact).filter((artifact) => artifact !== null),
+    });
+  }
   return {
     answer: 'I could not safely format that response. Try asking again with a narrower finance question.',
     artifacts: [],
     approvalRequests: [],
     followUpSuggestions: [],
   };
+}
+
+function normalizeStructuredArtifact(artifact: z.infer<typeof assistantStructuredArtifactSchema>): AssistantArtifact | null {
+  if (artifact.type === 'metric_grid' && artifact.metrics) {
+    return {
+      type: 'metric_grid',
+      id: artifact.id,
+      title: artifact.title,
+      metrics: artifact.metrics,
+    };
+  }
+  if (artifact.type === 'table' && artifact.columns && artifact.rows) {
+    return {
+      type: 'table',
+      id: artifact.id,
+      title: artifact.title,
+      columns: artifact.columns,
+      rows: artifact.rows.map((row) => ({ cells: row.cells ?? [] })),
+    };
+  }
+  if (artifact.type === 'transactions' && artifact.rows) {
+    const rows = artifact.rows.flatMap((row) => {
+      if (
+        !row.id
+        || !row.date
+        || !row.merchant
+        || !row.business
+        || !row.category
+        || !row.account
+        || typeof row.amountCents !== 'number'
+        || !row.receiptStatus
+      ) {
+        return [];
+      }
+      return [{
+        id: row.id,
+        date: row.date,
+        merchant: row.merchant,
+        business: row.business,
+        category: row.category,
+        account: row.account,
+        amountCents: row.amountCents,
+        receiptStatus: row.receiptStatus,
+      }];
+    });
+    return {
+      type: 'transactions',
+      id: artifact.id,
+      title: artifact.title,
+      rows,
+    };
+  }
+  if (artifact.type === 'chart' && artifact.chartType && artifact.valueType && artifact.labels && artifact.series) {
+    return {
+      type: 'chart',
+      id: artifact.id,
+      title: artifact.title,
+      chartType: artifact.chartType,
+      valueType: artifact.valueType,
+      labels: artifact.labels,
+      series: artifact.series,
+    };
+  }
+  return null;
 }

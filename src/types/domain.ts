@@ -155,7 +155,7 @@ export type AssistantArtifact =
       id: string;
       title: string;
       columns: Array<{ key: string; label: string; align?: 'left' | 'right' }>;
-      rows: Array<Record<string, string | number | null>>;
+      rows: Array<{ cells: string[] }>;
     }
   | {
       type: 'transactions';

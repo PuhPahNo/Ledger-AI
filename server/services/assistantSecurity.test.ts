@@ -79,6 +79,8 @@ describe('assistant safety and artifacts', () => {
 
   it('uses an OpenAI-compatible structured output schema for artifacts', () => {
     const format = zodTextFormat(assistantStructuredOutputSchema, 'ledger_ai_assistant_response');
-    expect(JSON.stringify(format)).not.toContain('"oneOf"');
+    const schema = JSON.stringify(format);
+    expect(schema).not.toContain('"oneOf"');
+    expect(schema).not.toContain('"propertyNames"');
   });
 });

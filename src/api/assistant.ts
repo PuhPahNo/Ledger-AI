@@ -64,7 +64,7 @@ export function confirmAssistantAction(token: string): Promise<{ ok: boolean; me
         id: `mock-confirm-${Date.now()}`,
         title: 'Confirmed mock action',
         columns: [{ key: 'status', label: 'Status' }],
-        rows: [{ status: 'Applied in mock mode' }],
+        rows: [{ cells: ['Applied in mock mode'] }],
       },
     });
   }
