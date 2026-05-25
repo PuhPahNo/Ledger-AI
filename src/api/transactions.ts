@@ -83,7 +83,8 @@ export function getTransactionRollup(params: Omit<ListTransactionsParams, 'limit
  */
 export function attachReceipt(transactionId: string, receiptId: string): Promise<Transaction> {
   if (useMockApi) {
-    return Promise.reject(new Error('attachReceipt is not implemented in the mock backend'));
+    const row = TRANSACTIONS.find((transaction) => transaction.id === transactionId) ?? TRANSACTIONS[0];
+    return Promise.resolve({ ...row, receiptId, receipt: 'matched' });
   }
   return http<ApiTransaction>(`/transactions/${transactionId}/receipt`, {
     method: 'POST',

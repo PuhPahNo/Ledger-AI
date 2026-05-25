@@ -4,6 +4,7 @@ import type {
   Category,
   CategorizationReviewItem,
   Connection,
+  Receipt,
   Transaction,
 } from '../db/schema.js';
 
@@ -59,6 +60,30 @@ export function toApiTransaction(row: Transaction & {
     note: row.note ?? undefined,
     flag: row.flag ?? undefined,
     pending: row.pending,
+  };
+}
+
+export function toApiReceipt(row: Receipt & {
+  businessKey?: string | null;
+  businessName?: string | null;
+}) {
+  return {
+    id: row.id,
+    businessId: row.businessId,
+    biz: row.businessKey ?? 'all',
+    businessName: row.businessName ?? null,
+    source: row.source,
+    status: row.status,
+    merchant: row.merchant,
+    totalCents: row.totalCents,
+    receiptDate: row.receiptDate,
+    fileName: row.fileName,
+    mimeType: row.mimeType,
+    gmailMessageId: row.gmailMessageId,
+    transactionId: row.transactionId,
+    confidence: row.confidence == null ? null : Number(row.confidence),
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 

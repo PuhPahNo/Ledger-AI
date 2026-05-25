@@ -1,4 +1,4 @@
-import type { Transaction } from '@/types/domain';
+import type { BusinessId, ReceiptInboxItem, ReceiptSource, ReceiptStatus, Transaction } from '@/types/domain';
 import { http, useMockApi } from './client';
 import { mapTransaction, type ApiTransaction } from './mapper';
 
@@ -31,4 +31,79 @@ export function uploadReceipt(file: File, businessId?: string): Promise<UploadRe
     method: 'POST',
     body: form,
   }).then((result) => ({ ...result, matched: result.matched ? mapTransaction(result.matched) : undefined }));
+}
+
+export interface ListReceiptsParams {
+  status?: ReceiptStatus;
+  unmatched?: boolean;
+  biz?: BusinessId | 'all';
+  source?: ReceiptSource | 'all';
+  q?: string;
+  limit?: number;
+}
+
+export function listReceipts(params: ListReceiptsParams = {}): Promise<ReceiptInboxItem[]> {
+  if (useMockApi) {
+    const now = new Date().toISOString();
+    const rows: ReceiptInboxItem[] = [
+      {
+        id: 'receipt-gmail-apple',
+        biz: 'draft-sharks',
+        businessName: 'Draft Sharks',
+        source: 'gmail',
+        status: 'pending',
+        merchant: 'Apple Store',
+        totalCents: 12900,
+        receiptDate: '2026-05-22',
+        fileName: 'Apple Store receipt.pdf',
+        confidence: 0.91,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: 'receipt-upload-office-depot',
+        biz: 'womens-net',
+        businessName: 'Womens Net',
+        source: 'upload',
+        status: 'pending',
+        merchant: 'Office Depot',
+        totalCents: 8742,
+        receiptDate: '2026-05-20',
+        fileName: 'office-depot.jpg',
+        confidence: 0.86,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+    return Promise.resolve(rows.filter((row) => {
+      if (params.status && row.status !== params.status) return false;
+      if (params.biz && params.biz !== 'all' && row.biz !== params.biz) return false;
+      if (params.source && params.source !== 'all' && row.source !== params.source) return false;
+      if (params.q) {
+        const q = params.q.toLowerCase();
+        return [row.merchant, row.fileName, row.businessName].some((value) => value?.toLowerCase().includes(q));
+      }
+      return true;
+    }));
+  }
+  const query = new URLSearchParams();
+  if (params.status) query.set('status', params.status);
+  if (params.unmatched) query.set('unmatched', 'true');
+  if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
+  if (params.source && params.source !== 'all') query.set('source', params.source);
+  if (params.q) query.set('q', params.q);
+  if (params.limit) query.set('limit', String(params.limit));
+  return http<ReceiptInboxItem[]>(`/receipts?${query.toString()}`);
+}
+
+export function getReceipt(receiptId: string): Promise<ReceiptInboxItem> {
+  if (useMockApi) {
+    return listReceipts().then((rows) => rows.find((row) => row.id === receiptId) ?? rows[0]);
+  }
+  return http<ReceiptInboxItem>(`/receipts/${receiptId}`);
+}
+
+export function dismissReceipt(receiptId: string): Promise<{ ok: true }> {
+  if (useMockApi) return Promise.resolve({ ok: true });
+  return http<{ ok: true }>(`/receipts/${receiptId}/dismiss`, { method: 'POST' });
 }

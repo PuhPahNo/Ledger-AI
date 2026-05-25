@@ -1,29 +1,70 @@
 import type { FastifyInstance } from 'fastify';
 import path from 'node:path';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
-import { businesses, receipts } from '../db/schema.js';
+import { businesses, receiptMatches, receipts } from '../db/schema.js';
 import { enqueue } from '../jobs/queue.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
 import { matchReceipt } from '../services/matching.js';
 import { storage } from '../services/storage.js';
+import { toApiReceipt } from './mappers.js';
 
 export async function receiptRoutes(app: FastifyInstance): Promise<void> {
   app.get('/receipts', async (request) => {
     await requireUser(request);
-    return db.select().from(receipts);
+    const query = z.object({
+      status: z.enum(['matched', 'pending', 'missing', 'n/a']).optional(),
+      unmatched: z.enum(['true', 'false']).optional().transform((value) => value === 'true'),
+      biz: z.string().optional(),
+      source: z.enum(['upload', 'gmail', 'all']).optional().default('all'),
+      q: z.string().optional(),
+      limit: z.coerce.number().int().min(1).max(200).default(100),
+    }).parse(request.query);
+
+    const rows = await db
+      .select({
+        ...getTableColumns(receipts),
+        businessKey: businesses.key,
+        businessName: businesses.name,
+      })
+      .from(receipts)
+      .leftJoin(businesses, eq(receipts.businessId, businesses.id))
+      .where(and(
+        query.status ? eq(receipts.status, query.status) : sql`true`,
+        query.unmatched ? isNull(receipts.transactionId) : sql`true`,
+        query.biz && query.biz !== 'all' ? eq(businesses.key, query.biz) : sql`true`,
+        query.source !== 'all' ? eq(receipts.source, query.source) : sql`true`,
+        query.q ? sql`(
+          ${receipts.merchant} ILIKE ${`%${query.q}%`}
+          OR ${receipts.fileName} ILIKE ${`%${query.q}%`}
+          OR ${businesses.name} ILIKE ${`%${query.q}%`}
+        )` : sql`true`,
+      ))
+      .orderBy(desc(receipts.createdAt))
+      .limit(query.limit);
+
+    return rows.map((row) => toApiReceipt(row));
   });
 
   app.get('/receipts/:id', async (request) => {
     await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
-    const receipt = await db.query.receipts.findFirst({ where: eq(receipts.id, params.id) });
+    const [receipt] = await db
+      .select({
+        ...getTableColumns(receipts),
+        businessKey: businesses.key,
+        businessName: businesses.name,
+      })
+      .from(receipts)
+      .leftJoin(businesses, eq(receipts.businessId, businesses.id))
+      .where(eq(receipts.id, params.id))
+      .limit(1);
     if (!receipt) notFound('Receipt not found');
     const downloadUrl = receipt.fileKey ? await storage().getSignedDownloadUrl(receipt.fileKey, receipt.fileName ?? undefined) : null;
-    return { ...receipt, downloadUrl };
+    return { ...toApiReceipt(receipt), downloadUrl };
   });
 
   app.post('/receipts', async (request) => {
@@ -65,6 +106,23 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const result = await matchReceipt(params.id);
     return { matched: result };
+  });
+
+  app.post('/receipts/:id/dismiss', async (request) => {
+    const user = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const [receipt] = await db
+      .update(receipts)
+      .set({ status: 'n/a', updatedAt: new Date() })
+      .where(eq(receipts.id, params.id))
+      .returning();
+    if (!receipt) notFound('Receipt not found');
+    await db
+      .update(receiptMatches)
+      .set({ status: 'rejected', decidedAt: new Date() })
+      .where(eq(receiptMatches.receiptId, params.id));
+    await audit(request, user, 'dismiss_receipt', 'receipt', params.id);
+    return { ok: true };
   });
 }
 

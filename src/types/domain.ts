@@ -21,6 +21,28 @@ export type ReceiptStatus =
   | 'missing'   // no receipt; user needs to upload or it needs gmail scan
   | 'n/a';      // inflow / non-receiptable
 
+export type ReceiptSource = 'upload' | 'gmail';
+
+export interface ReceiptInboxItem {
+  id: string;
+  businessId?: string | null;
+  biz: BusinessId | 'all';
+  businessName?: string | null;
+  source: ReceiptSource;
+  status: ReceiptStatus;
+  merchant?: string | null;
+  totalCents?: number | null;
+  receiptDate?: string | null;
+  fileName?: string | null;
+  mimeType?: string | null;
+  gmailMessageId?: string | null;
+  transactionId?: string | null;
+  confidence?: number | null;
+  createdAt: string;
+  updatedAt: string;
+  downloadUrl?: string | null;
+}
+
 export type TransactionFlag =
   | 'dup-sub'      // duplicate subscription suspected
   | 'no-receipt'   // receipt missing past the SLA window
