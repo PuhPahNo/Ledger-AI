@@ -6,7 +6,7 @@
 // to mock data; tomorrow it'll resolve to real HTTP calls — without any tile
 // component needing to change.
 
-const BASE = import.meta.env.VITE_API_BASE ?? '/api';
+export const API_BASE = import.meta.env.VITE_API_BASE ?? '/api';
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public body?: unknown) {
@@ -21,7 +21,7 @@ export async function http<T>(path: string, init?: RequestInit): Promise<T> {
     ...(init?.body && !isFormData ? { 'Content-Type': 'application/json' } : {}),
     ...(init?.headers ?? {}),
   };
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(`${API_BASE}${path}`, {
     credentials: 'include',
     headers,
     ...init,

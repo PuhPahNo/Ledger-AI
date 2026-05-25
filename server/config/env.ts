@@ -17,6 +17,8 @@ const envSchema = z.object({
   R2_ACCESS_KEY_ID: z.string().optional().default(''),
   R2_SECRET_ACCESS_KEY: z.string().optional().default(''),
   OPENAI_API_KEY: z.string().optional().default(''),
+  OPENAI_ASSISTANT_MODEL: z.string().default('gpt-5.5'),
+  OPENAI_ASSISTANT_REASONING_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh']).default('medium'),
   OPENAI_RECEIPT_MODEL: z.string().default('gpt-4.1-mini'),
   OPENAI_CATEGORIZATION_MODEL: z.string().default('gpt-4.1-mini'),
   PLAID_ENV: z.enum(['sandbox', 'development', 'production']).default('sandbox'),

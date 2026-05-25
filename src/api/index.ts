@@ -11,6 +11,7 @@ export * from './categorizationReview';
 export * from './auth';
 export * from './admin';
 export * from './accounts';
+export * from './assistant';
 export * from './insights';
 export * from './cashFlow';
 export * from './ownerInsights';

@@ -6,11 +6,12 @@ import { CashFlowPage } from './components/CashFlowPage';
 import { LoginPage } from './components/auth/LoginPage';
 import { Dashboard } from './components/Dashboard';
 import { OwnerInsightsPage } from './components/OwnerInsightsPage';
+import { AssistantPage } from './components/AssistantPage';
 import { TransactionsPage } from './components/TransactionsPage';
 import type { CurrentUser } from './types/domain';
 import type { AppView, TransactionViewFilters } from './types/navigation';
 
-const views = new Set<AppView>(['dashboard', 'transactions', 'cash-flow', 'balances', 'insights', 'admin']);
+const views = new Set<AppView>(['dashboard', 'transactions', 'cash-flow', 'balances', 'insights', 'assistant', 'admin']);
 
 function viewFromHash(): AppView {
   if (typeof window === 'undefined') return 'dashboard';
@@ -77,6 +78,7 @@ export default function App() {
   if (view === 'balances') return <AccountBalancesPage user={user} onViewChange={setView} onLogout={handleLogout} />;
   if (view === 'cash-flow') return <CashFlowPage user={user} onViewChange={setView} onLogout={handleLogout} />;
   if (view === 'insights') return <OwnerInsightsPage user={user} onViewChange={setView} onLogout={handleLogout} />;
+  if (view === 'assistant') return <AssistantPage user={user} onViewChange={setView} onLogout={handleLogout} />;
   if (view === 'transactions') {
     return <TransactionsPage initialFilters={transactionFilters} user={user} onViewChange={setView} onLogout={handleLogout} />;
   }

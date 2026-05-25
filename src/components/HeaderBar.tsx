@@ -67,6 +67,7 @@ export function HeaderBar({
         <ToggleGroupItem value="cash-flow">Cash Flow</ToggleGroupItem>
         <ToggleGroupItem value="balances">Balances</ToggleGroupItem>
         <ToggleGroupItem value="insights">Insights</ToggleGroupItem>
+        <ToggleGroupItem value="assistant">Assistant</ToggleGroupItem>
         <ToggleGroupItem value="admin">Admin</ToggleGroupItem>
       </ToggleGroup>
 
