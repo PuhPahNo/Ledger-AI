@@ -13,3 +13,4 @@ export * from './admin';
 export * from './accounts';
 export * from './insights';
 export * from './cashFlow';
+export * from './ownerInsights';

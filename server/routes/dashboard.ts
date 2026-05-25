@@ -581,6 +581,132 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       periods: rows,
     };
   });
+
+  app.get('/owner-insights', async (request) => {
+    await requireUser(request);
+    const query = z.object({
+      from: z.string().optional(),
+      to: z.string().optional(),
+      biz: z.string().optional(),
+      accounts: z.string().optional(),
+    }).parse(request.query);
+    const to = query.to ?? isoDate(new Date());
+    const from = query.from ?? isoDate(new Date(dateFromIso(to).getFullYear(), dateFromIso(to).getMonth(), 1));
+    const accountIds = parseAccountIds(query.accounts);
+    const selectedBusiness = query.biz && query.biz !== 'all'
+      ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
+      : null;
+    const baseFilters = [
+      gte(transactions.date, from),
+      lte(transactions.date, to),
+      selectedBusiness ? eq(transactions.businessId, selectedBusiness.id) : sql`true`,
+      accountSpendFilter(accountIds),
+    ] as const;
+
+    const [topPurchases, uncategorized, missingReceipts, transfers, incomeByBusiness, closeSummary] = await Promise.all([
+      db
+        .select({
+          ...getTableColumns(transactions),
+          businessKey: businesses.key,
+          categoryName: categories.name,
+          categoryTaxCode: categories.taxCode,
+        })
+        .from(transactions)
+        .innerJoin(businesses, eq(transactions.businessId, businesses.id))
+        .leftJoin(categories, eq(transactions.categoryId, categories.id))
+        .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+        .where(and(...baseFilters, sql`${transactions.amountCents} < 0`, categoryIsVisibleSpend()))
+        .orderBy(desc(sql`abs(${transactions.amountCents})`))
+        .limit(12),
+      db
+        .select({
+          count: sql<number>`count(${transactions.id})::int`,
+          cents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
+        })
+        .from(transactions)
+        .leftJoin(categories, eq(transactions.categoryId, categories.id))
+        .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+        .where(and(
+          ...baseFilters,
+          sql`${transactions.amountCents} < 0`,
+          categoryIsVisibleSpend(),
+          or(sql`${categories.id} IS NULL`, eq(categories.name, 'Uncategorized')),
+        )),
+      db
+        .select({
+          count: sql<number>`count(${transactions.id})::int`,
+          cents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
+        })
+        .from(transactions)
+        .leftJoin(categories, eq(transactions.categoryId, categories.id))
+        .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+        .where(and(...baseFilters, sql`${transactions.amountCents} < 0`, categoryIsVisibleSpend(), eq(transactions.receiptStatus, 'missing'))),
+      db
+        .select({
+          count: sql<number>`count(${transactions.id})::int`,
+          cents: sql<number>`coalesce(sum(abs(${transactions.amountCents})), 0)::int`,
+        })
+        .from(transactions)
+        .leftJoin(categories, eq(transactions.categoryId, categories.id))
+        .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+        .where(and(...baseFilters, transferCategoryFilter())),
+      db
+        .select({
+          businessId: businesses.key,
+          businessName: businesses.name,
+          color: businesses.color,
+          cents: sql<number>`coalesce(sum(${transactions.amountCents}), 0)::int`,
+          count: sql<number>`count(${transactions.id})::int`,
+        })
+        .from(transactions)
+        .innerJoin(businesses, eq(transactions.businessId, businesses.id))
+        .leftJoin(categories, eq(transactions.categoryId, categories.id))
+        .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+        .where(and(...baseFilters, sql`${transactions.amountCents} > 0`, categoryIsVisibleSpend()))
+        .groupBy(businesses.key, businesses.name, businesses.color)
+        .orderBy(desc(sql`sum(${transactions.amountCents})`)),
+      db
+        .select({
+          transactionCount: sql<number>`count(${transactions.id})::int`,
+          inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${categoryIsVisibleSpend()} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+          outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${categoryIsVisibleSpend()} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
+          netCents: sql<number>`coalesce(sum(CASE WHEN ${categoryIsVisibleSpend()} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+        })
+        .from(transactions)
+        .leftJoin(categories, eq(transactions.categoryId, categories.id))
+        .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+        .where(and(...baseFilters)),
+    ]);
+
+    return {
+      from,
+      to,
+      topPurchases: topPurchases.map((row) => toApiTransaction(row as any)),
+      uncategorized: normalizeInsightMetric(uncategorized[0]),
+      missingReceipts: normalizeInsightMetric(missingReceipts[0]),
+      transfers: normalizeInsightMetric(transfers[0]),
+      incomeByBusiness: incomeByBusiness.map((row) => ({
+        businessId: row.businessId,
+        businessName: row.businessName,
+        color: row.color,
+        cents: Number(row.cents ?? 0),
+        count: Number(row.count ?? 0),
+      })),
+      closeSummary: {
+        inflowCents: Number(closeSummary[0]?.inflowCents ?? 0),
+        outflowCents: Number(closeSummary[0]?.outflowCents ?? 0),
+        netCents: Number(closeSummary[0]?.netCents ?? 0),
+        transactionCount: Number(closeSummary[0]?.transactionCount ?? 0),
+      },
+    };
+  });
+}
+
+function normalizeInsightMetric(row?: { count?: number | null; cents?: number | null }) {
+  return {
+    count: Number(row?.count ?? 0),
+    cents: Number(row?.cents ?? 0),
+  };
 }
 
 async function cashFlowTotals(

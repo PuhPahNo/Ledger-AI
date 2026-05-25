@@ -103,6 +103,37 @@ export interface CashFlowSummary {
   periods: CashFlowPeriod[];
 }
 
+export interface OwnerInsightMetric {
+  count: number;
+  cents: number;
+}
+
+export interface OwnerIncomeByBusiness {
+  businessId: BusinessId;
+  businessName: string;
+  color: string;
+  cents: number;
+  count: number;
+}
+
+export interface OwnerCloseSummary {
+  inflowCents: number;
+  outflowCents: number;
+  netCents: number;
+  transactionCount: number;
+}
+
+export interface OwnerInsightsSummary {
+  from: string;
+  to: string;
+  topPurchases: Transaction[];
+  uncategorized: OwnerInsightMetric;
+  missingReceipts: OwnerInsightMetric;
+  transfers: OwnerInsightMetric;
+  incomeByBusiness: OwnerIncomeByBusiness[];
+  closeSummary: OwnerCloseSummary;
+}
+
 export interface Category {
   id?: string;
   businessId?: string | null;

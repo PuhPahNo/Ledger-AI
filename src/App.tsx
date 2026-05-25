@@ -5,6 +5,7 @@ import { AccountBalancesPage } from './components/AccountBalancesPage';
 import { CashFlowPage } from './components/CashFlowPage';
 import { LoginPage } from './components/auth/LoginPage';
 import { Dashboard } from './components/Dashboard';
+import { OwnerInsightsPage } from './components/OwnerInsightsPage';
 import { TransactionsPage } from './components/TransactionsPage';
 import type { CurrentUser } from './types/domain';
 import type { AppView, TransactionViewFilters } from './types/navigation';
@@ -43,6 +44,7 @@ export default function App() {
   if (view === 'admin') return <AdminPage user={user} onViewChange={setView} onLogout={handleLogout} />;
   if (view === 'balances') return <AccountBalancesPage user={user} onViewChange={setView} onLogout={handleLogout} />;
   if (view === 'cash-flow') return <CashFlowPage user={user} onViewChange={setView} onLogout={handleLogout} />;
+  if (view === 'insights') return <OwnerInsightsPage user={user} onViewChange={setView} onLogout={handleLogout} />;
   if (view === 'transactions') {
     return <TransactionsPage initialFilters={transactionFilters} user={user} onViewChange={setView} onLogout={handleLogout} />;
   }
