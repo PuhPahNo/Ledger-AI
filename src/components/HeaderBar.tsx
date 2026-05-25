@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react';
-import { Bell, KeyRound, LogOut, Search, ShieldCheck, Upload, UserRound } from 'lucide-react';
+import { Bell, KeyRound, LogOut, Search, Settings, ShieldCheck, Upload, UserRound } from 'lucide-react';
 import type { Business, CurrentUser } from '@/types/domain';
 import type { AppView } from '@/types/navigation';
 import { enableTotp, resetAdminUserPassword, setupTotp } from '@/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import {
   DropdownMenu,
@@ -47,20 +48,22 @@ export function HeaderBar({
   const fileInput = useRef<HTMLInputElement>(null);
 
   return (
-    <header className="flex flex-wrap items-center gap-3 rounded-xl border border-ink2/8 bg-paper px-3 py-2 shadow-sm">
-      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-ink font-display text-lg font-bold text-lemon">
-        L
+    <header className="flex flex-wrap items-center gap-2 rounded-xl border border-ink2/8 bg-paper px-3 py-2 shadow-sm lg:flex-nowrap">
+      <div className="flex shrink-0 items-center gap-2">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-ink font-display text-lg font-bold text-lemon">
+          L
+        </div>
+        <div className="hidden font-display text-lg font-bold tracking-tight text-ink sm:block">Ledger AI</div>
+        <span className="hidden rounded-full bg-cream px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-dim 2xl:inline-flex">
+          internal v1
+        </span>
       </div>
-      <div className="font-display text-lg font-bold tracking-tight text-ink">Ledger AI</div>
-      <span className="rounded-full bg-cream px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wider text-dim">
-        internal v1
-      </span>
 
       <ToggleGroup
         type="single"
         value={currentView}
         onValueChange={(value) => value && onViewChange?.(value as AppView)}
-        className="ml-2"
+        className="min-w-0 shrink overflow-x-auto"
       >
         <ToggleGroupItem value="dashboard">Dashboard</ToggleGroupItem>
         <ToggleGroupItem value="transactions">Transactions</ToggleGroupItem>
@@ -68,25 +71,25 @@ export function HeaderBar({
         <ToggleGroupItem value="balances">Balances</ToggleGroupItem>
         <ToggleGroupItem value="insights">Insights</ToggleGroupItem>
         <ToggleGroupItem value="assistant">Assistant</ToggleGroupItem>
-        <ToggleGroupItem value="admin">Admin</ToggleGroupItem>
       </ToggleGroup>
 
       {currentView === 'dashboard' && businesses.length > 0 && onBusinessChange && (
-        <ToggleGroup
-          type="single"
-          value={selectedBusiness}
-          onValueChange={(value) => value && onBusinessChange(value)}
-        >
-          <ToggleGroupItem value="all">All</ToggleGroupItem>
-          {businesses.map((business) => (
-            <ToggleGroupItem key={business.id} value={business.id}>
-              {business.short}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+        <Select value={selectedBusiness} onValueChange={onBusinessChange}>
+          <SelectTrigger className="h-9 w-36 shrink-0 rounded-full border-transparent bg-cream/70 text-xs font-bold 2xl:w-40">
+            <SelectValue placeholder="Business" />
+          </SelectTrigger>
+          <SelectContent align="end" className="w-56">
+            <SelectItem value="all">All businesses</SelectItem>
+            {businesses.map((business) => (
+              <SelectItem key={business.id} value={business.id}>
+                {business.short} · {business.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       )}
 
-      <div className="relative ml-auto w-full max-w-xs sm:w-72">
+      <div className="relative order-last w-full min-w-0 sm:order-none sm:ml-auto sm:w-64 sm:max-w-xs lg:flex-none 2xl:w-72">
         <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-dim" />
         <Input
           value={query}
@@ -126,15 +129,23 @@ export function HeaderBar({
       />
       <Button size="sm" onClick={() => fileInput.current?.click()} title="Upload receipt">
         <Upload className="h-4 w-4" />
-        Upload
+        <span className="hidden 2xl:inline">Upload</span>
       </Button>
 
-      <ProfileMenu user={user} onLogout={onLogout} />
+      <ProfileMenu user={user} onLogout={onLogout} onViewChange={onViewChange} />
     </header>
   );
 }
 
-function ProfileMenu({ user, onLogout }: { user?: CurrentUser; onLogout?: () => void }) {
+function ProfileMenu({
+  user,
+  onLogout,
+  onViewChange,
+}: {
+  user?: CurrentUser;
+  onLogout?: () => void;
+  onViewChange?: (view: AppView) => void;
+}) {
   const [open, setOpen] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [totp, setTotp] = useState<{ qrDataUrl: string; code: string } | null>(null);
@@ -206,6 +217,25 @@ function ProfileMenu({ user, onLogout }: { user?: CurrentUser; onLogout?: () => 
         </div>
 
         <Separator className="my-3" />
+
+        {onViewChange && (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                onViewChange('admin');
+                setOpen(false);
+              }}
+              className="w-full justify-start"
+            >
+              <Settings className="h-3.5 w-3.5" />
+              Admin settings
+            </Button>
+
+            <Separator className="my-3" />
+          </>
+        )}
 
         <div className="grid gap-2">
           <label className="grid gap-1.5">

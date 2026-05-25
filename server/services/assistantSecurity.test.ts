@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { zodTextFormat } from 'openai/helpers/zod';
 import {
   DEFAULT_TRANSACTION_DETAIL_LIMIT,
   EXPANDED_TRANSACTION_DETAIL_LIMIT,
@@ -8,7 +9,7 @@ import {
   signAssistantToken,
   verifyAssistantToken,
 } from './assistantSecurity.js';
-import { assistantArtifactSchema } from './assistantSchemas.js';
+import { assistantArtifactSchema, assistantStructuredOutputSchema } from './assistantSchemas.js';
 
 const secret = 'test-secret';
 const userId = 'user-1';
@@ -74,5 +75,10 @@ describe('assistant safety and artifacts', () => {
       labels: [],
       series: [],
     })).toThrow();
+  });
+
+  it('uses an OpenAI-compatible structured output schema for artifacts', () => {
+    const format = zodTextFormat(assistantStructuredOutputSchema, 'ledger_ai_assistant_response');
+    expect(JSON.stringify(format)).not.toContain('"oneOf"');
   });
 });
