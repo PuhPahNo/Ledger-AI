@@ -17,6 +17,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json && tsc -p tsconfig.server.json --noEmit",
     "db:migrate": "tsx server/db/migrate.ts",
     "db:seed": "tsx server/db/seed.ts",
+    "plaid:audit": "tsx server/scripts/audit-transactions.ts",
+    "plaid:backfill": "tsx server/scripts/backfill-plaid-history.ts",
     "admin:reset": "tsx server/scripts/reset-admin.ts",
     "test": "vitest run"
   },
