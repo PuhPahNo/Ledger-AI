@@ -27,20 +27,22 @@ interface Props {
   saveAndRefresh: SaveAndRefresh;
 }
 
+const receiptUploaderPasswordMinLength = 4;
+
 export function UsersTab({ data, businesses, user, saveAndRefresh }: Props) {
   const { toast } = useToast();
   const [form, setForm] = useState({ username: '', displayName: '', password: '' });
   const [uploaderForm, setUploaderForm] = useState({ username: '', displayName: '', password: '', businessId: '' });
   const canCreateUploader = uploaderForm.username.trim().length >= 2
     && uploaderForm.displayName.trim().length > 0
-    && uploaderForm.password.length >= 8;
+    && uploaderForm.password.length >= receiptUploaderPasswordMinLength;
 
   const createUploader = async () => {
     if (!canCreateUploader) {
       toast({
         variant: 'destructive',
         title: 'Uploader details incomplete',
-        description: 'Use a username, display name, and password with at least 8 characters.',
+        description: `Use a username, display name, and password with at least ${receiptUploaderPasswordMinLength} characters.`,
       });
       return;
     }
@@ -96,7 +98,7 @@ export function UsersTab({ data, businesses, user, saveAndRefresh }: Props) {
               type="password"
               value={uploaderForm.password}
               onChange={(password) => setUploaderForm({ ...uploaderForm, password })}
-              placeholder="8+ characters"
+              placeholder={`${receiptUploaderPasswordMinLength}+ characters`}
               autoComplete="new-password"
               name="new-receipt-uploader-password"
             />
@@ -159,8 +161,8 @@ export function UsersTab({ data, businesses, user, saveAndRefresh }: Props) {
                   businesses={businesses}
                   onSave={(body) => saveAndRefresh(() => updateReceiptUploader(uploader.id, body), 'Uploader saved.')}
                   onPassword={(password) => {
-                    if (password.length < 8) {
-                      toast({ variant: 'destructive', title: 'Password too short', description: 'Use at least 8 characters.' });
+                    if (password.length < receiptUploaderPasswordMinLength) {
+                      toast({ variant: 'destructive', title: 'Password too short', description: `Use at least ${receiptUploaderPasswordMinLength} characters.` });
                       return Promise.resolve(false);
                     }
                     return saveAndRefresh(() => resetReceiptUploaderPassword(uploader.id, password), 'Uploader password reset.');

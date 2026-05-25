@@ -16,6 +16,8 @@ interface Props {
   onDelete: () => Promise<boolean>;
 }
 
+const receiptUploaderPasswordMinLength = 4;
+
 export function EditableReceiptUploader({ uploader, businesses, onSave, onPassword, onDelete }: Props) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(uploader);
@@ -63,7 +65,7 @@ export function EditableReceiptUploader({ uploader, businesses, onSave, onPasswo
             type="password"
             value={password}
             onChange={setPassword}
-            placeholder="8+ characters"
+            placeholder={`${receiptUploaderPasswordMinLength}+ characters`}
             autoComplete="new-password"
             name={`uploader-new-password-${uploader.id}`}
           />

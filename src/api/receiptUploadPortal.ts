@@ -4,9 +4,14 @@ export interface ReceiptUploaderSessionUser {
   id: string;
   username: string;
   displayName: string;
+  accountType?: 'receipt_uploader' | 'admin';
   businessId?: string | null;
   businessName?: string | null;
 }
+
+export type ReceiptUploadLoginResult =
+  | { uploader: ReceiptUploaderSessionUser }
+  | { requiresTotp: true };
 
 export interface EmployeeReceiptUploadResult {
   receiptId: string;
@@ -22,6 +27,7 @@ export function getReceiptUploaderSession(): Promise<{ uploader: ReceiptUploader
         id: 'mock-uploader',
         username: 'employee',
         displayName: 'Receipt Uploader',
+        accountType: 'receipt_uploader',
         businessName: 'Demo Business',
       },
     });
@@ -29,20 +35,21 @@ export function getReceiptUploaderSession(): Promise<{ uploader: ReceiptUploader
   return http<{ uploader: ReceiptUploaderSessionUser | null }>('/receipt-upload/me');
 }
 
-export function loginReceiptUploader(username: string, password: string): Promise<{ uploader: ReceiptUploaderSessionUser }> {
+export function loginReceiptUploader(username: string, password: string, totpCode?: string): Promise<ReceiptUploadLoginResult> {
   if (useMockApi) {
     return Promise.resolve({
       uploader: {
         id: 'mock-uploader',
         username,
         displayName: username || 'Receipt Uploader',
+        accountType: 'receipt_uploader',
         businessName: 'Demo Business',
       },
     });
   }
-  return http<{ uploader: ReceiptUploaderSessionUser }>('/receipt-upload/login', {
+  return http<ReceiptUploadLoginResult>('/receipt-upload/login', {
     method: 'POST',
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, totpCode }),
   });
 }
 

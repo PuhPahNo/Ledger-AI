@@ -134,7 +134,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     const body = z.object({
       username: z.string().trim().min(2),
       displayName: z.string().trim().min(1),
-      password: z.string().min(8),
+      password: z.string().min(4),
       businessId: z.string().nullable().optional(),
       active: z.boolean().default(true),
     }).parse(request.body);
@@ -177,7 +177,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.patch('/admin/receipt-uploaders/:id/password', async (request) => {
     const actor = await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
-    const body = z.object({ password: z.string().min(8) }).parse(request.body);
+    const body = z.object({ password: z.string().min(4) }).parse(request.body);
     const [row] = await db
       .update(receiptUploaders)
       .set({ passwordHash: await hashPassword(body.password), updatedAt: new Date() })

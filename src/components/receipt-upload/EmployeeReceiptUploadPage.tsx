@@ -27,7 +27,8 @@ export function EmployeeReceiptUploadPage() {
   const cameraInput = useRef<HTMLInputElement>(null);
   const [checking, setChecking] = useState(true);
   const [uploader, setUploader] = useState<ReceiptUploaderSessionUser | null>(null);
-  const [credentials, setCredentials] = useState({ username: '', password: '' });
+  const [credentials, setCredentials] = useState({ username: '', password: '', totpCode: '' });
+  const [requiresTotp, setRequiresTotp] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [dragOver, setDragOver] = useState(false);
   const [uploadState, setUploadState] = useState<UploadState>({ state: 'idle' });
@@ -42,9 +43,14 @@ export function EmployeeReceiptUploadPage() {
   const login = async () => {
     setLoginError('');
     try {
-      const result = await loginReceiptUploader(credentials.username, credentials.password);
+      const result = await loginReceiptUploader(credentials.username, credentials.password, credentials.totpCode || undefined);
+      if ('requiresTotp' in result) {
+        setRequiresTotp(true);
+        return;
+      }
       setUploader(result.uploader);
-      setCredentials({ username: '', password: '' });
+      setCredentials({ username: '', password: '', totpCode: '' });
+      setRequiresTotp(false);
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : 'Login failed.');
     }
@@ -53,6 +59,7 @@ export function EmployeeReceiptUploadPage() {
   const logout = async () => {
     await logoutReceiptUploader();
     setUploader(null);
+    setRequiresTotp(false);
     setUploadState({ state: 'idle' });
   };
 
@@ -108,7 +115,10 @@ export function EmployeeReceiptUploadPage() {
                   id="receipt-uploader-username"
                   autoComplete="username"
                   value={credentials.username}
-                  onChange={(event) => setCredentials({ ...credentials, username: event.target.value })}
+                  onChange={(event) => {
+                    setCredentials({ ...credentials, username: event.target.value, totpCode: '' });
+                    setRequiresTotp(false);
+                  }}
                 />
               </div>
               <div className="grid gap-1.5">
@@ -118,9 +128,24 @@ export function EmployeeReceiptUploadPage() {
                   type="password"
                   autoComplete="current-password"
                   value={credentials.password}
-                  onChange={(event) => setCredentials({ ...credentials, password: event.target.value })}
+                  onChange={(event) => {
+                    setCredentials({ ...credentials, password: event.target.value, totpCode: '' });
+                    setRequiresTotp(false);
+                  }}
                 />
               </div>
+              {requiresTotp && (
+                <div className="grid gap-1.5">
+                  <Label htmlFor="receipt-uploader-totp">2FA code</Label>
+                  <Input
+                    id="receipt-uploader-totp"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    value={credentials.totpCode}
+                    onChange={(event) => setCredentials({ ...credentials, totpCode: event.target.value })}
+                  />
+                </div>
+              )}
               {loginError && (
                 <Alert variant="destructive">
                   <XCircle className="h-4 w-4" />
@@ -128,8 +153,8 @@ export function EmployeeReceiptUploadPage() {
                   <AlertDescription>{loginError}</AlertDescription>
                 </Alert>
               )}
-              <Button type="submit" size="lg" disabled={!credentials.username || !credentials.password}>
-                Continue
+              <Button type="submit" size="lg" disabled={!credentials.username || !credentials.password || (requiresTotp && !credentials.totpCode)}>
+                {requiresTotp ? 'Verify' : 'Continue'}
               </Button>
             </form>
           </section>
@@ -139,7 +164,7 @@ export function EmployeeReceiptUploadPage() {
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-bold">{uploader.displayName}</p>
-                  <p className="truncate text-xs text-dim">{uploader.businessName ?? 'Receipt uploader'}</p>
+                  <p className="truncate text-xs text-dim">{uploader.businessName ?? (uploader.accountType === 'admin' ? 'Admin account' : 'Receipt uploader')}</p>
                 </div>
                 <span className="rounded-full bg-sage/50 px-2.5 py-1 text-xs font-bold text-sage-ink">Signed in</span>
               </div>
