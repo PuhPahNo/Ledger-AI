@@ -1,7 +1,7 @@
 import { closeDb } from '../db/client.js';
 import { claimNextJob, markJobFailed, markJobSucceeded } from './queue.js';
 import { handleJob } from './handlers.js';
-import { enqueueDueCategorizationScan, enqueueDuePlaidSyncs } from './scheduler.js';
+import { enqueueDueCategorizationScan, enqueueDuePlaidSyncs, enqueuePendingReceiptExtractions } from './scheduler.js';
 
 type WorkerLogger = Pick<typeof console, 'error' | 'log'>;
 
@@ -41,6 +41,10 @@ export function startWorkerLoop(options: { pollMs?: number; logger?: WorkerLogge
           if (queued > 0) logger.log(`Queued ${queued} daily Plaid sync job${queued === 1 ? '' : 's'}`);
           const categorizationQueued = await enqueueDueCategorizationScan();
           if (categorizationQueued > 0) logger.log('Queued daily categorization review scan');
+          const receiptExtractionsQueued = await enqueuePendingReceiptExtractions();
+          if (receiptExtractionsQueued > 0) {
+            logger.log(`Queued ${receiptExtractionsQueued} pending receipt extraction job${receiptExtractionsQueued === 1 ? '' : 's'}`);
+          }
         }
         await tick(logger);
       } catch (error) {

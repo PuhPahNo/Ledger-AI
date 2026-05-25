@@ -1,10 +1,11 @@
-import { and, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { connections, jobs } from '../db/schema.js';
+import { connections, jobs, receipts } from '../db/schema.js';
 import { enqueue } from './queue.js';
 
 export const DAILY_PLAID_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const DAILY_CATEGORIZATION_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const PENDING_RECEIPT_EXTRACTION_LIMIT = 50;
 
 export function isPlaidConnectionDueForDailySync(
   lastSyncAt: Date | null | undefined,
@@ -42,6 +43,30 @@ export async function enqueueDueCategorizationScan(now = new Date()): Promise<nu
   return 1;
 }
 
+export async function enqueuePendingReceiptExtractions(now = new Date()): Promise<number> {
+  const rows = await db
+    .select({ id: receipts.id })
+    .from(receipts)
+    .where(and(
+      eq(receipts.status, 'pending'),
+      sql`${receipts.fileKey} IS NOT NULL`,
+      sql`${receipts.mimeType} IS NOT NULL`,
+      sql`${receipts.fileName} IS NOT NULL`,
+      isNull(receipts.merchant),
+      isNull(receipts.totalCents),
+      isNull(receipts.receiptDate),
+    ))
+    .limit(PENDING_RECEIPT_EXTRACTION_LIMIT);
+
+  let queued = 0;
+  for (const row of rows) {
+    if (await hasReceiptExtractionJob(row.id)) continue;
+    await enqueue('receipt.extract', { receiptId: row.id }, now);
+    queued += 1;
+  }
+  return queued;
+}
+
 async function hasPendingPlaidSync(connectionId: string): Promise<boolean> {
   const [existing] = await db
     .select({ id: jobs.id })
@@ -69,6 +94,20 @@ async function hasRecentCategorizationScan(now: Date): Promise<boolean> {
         inArray(jobs.status, ['queued', 'running', 'failed']),
         eq(jobs.status, 'succeeded'),
       ),
+    ))
+    .limit(1);
+
+  return Boolean(existing);
+}
+
+async function hasReceiptExtractionJob(receiptId: string): Promise<boolean> {
+  const [existing] = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(and(
+      eq(jobs.type, 'receipt.extract'),
+      inArray(jobs.status, ['queued', 'running', 'failed', 'succeeded']),
+      sql`${jobs.payload} ->> 'receiptId' = ${receiptId}`,
     ))
     .limit(1);
 

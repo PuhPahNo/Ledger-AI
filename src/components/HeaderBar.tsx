@@ -120,7 +120,7 @@ export function HeaderBar({
       <input
         ref={fileInput}
         type="file"
-        accept="image/*,application/pdf"
+        accept="image/*,application/pdf,text/plain,text/html,.txt,.html,.htm"
         hidden
         onChange={(event) => {
           const file = event.target.files?.[0];

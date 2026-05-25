@@ -1,10 +1,21 @@
 import { google } from 'googleapis';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { getEnv } from '../config/env.js';
 import { db } from '../db/client.js';
 import { connections, receipts } from '../db/schema.js';
+import { enqueue } from '../jobs/queue.js';
 import { decryptText, encryptText } from '../lib/crypto.js';
 import { serviceUnavailable } from '../lib/errors.js';
+import {
+  buildEmailBodyCandidate,
+  collectReceiptAttachments,
+  header,
+  looksLikeReceiptOrInvoiceText,
+  sanitizeFileName,
+  type GmailAttachmentCandidate,
+  type GmailBodyCandidate,
+  type GmailMimePart,
+} from './gmailReceiptIntake.js';
 import { storage } from './storage.js';
 
 const gmailScopes = ['https://www.googleapis.com/auth/gmail.readonly'];
@@ -120,38 +131,127 @@ export async function backfillGmail(connectionId: string, query: string): Promis
 async function ingestGmailMessage(connectionId: string, messageId: string): Promise<number> {
   const { gmail, connection } = await gmailClientForConnection(connectionId);
   const message = await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' });
-  const payload = message.data.payload;
-  const attachments = collectAttachments(payload);
+  const payload = message.data.payload as GmailMimePart | undefined;
+  const subject = header(payload, 'Subject');
+  const from = header(payload, 'From');
+  const date = header(payload, 'Date');
+  const messageSignal = [
+    subject,
+    from,
+    date,
+    message.data.snippet,
+  ].filter(Boolean).join('\n');
+  const messageIsReceiptLike = looksLikeReceiptOrInvoiceText(messageSignal);
+  const attachments = collectReceiptAttachments(payload, messageIsReceiptLike);
   let count = 0;
   for (const attachment of attachments) {
-    const existing = await db.query.receipts.findFirst({ where: eq(receipts.gmailAttachmentId, attachment.attachmentId) });
-    if (existing) continue;
     const data = await gmail.users.messages.attachments.get({
       userId: 'me',
       messageId,
       id: attachment.attachmentId,
     });
     const buffer = Buffer.from(data.data.data ?? '', 'base64url');
-    const key = `receipts/gmail/${connection.id}/${messageId}/${attachment.filename}`;
-    await storage().put({ key, body: buffer, contentType: attachment.mimeType });
-    await db.insert(receipts).values({
-      businessId: connection.businessId,
-      source: 'gmail',
-      status: 'pending',
-      fileKey: key,
-      fileName: attachment.filename,
-      mimeType: attachment.mimeType,
-      gmailMessageId: messageId,
-      gmailAttachmentId: attachment.attachmentId,
-      ocrJson: {
-        subject: header(payload, 'Subject'),
-        from: header(payload, 'From'),
-        date: header(payload, 'Date'),
-      },
+    const inserted = await insertGmailAttachmentReceipt({
+      connectionId: connection.id,
+      businessId: connection.businessId ?? undefined,
+      messageId,
+      attachment,
+      buffer,
+      emailMetadata: { subject, from, date },
     });
-    count += 1;
+    if (inserted) count += 1;
+  }
+
+  if (attachments.length === 0) {
+    const bodyCandidate = buildEmailBodyCandidate({ payload, subject, from, date });
+    if (bodyCandidate) {
+      const inserted = await insertGmailBodyReceipt({
+        connectionId: connection.id,
+        businessId: connection.businessId ?? undefined,
+        messageId,
+        bodyCandidate,
+        emailMetadata: { subject, from, date },
+      });
+      if (inserted) count += 1;
+    }
   }
   return count;
+}
+
+async function insertGmailAttachmentReceipt(input: {
+  connectionId: string;
+  businessId?: string;
+  messageId: string;
+  attachment: GmailAttachmentCandidate;
+  buffer: Buffer;
+  emailMetadata: Record<string, string | undefined>;
+}): Promise<boolean> {
+  const existing = await db.query.receipts.findFirst({
+    where: and(
+      eq(receipts.gmailMessageId, input.messageId),
+      eq(receipts.gmailAttachmentId, input.attachment.attachmentId),
+    ),
+  });
+  if (existing) return false;
+
+  const fileName = sanitizeFileName(input.attachment.filename);
+  const key = `receipts/gmail/${input.connectionId}/${input.messageId}/${fileName}`;
+  await storage().put({ key, body: input.buffer, contentType: input.attachment.mimeType });
+  const [receipt] = await db.insert(receipts).values({
+    businessId: input.businessId,
+    source: 'gmail',
+    status: 'pending',
+    fileKey: key,
+    fileName,
+    mimeType: input.attachment.mimeType,
+    gmailMessageId: input.messageId,
+    gmailAttachmentId: input.attachment.attachmentId,
+    ocrJson: {
+      ...input.emailMetadata,
+      contentKind: 'attachment',
+    },
+  }).returning({ id: receipts.id });
+  await enqueue('receipt.extract', { receiptId: receipt.id });
+  return true;
+}
+
+async function insertGmailBodyReceipt(input: {
+  connectionId: string;
+  businessId?: string;
+  messageId: string;
+  bodyCandidate: GmailBodyCandidate;
+  emailMetadata: Record<string, string | undefined>;
+}): Promise<boolean> {
+  const bodyPartId = 'body';
+  const existing = await db.query.receipts.findFirst({
+    where: and(
+      eq(receipts.gmailMessageId, input.messageId),
+      eq(receipts.gmailAttachmentId, bodyPartId),
+    ),
+  });
+  if (existing) return false;
+
+  const buffer = Buffer.from(input.bodyCandidate.text, 'utf8');
+  const key = `receipts/gmail/${input.connectionId}/${input.messageId}/${input.bodyCandidate.filename}`;
+  await storage().put({ key, body: buffer, contentType: input.bodyCandidate.mimeType });
+  const [receipt] = await db.insert(receipts).values({
+    businessId: input.businessId,
+    source: 'gmail',
+    status: 'pending',
+    fileKey: key,
+    fileName: input.bodyCandidate.filename,
+    mimeType: input.bodyCandidate.mimeType,
+    gmailMessageId: input.messageId,
+    gmailAttachmentId: bodyPartId,
+    ocrJson: {
+      ...input.emailMetadata,
+      contentKind: 'email_body',
+      bodyLength: input.bodyCandidate.bodyLength,
+      truncated: input.bodyCandidate.truncated,
+    },
+  }).returning({ id: receipts.id });
+  await enqueue('receipt.extract', { receiptId: receipt.id });
+  return true;
 }
 
 async function gmailClientForConnection(connectionId: string) {
@@ -164,20 +264,4 @@ async function gmailClientForConnection(connectionId: string) {
     access_token: connection.encryptedAccessToken ? decryptText(connection.encryptedAccessToken) : undefined,
   });
   return { gmail: google.gmail({ version: 'v1', auth: client }), connection };
-}
-
-function collectAttachments(part: any): Array<{ filename: string; mimeType: string; attachmentId: string }> {
-  if (!part) return [];
-  const current = part.body?.attachmentId && part.filename
-    ? [{ filename: part.filename, mimeType: part.mimeType ?? 'application/octet-stream', attachmentId: part.body.attachmentId }]
-    : [];
-  return [
-    ...current,
-    ...(part.parts ?? []).flatMap((child: any) => collectAttachments(child)),
-  ].filter((attachment) => /pdf|image|receipt|invoice/i.test(`${attachment.mimeType} ${attachment.filename}`));
-}
-
-function header(part: any, name: string): string | undefined {
-  const match = part?.headers?.find((item: { name?: string; value?: string }) => item.name?.toLowerCase() === name.toLowerCase());
-  return match?.value;
 }

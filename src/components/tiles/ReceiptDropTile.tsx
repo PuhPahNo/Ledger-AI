@@ -82,7 +82,7 @@ export function ReceiptDropTile({ onFile, status = { state: 'idle' } }: Props) {
       <input
         ref={fileInput}
         type="file"
-        accept="image/*,application/pdf"
+        accept="image/*,application/pdf,text/plain,text/html,.txt,.html,.htm"
         hidden
         onChange={(e) => {
           const f = e.target.files?.[0];
