@@ -5,6 +5,7 @@ import { jobs } from '../db/schema.js';
 export type JobType =
   | 'plaid.sync'
   | 'gmail.sync'
+  | 'gmail.backfill'
   | 'gmail.renew-watch'
   | 'receipt.extract'
   | 'categorization.apply-rule'

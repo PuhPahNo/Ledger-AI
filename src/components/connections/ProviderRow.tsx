@@ -14,6 +14,8 @@ interface Props {
   onRename: (label: string) => void;
   onSync: () => void;
   onBackfill?: () => void;
+  backfillLabel?: string;
+  backfillTooltip?: string;
   onDisconnect: () => void;
 }
 
@@ -24,6 +26,8 @@ export function ProviderRow({
   onRename,
   onSync,
   onBackfill,
+  backfillLabel = '12m',
+  backfillTooltip = 'Pull 12 months of Plaid history',
   onDisconnect,
 }: Props) {
   const [editing, setEditing] = useState(false);
@@ -88,10 +92,10 @@ export function ProviderRow({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="outline" size="sm" onClick={onBackfill} className="px-2.5">
-                12m
+                {backfillLabel}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Pull 12 months of Plaid history</TooltipContent>
+            <TooltipContent>{backfillTooltip}</TooltipContent>
           </Tooltip>
         )}
         <Tooltip>

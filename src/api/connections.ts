@@ -65,11 +65,22 @@ export function syncConnection(connectionId: string): Promise<{ queued: boolean 
 export function backfillConnection(
   connectionId: string,
   months = 12,
-): Promise<{ queued: boolean; daysRequested: number; newLinkDaysRequested: number }> {
+): Promise<{ queued: boolean; daysRequested: number; newLinkDaysRequested?: number }> {
   if (useMockApi) return Promise.resolve({ queued: true, daysRequested: months * 31, newLinkDaysRequested: 365 });
-  return http<{ queued: boolean; daysRequested: number; newLinkDaysRequested: number }>(`/connections/${connectionId}/backfill`, {
+  return http<{ queued: boolean; daysRequested: number; newLinkDaysRequested?: number }>(`/connections/${connectionId}/backfill`, {
     method: 'POST',
     body: JSON.stringify({ months }),
+  });
+}
+
+export function backfillGmailConnection(
+  connectionId: string,
+  days = 90,
+): Promise<{ queued: boolean; daysRequested: number }> {
+  if (useMockApi) return Promise.resolve({ queued: true, daysRequested: days });
+  return http<{ queued: boolean; daysRequested: number }>(`/connections/${connectionId}/backfill`, {
+    method: 'POST',
+    body: JSON.stringify({ days }),
   });
 }
 

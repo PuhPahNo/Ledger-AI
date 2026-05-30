@@ -19,6 +19,16 @@ import {
 import { storage } from './storage.js';
 
 const gmailScopes = ['https://www.googleapis.com/auth/gmail.readonly'];
+export const GMAIL_BACKFILL_DAYS = 90;
+const MIN_GMAIL_BACKFILL_DAYS = 1;
+const MAX_GMAIL_BACKFILL_DAYS = 365;
+
+export function gmailBackfillQuery(daysRequested = GMAIL_BACKFILL_DAYS): string {
+  const days = Number.isFinite(daysRequested)
+    ? Math.min(MAX_GMAIL_BACKFILL_DAYS, Math.max(MIN_GMAIL_BACKFILL_DAYS, Math.trunc(daysRequested)))
+    : GMAIL_BACKFILL_DAYS;
+  return `newer_than:${days}d (receipt OR invoice OR order OR confirmation)`;
+}
 
 export function googleOAuthClient() {
   const env = getEnv();
@@ -70,7 +80,7 @@ export async function connectGmail(code: string, businessId?: string): Promise<s
 export async function renewGmailWatch(connectionId: string): Promise<void> {
   const env = getEnv();
   if (!env.GOOGLE_PUBSUB_TOPIC) return;
-  const { gmail, connection } = await gmailClientForConnection(connectionId);
+  const { gmail } = await gmailClientForConnection(connectionId);
   const res = await gmail.users.watch({
     userId: 'me',
     requestBody: {
@@ -80,9 +90,7 @@ export async function renewGmailWatch(connectionId: string): Promise<void> {
     },
   });
   await db.update(connections).set({
-    gmailHistoryId: res.data.historyId ? String(res.data.historyId) : connection.gmailHistoryId,
     gmailWatchExpiration: res.data.expiration ? new Date(Number(res.data.expiration)) : null,
-    lastSyncAt: new Date(),
     updatedAt: new Date(),
   }).where(eq(connections.id, connectionId));
 }
@@ -90,7 +98,7 @@ export async function renewGmailWatch(connectionId: string): Promise<void> {
 export async function syncGmailConnection(connectionId: string, historyId?: string): Promise<number> {
   const { gmail, connection } = await gmailClientForConnection(connectionId);
   const startHistoryId = connection.gmailHistoryId ?? historyId;
-  if (!startHistoryId) return backfillGmail(connectionId, 'newer_than:30d (receipt OR invoice OR order OR confirmation)');
+  if (!startHistoryId) return backfillGmail(connectionId, gmailBackfillQuery());
 
   const history = await gmail.users.history.list({
     userId: 'me',
@@ -120,11 +128,19 @@ export async function syncGmailConnection(connectionId: string, historyId?: stri
 
 export async function backfillGmail(connectionId: string, query: string): Promise<number> {
   const { gmail } = await gmailClientForConnection(connectionId);
-  const list = await gmail.users.messages.list({ userId: 'me', q: query, maxResults: 50 });
   let count = 0;
-  for (const message of list.data.messages ?? []) {
-    if (message.id) count += await ingestGmailMessage(connectionId, message.id);
-  }
+  let pageToken: string | undefined;
+  do {
+    const list = await gmail.users.messages.list({ userId: 'me', q: query, maxResults: 100, pageToken });
+    for (const message of list.data.messages ?? []) {
+      if (message.id) count += await ingestGmailMessage(connectionId, message.id);
+    }
+    pageToken = list.data.nextPageToken ?? undefined;
+  } while (pageToken);
+  await db.update(connections).set({
+    lastSyncAt: new Date(),
+    updatedAt: new Date(),
+  }).where(eq(connections.id, connectionId));
   return count;
 }
 

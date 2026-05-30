@@ -3,6 +3,7 @@ import { AlertTriangle, Building2, CreditCard, Mail, PlugZap } from 'lucide-reac
 import { usePlaidLink } from 'react-plaid-link';
 import {
   ApiError,
+  backfillGmailConnection,
   backfillConnection as backfillPlaidConnection,
   createPlaidLinkToken,
   disconnectConnection,
@@ -168,6 +169,16 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     onRefresh();
   };
 
+  const backfillGmail = async (connection: Connection) => {
+    if (!connection.id) return;
+    const result = await backfillGmailConnection(connection.id, 90);
+    toast({
+      title: 'Gmail backfill queued',
+      description: `Ledger AI will scan the last ${result.daysRequested} days for receipts.`,
+    });
+    onRefresh();
+  };
+
   const removeConnection = async (connection: Connection) => {
     if (!connection.id) return;
     await disconnectConnection(connection.id);
@@ -287,7 +298,9 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
                     onBusiness={(next) => changeConnectionBusiness(connection, next)}
                     onRename={(label) => renameConnection(connection, label)}
                     onSync={() => refreshConnection(connection)}
-                    onBackfill={connection.kind === 'gmail' ? undefined : () => backfillConnection(connection)}
+                    onBackfill={connection.kind === 'gmail' ? () => backfillGmail(connection) : () => backfillConnection(connection)}
+                    backfillLabel={connection.kind === 'gmail' ? '90d' : '12m'}
+                    backfillTooltip={connection.kind === 'gmail' ? 'Pull 90 days of Gmail receipts' : 'Pull 12 months of Plaid history'}
                     onDisconnect={() => removeConnection(connection)}
                   />
                 ))

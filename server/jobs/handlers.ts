@@ -10,7 +10,7 @@ import {
   scanUncategorizedTransactions,
 } from '../services/categorizationFeedback.js';
 import { syncPlaidConnection } from '../services/plaid.js';
-import { renewGmailWatch, syncGmailConnection } from '../services/gmail.js';
+import { backfillGmail, gmailBackfillQuery, renewGmailWatch, syncGmailConnection } from '../services/gmail.js';
 import { regenerateInsights } from '../services/insights.js';
 import { buildExport } from '../services/exporter.js';
 
@@ -25,6 +25,11 @@ export async function handleJob(type: string, payload: Record<string, unknown>):
   }
   if (type === 'gmail.sync') {
     await syncGmailConnection(String(payload.connectionId), payload.historyId ? String(payload.historyId) : undefined);
+    return;
+  }
+  if (type === 'gmail.backfill') {
+    const daysRequested = typeof payload.daysRequested === 'number' ? payload.daysRequested : undefined;
+    await backfillGmail(String(payload.connectionId), gmailBackfillQuery(daysRequested));
     return;
   }
   if (type === 'gmail.renew-watch') {

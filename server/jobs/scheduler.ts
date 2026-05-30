@@ -5,6 +5,7 @@ import { enqueue } from './queue.js';
 
 export const DAILY_PLAID_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const DAILY_CATEGORIZATION_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000;
+export const GMAIL_WATCH_RENEWAL_WINDOW_MS = 6 * 24 * 60 * 60 * 1000;
 const PENDING_RECEIPT_EXTRACTION_LIMIT = 50;
 
 export function isPlaidConnectionDueForDailySync(
@@ -12,6 +13,13 @@ export function isPlaidConnectionDueForDailySync(
   now = new Date(),
 ): boolean {
   return !lastSyncAt || now.getTime() - lastSyncAt.getTime() >= DAILY_PLAID_SYNC_INTERVAL_MS;
+}
+
+export function isGmailWatchRenewalDue(
+  gmailWatchExpiration: Date | null | undefined,
+  now = new Date(),
+): boolean {
+  return !gmailWatchExpiration || gmailWatchExpiration.getTime() - now.getTime() <= GMAIL_WATCH_RENEWAL_WINDOW_MS;
 }
 
 export async function enqueueDuePlaidSyncs(now = new Date()): Promise<number> {
@@ -32,6 +40,31 @@ export async function enqueueDuePlaidSyncs(now = new Date()): Promise<number> {
     if (!isPlaidConnectionDueForDailySync(row.lastSyncAt, now)) continue;
     if (await hasPendingPlaidSync(row.id)) continue;
     await enqueue('plaid.sync', { connectionId: row.id }, now);
+    queued += 1;
+  }
+  return queued;
+}
+
+export async function enqueueDueGmailWatchRenewals(now = new Date()): Promise<number> {
+  if (!process.env.GOOGLE_PUBSUB_TOPIC) return 0;
+
+  const rows = await db
+    .select({
+      id: connections.id,
+      gmailWatchExpiration: connections.gmailWatchExpiration,
+    })
+    .from(connections)
+    .where(and(
+      eq(connections.kind, 'gmail'),
+      eq(connections.status, 'live'),
+      sql`${connections.encryptedRefreshToken} IS NOT NULL`,
+    ));
+
+  let queued = 0;
+  for (const row of rows) {
+    if (!isGmailWatchRenewalDue(row.gmailWatchExpiration, now)) continue;
+    if (await hasPendingGmailWatchRenewal(row.id)) continue;
+    await enqueue('gmail.renew-watch', { connectionId: row.id }, now);
     queued += 1;
   }
   return queued;
@@ -73,6 +106,21 @@ async function hasPendingPlaidSync(connectionId: string): Promise<boolean> {
     .from(jobs)
     .where(and(
       eq(jobs.type, 'plaid.sync'),
+      inArray(jobs.status, ['queued', 'running', 'failed']),
+      sql`${jobs.attempts} < ${jobs.maxAttempts}`,
+      sql`${jobs.payload} ->> 'connectionId' = ${connectionId}`,
+    ))
+    .limit(1);
+
+  return Boolean(existing);
+}
+
+async function hasPendingGmailWatchRenewal(connectionId: string): Promise<boolean> {
+  const [existing] = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(and(
+      eq(jobs.type, 'gmail.renew-watch'),
       inArray(jobs.status, ['queued', 'running', 'failed']),
       sql`${jobs.attempts} < ${jobs.maxAttempts}`,
       sql`${jobs.payload} ->> 'connectionId' = ${connectionId}`,
