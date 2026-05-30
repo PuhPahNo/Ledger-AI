@@ -13,8 +13,16 @@ export function isValidWebhookSecret(expected: string, provided: string | undefi
   if (!provided) return false;
 
   const expectedBuffer = Buffer.from(expected);
-  const providedBuffer = Buffer.from(provided);
-  return expectedBuffer.length === providedBuffer.length && timingSafeEqual(expectedBuffer, providedBuffer);
+  const candidates = new Set([provided]);
+  if (provided.includes(' ')) candidates.add(provided.replaceAll(' ', '+'));
+
+  for (const candidate of candidates) {
+    const providedBuffer = Buffer.from(candidate);
+    if (expectedBuffer.length === providedBuffer.length && timingSafeEqual(expectedBuffer, providedBuffer)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function webhookRoutes(app: FastifyInstance): Promise<void> {

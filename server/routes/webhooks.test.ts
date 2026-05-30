@@ -12,4 +12,8 @@ describe('webhook secret validation', () => {
     expect(isValidWebhookSecret('secret-token', 'wrong-token')).toBe(false);
     expect(isValidWebhookSecret('secret-token', 'secret-token-extra')).toBe(false);
   });
+
+  it('accepts query-string plus signs decoded as spaces', () => {
+    expect(isValidWebhookSecret('abc+123', 'abc 123')).toBe(true);
+  });
 });

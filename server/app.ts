@@ -22,13 +22,27 @@ import { assistantRoutes } from './routes/assistant.js';
 import { exportRoutes } from './routes/exports.js';
 import { webhookRoutes } from './routes/webhooks.js';
 import { storage } from './services/storage.js';
+import { redactSensitiveUrl } from './lib/urlRedaction.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 export async function buildApp() {
   const env = getEnv();
   const app = Fastify({
-    logger: { level: env.NODE_ENV === 'development' ? 'debug' : 'info' },
+    logger: {
+      level: env.NODE_ENV === 'development' ? 'debug' : 'info',
+      serializers: {
+        req(request) {
+          return {
+            method: request.method,
+            url: redactSensitiveUrl(request.url),
+            host: request.host,
+            remoteAddress: request.ip,
+            remotePort: request.socket.remotePort,
+          };
+        },
+      },
+    },
   });
 
   app.setErrorHandler((error, _request, reply) => {
