@@ -20,7 +20,7 @@ export function ChartTooltip({ open, x, y, children }: ChartTooltipProps) {
       role="tooltip"
       className={cn(
         'pointer-events-none absolute z-20 -translate-x-1/2 -translate-y-full',
-        'whitespace-nowrap rounded-md bg-ink px-2.5 py-1.5 text-xs text-cream shadow-md',
+        'whitespace-nowrap rounded-md bg-strong px-2.5 py-1.5 text-xs text-strong-foreground shadow-md',
         'animate-in fade-in-0 zoom-in-95',
       )}
       style={{ left: x, top: y - 10 }}

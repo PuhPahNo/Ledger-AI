@@ -81,7 +81,7 @@ export function EmployeeReceiptUploadPage() {
       <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 py-5 sm:justify-center">
         <div className="mb-5 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-ink text-lemon">
+            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-inverse text-inverse-foreground">
               <ReceiptText className="h-5 w-5" />
             </span>
             <div>

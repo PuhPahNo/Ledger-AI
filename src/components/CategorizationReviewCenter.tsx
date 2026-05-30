@@ -97,7 +97,7 @@ export function CategorizationReviewCenter({ open, items, businesses, onClose, o
                   </div>
                   {business && (
                     <span
-                      className="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-paper"
+                      className="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white"
                       style={{ backgroundColor: business.color }}
                     >
                       {business.short}

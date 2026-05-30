@@ -41,7 +41,7 @@ export function LoginPage({ onLogin }: Props) {
     <main className="grid min-h-screen place-items-center bg-bg p-6">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-ink font-display text-xl font-bold text-lemon">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-inverse font-display text-xl font-bold text-inverse-foreground">
             L
           </div>
           <div>

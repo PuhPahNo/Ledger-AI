@@ -90,7 +90,7 @@ export function AccountSpendTile({
                   <span
                     className={cn(
                       'flex h-8 w-8 shrink-0 items-center justify-center rounded-md',
-                      active ? 'bg-ink text-lemon' : 'bg-paper text-ink',
+                      active ? 'bg-inverse text-inverse-foreground' : 'bg-paper text-ink',
                     )}
                   >
                     {account.enabled ? (

@@ -5,6 +5,7 @@ import { cn } from '@/lib/cn';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { MoneyDisplay } from '@/components/ui/money-display';
 import { StatLabel } from '@/components/ui/stat-label';
+import { useResolvedColor } from '@/hooks/useTheme';
 
 interface Props {
   businesses: Business[];
@@ -15,12 +16,14 @@ interface Props {
 }
 
 export function BusinessStrip({ businesses, transactions, selected, onSelect, captionFor }: Props) {
+  // "All businesses" uses the primary ink as its accent — resolve it so it stays visible in dark mode.
+  const allAccent = useResolvedColor('--color-ink', '#15140f');
   return (
     <ScrollArea className="w-full">
       <div className="flex gap-3 pb-2">
         <BusinessCard
           active={selected === 'all'}
-          accent="#15140f"
+          accent={allAccent}
           name="All businesses"
           amount={fmt$k(totalSpend(transactions))}
           caption={`${businesses.length} workspaces`}

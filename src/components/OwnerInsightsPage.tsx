@@ -30,6 +30,7 @@ import type {
 import type { AppView } from '@/types/navigation';
 import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
+import { useResolvedColor } from '@/hooks/useTheme';
 import { AppShell } from './AppShell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -182,12 +183,12 @@ export function OwnerInsightsPage({ user, onViewChange, onLogout }: Props) {
 
         {/* HERO: magazine-style headline + AI narrative + KPI sidecards */}
         <div className="grid gap-3 lg:grid-cols-[1.5fr_1fr]">
-          <div className="overflow-hidden rounded-2xl border border-ink2/10 bg-ink p-7 text-paper shadow-md">
+          <div className="overflow-hidden rounded-2xl border border-ink2/10 bg-strong p-7 text-strong-foreground shadow-md">
             <div className="flex items-center gap-3">
-              <span className="rounded-full bg-paper/10 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-paper/80">
+              <span className="rounded-full bg-strong-foreground/10 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-strong-foreground/80">
                 {briefDate.tag}
               </span>
-              <span className="font-mono text-[10px] uppercase tracking-wider text-paper/60">Morning brief</span>
+              <span className="font-mono text-[10px] uppercase tracking-wider text-strong-foreground/60">Morning brief</span>
             </div>
             <h1 className="mt-4 font-display text-4xl font-bold leading-[1.05] tracking-tight">
               {briefing.headlinePrefix}{' '}
@@ -195,12 +196,12 @@ export function OwnerInsightsPage({ user, onViewChange, onLogout }: Props) {
                 {briefing.headlineAccent}
               </span>
               {briefing.headlineSuffix && (
-                <> — <span className="text-paper/70">{briefing.headlineSuffix}</span></>
+                <> — <span className="text-strong-foreground/70">{briefing.headlineSuffix}</span></>
               )}
             </h1>
-            <div className="mt-5 flex items-start gap-3 rounded-xl bg-paper/5 p-4">
+            <div className="mt-5 flex items-start gap-3 rounded-xl bg-strong-foreground/5 p-4">
               <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-lemon" />
-              <div className="flex-1 text-sm leading-relaxed text-paper/85">{briefing.narrative}</div>
+              <div className="flex-1 text-sm leading-relaxed text-strong-foreground/85">{briefing.narrative}</div>
             </div>
             <div className="mt-5 flex flex-wrap items-center gap-2">
               <Button
@@ -214,7 +215,7 @@ export function OwnerInsightsPage({ user, onViewChange, onLogout }: Props) {
               <button
                 type="button"
                 onClick={() => onViewChange?.('cash-flow')}
-                className="inline-flex items-center gap-1.5 rounded-full border border-paper/20 px-3 py-1.5 text-xs font-bold text-paper hover:bg-paper/10"
+                className="inline-flex items-center gap-1.5 rounded-full border border-strong-foreground/20 px-3 py-1.5 text-xs font-bold text-strong-foreground hover:bg-strong-foreground/10"
               >
                 <ChevronRight className="h-3 w-3" />
                 Open cash flow
@@ -386,7 +387,7 @@ export function OwnerInsightsPage({ user, onViewChange, onLogout }: Props) {
                     <span
                       className={cn(
                         'flex h-7 w-7 items-center justify-center rounded-lg',
-                        item.tone === 'warn' ? 'bg-coral/20 text-coral-ink' : 'bg-ink text-lemon',
+                        item.tone === 'warn' ? 'bg-coral/20 text-coral-ink' : 'bg-inverse text-inverse-foreground',
                       )}
                     >
                       {item.icon}
@@ -714,7 +715,8 @@ function Delta({ value, invertColors }: { value: number; invertColors?: boolean 
   );
 }
 
-function Sparkline({ values, color = '#15140f', positive }: { values: number[]; color?: string; positive?: boolean }) {
+function Sparkline({ values, color, positive }: { values: number[]; color?: string; positive?: boolean }) {
+  const ink = useResolvedColor('--color-ink', '#15140f');
   if (!values.length) return null;
   const min = Math.min(...values, 0);
   const max = Math.max(...values, 0);
@@ -729,7 +731,7 @@ function Sparkline({ values, color = '#15140f', positive }: { values: number[]; 
       <polyline
         points={points.join(' ')}
         fill="none"
-        stroke={positive ? 'hsl(105 35% 19%)' : color}
+        stroke={positive ? 'hsl(105 35% 19%)' : (color ?? ink)}
         strokeWidth="2"
         vectorEffect="non-scaling-stroke"
         strokeLinecap="round"

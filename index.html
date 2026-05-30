@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Ledger AI</title>
     <meta name="description" content="Internal spend tool for the three businesses." />
+    <script>
+      // Apply the saved theme before first paint to avoid a light flash.
+      try {
+        if (localStorage.getItem('ledger-theme') === 'dark') {
+          document.documentElement.classList.add('dark');
+        }
+      } catch (e) {}
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

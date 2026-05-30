@@ -46,6 +46,43 @@
     --border: var(--color-ink2);
     --input: var(--color-ink2);
     --ring: var(--color-ink);
+
+    /* Semantic pairs for the overloaded "ink chip" pattern (ink is also body text).
+       inverse = vivid action/active accent; strong = neutral strong surface. */
+    --inverse: var(--color-ink);
+    --inverse-foreground: var(--color-lemon);
+    --strong: var(--color-ink);
+    --strong-foreground: var(--color-cream);
+
+    /* Fixed dark foregrounds for text sitting ON solid bright sage/coral chips.
+       These never flip — the chips stay bright in both themes. The matching
+       --color-*-ink tokens DO flip (see .dark) so accent-colored TEXT on neutral
+       surfaces (money +/-, deltas, soft-tint cards) stays legible in dark mode. */
+    --on-sage: 105 35% 19%;
+    --on-coral: 9 78% 18%;
+  }
+
+  /* Dark theme — only the neutral primitives flip; shadcn aliases reference them
+     and follow automatically. Accent pastels stay fixed (colored bento cards on dark). */
+  .dark {
+    --color-bg: 48 10% 9%;        /* warm charcoal page */
+    --color-ink: 44 22% 92%;      /* light primary text */
+    --color-ink2: 44 12% 80%;     /* light hairline — keeps border-ink2/10 subtle */
+    --color-dim: 46 8% 60%;       /* muted text */
+    --color-paper: 45 8% 13%;     /* raised cards */
+    --color-cream: 44 8% 18%;     /* hover / secondary surface (lighter than paper) */
+    --color-sunken: 48 10% 6%;    /* below the page */
+
+    /* inverse → lemon pill with dark text; strong → raised dark surface with light text. */
+    --inverse: var(--color-lemon);
+    --inverse-foreground: 45 14% 7%;
+    --strong: 45 8% 20%;
+    --strong-foreground: 44 30% 90%;
+
+    /* Accent text colors (money +/-, deltas, soft-tint cards) flip to legible light
+       shades on dark surfaces. Solid bright chips keep dark text via --on-* above. */
+    --color-sage-ink: 95 40% 72%;
+    --color-coral-ink: 14 95% 75%;
   }
 
   html, body {

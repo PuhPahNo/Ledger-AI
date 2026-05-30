@@ -19,6 +19,7 @@ import type {
 import type { AppView } from '@/types/navigation';
 import { accountLabel } from '@/lib/account';
 import { useToast } from '@/hooks/useToast';
+import { useResolvedColor } from '@/hooks/useTheme';
 import { AppShell } from './AppShell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -346,11 +347,11 @@ function ComparisonCard({ data }: { data: ComparisonCardData }) {
     <div
       className={cn(
         'overflow-hidden rounded-xl border shadow-sm',
-        current ? 'border-ink2/30 bg-ink text-paper' : 'border-ink2/10 bg-paper',
+        current ? 'border-ink2/30 bg-strong text-strong-foreground' : 'border-ink2/10 bg-paper',
       )}
     >
-      <div className={cn('px-4 py-3', current ? 'border-b border-paper/15' : 'border-b border-ink2/10')}>
-        <div className={cn('font-mono text-[10px] uppercase tracking-wider', current ? 'text-paper/60' : 'text-dim')}>
+      <div className={cn('px-4 py-3', current ? 'border-b border-strong-foreground/15' : 'border-b border-ink2/10')}>
+        <div className={cn('font-mono text-[10px] uppercase tracking-wider', current ? 'text-strong-foreground/60' : 'text-dim')}>
           {data.label}
         </div>
         <div
@@ -361,34 +362,34 @@ function ComparisonCard({ data }: { data: ComparisonCardData }) {
         >
           {fmtCompactCents(data.netCents, { signed: true })}
         </div>
-        <div className={cn('text-xs', current ? 'text-paper/60' : 'text-dim')}>{data.sub}</div>
+        <div className={cn('text-xs', current ? 'text-strong-foreground/60' : 'text-dim')}>{data.sub}</div>
       </div>
-      <div className={cn('grid grid-cols-2 divide-x', current ? 'divide-paper/15' : 'divide-ink2/10')}>
+      <div className={cn('grid grid-cols-2 divide-x', current ? 'divide-strong-foreground/15' : 'divide-ink2/10')}>
         <div className="px-4 py-3">
-          <div className={cn('font-mono text-[10px] uppercase tracking-wider', current ? 'text-paper/60' : 'text-dim')}>
+          <div className={cn('font-mono text-[10px] uppercase tracking-wider', current ? 'text-strong-foreground/60' : 'text-dim')}>
             Inflow
           </div>
-          <div className={cn('font-bold tabular-nums', current ? 'text-paper' : 'text-sage-ink')}>
+          <div className={cn('font-bold tabular-nums', current ? 'text-strong-foreground' : 'text-sage-ink')}>
             +{fmtCompactCents(data.inflowCents)}
           </div>
         </div>
         <div className="px-4 py-3">
-          <div className={cn('font-mono text-[10px] uppercase tracking-wider', current ? 'text-paper/60' : 'text-dim')}>
+          <div className={cn('font-mono text-[10px] uppercase tracking-wider', current ? 'text-strong-foreground/60' : 'text-dim')}>
             Outflow
           </div>
-          <div className={cn('font-bold tabular-nums', current ? 'text-paper' : 'text-ink')}>
+          <div className={cn('font-bold tabular-nums', current ? 'text-strong-foreground' : 'text-ink')}>
             −{fmtCompactCents(data.outflowCents)}
           </div>
         </div>
       </div>
       {current && (
-        <div className="grid grid-cols-2 divide-x divide-paper/15 border-t border-paper/15">
+        <div className="grid grid-cols-2 divide-x divide-strong-foreground/15 border-t border-strong-foreground/15">
           <div className="px-4 py-3">
-            <div className="font-mono text-[10px] uppercase tracking-wider text-paper/60">vs Last month</div>
+            <div className="font-mono text-[10px] uppercase tracking-wider text-strong-foreground/60">vs Last month</div>
             <DeltaPct value={data.moDelta ?? 0} />
           </div>
           <div className="px-4 py-3">
-            <div className="font-mono text-[10px] uppercase tracking-wider text-paper/60">vs Last year</div>
+            <div className="font-mono text-[10px] uppercase tracking-wider text-strong-foreground/60">vs Last year</div>
             <DeltaPct value={data.yoyDelta ?? 0} />
           </div>
         </div>
@@ -538,6 +539,7 @@ function NetLineOverlay({
   height: number;
   half: number;
 }) {
+  const netLine = useResolvedColor('--color-ink', 'hsl(45 14% 7%)');
   if (periods.length < 2) return null;
   const points = periods.map((period, index) => {
     const x = ((index + 0.5) / periods.length) * 100;
@@ -559,7 +561,7 @@ function NetLineOverlay({
         <path
           d={path}
           fill="none"
-          stroke="hsl(45 14% 7%)"
+          stroke={netLine}
           strokeWidth="1.5"
           vectorEffect="non-scaling-stroke"
           strokeLinejoin="round"
@@ -643,7 +645,7 @@ function FilterChip({
       onClick={onClick}
       className={cn(
         'rounded-full border px-2.5 py-1 text-xs font-bold transition-colors',
-        active ? 'border-ink bg-ink text-lemon' : 'border-ink2/20 bg-cream/70 text-ink hover:border-ink2/40',
+        active ? 'border-inverse bg-inverse text-inverse-foreground' : 'border-ink2/20 bg-cream/70 text-ink hover:border-ink2/40',
         muted && 'opacity-60',
       )}
     >

@@ -235,7 +235,7 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     <Dialog open={open} onOpenChange={(value) => !value && onClose()}>
       <DialogContent size="xl" className="gap-5">
         <DialogHeader className="flex flex-row items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-ink text-lemon">
+          <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-inverse text-inverse-foreground">
             <PlugZap className="h-5 w-5" />
           </div>
           <div className="min-w-0 flex-1">

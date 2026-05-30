@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { StatLabel } from '@/components/ui/stat-label';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { colors } from '@/theme/tokens';
+import { useResolvedColor } from '@/hooks/useTheme';
 import { Sparkline } from './Sparkline';
 
 export type DashboardFlowMode = 'outflow' | 'inflow' | 'both';
@@ -48,7 +49,9 @@ interface Props {
 }
 
 export function SpendHeroTile({ summary, contextLabel, detailLabel, mode, onModeChange }: Props) {
-  const view = viewModel(summary, mode);
+  // Sparkline base line follows the theme so it stays visible on the (flipping) tile.
+  const inkLine = useResolvedColor('--color-ink', colors.ink);
+  const view = viewModel(summary, mode, inkLine);
   const up = view.deltaPct >= 0;
   return (
     <Tile tone="cream" pad="lg" colSpan={8} rowSpan={2} className="gap-4">
@@ -105,7 +108,7 @@ export function SpendHeroTile({ summary, contextLabel, detailLabel, mode, onMode
   );
 }
 
-function viewModel(summary: SpendSummary, mode: DashboardFlowMode): HeroView {
+function viewModel(summary: SpendSummary, mode: DashboardFlowMode, inkLine: string): HeroView {
   const inflowValues = summary.trailingInflowMonthCents ?? [];
   const outflowValues = summary.trailingOutflowMonthCents ?? summary.trailingMonthCents ?? [];
   if (mode === 'inflow') {
@@ -139,7 +142,7 @@ function viewModel(summary: SpendSummary, mode: DashboardFlowMode): HeroView {
         { id: 'inflow', label: 'In', color: colors.sageInk, values: inflowValues },
         { id: 'outflow', label: 'Out', color: colors.coral, values: outflowValues },
       ],
-      baseColor: colors.ink,
+      baseColor: inkLine,
       highlightColor: colors.coral,
       stats: [
         { label: 'In', value: (summary.inflowCents ?? 0) / 100 },
@@ -157,7 +160,7 @@ function viewModel(summary: SpendSummary, mode: DashboardFlowMode): HeroView {
     values: outflowValues,
     segments: summary.trailingOutflowBusinessCents ?? summary.trailingMonthBusinessCents,
     series: undefined,
-    baseColor: colors.ink,
+    baseColor: inkLine,
     highlightColor: colors.coral,
     stats: [
       { label: 'Last month', value: summary.lastOutflow ?? summary.lastMonth },

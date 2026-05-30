@@ -7,6 +7,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  Moon,
   Receipt,
   Search,
   Settings,
@@ -30,7 +31,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
 import { useToast } from '@/hooks/useToast';
+import { useTheme } from '@/hooks/useTheme';
 import { cn } from '@/lib/cn';
 import { CategorizationReviewCenter } from './CategorizationReviewCenter';
 
@@ -203,7 +206,7 @@ function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedR
   return (
     <aside className="sticky top-3 hidden h-[calc(100vh-24px)] w-[220px] shrink-0 flex-col rounded-xl border border-ink2/10 bg-paper shadow-sm md:flex">
       <div className="flex items-center gap-2.5 border-b border-ink2/10 px-4 py-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-ink font-display text-lg font-bold text-lemon">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-inverse font-display text-lg font-bold text-inverse-foreground">
           L
         </div>
         <div className="min-w-0">
@@ -238,16 +241,16 @@ function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedR
               onClick={() => onViewChange?.(item.id)}
               className={cn(
                 'group mb-0.5 flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs font-bold transition-colors',
-                active ? 'bg-ink text-lemon' : 'text-ink hover:bg-cream',
+                active ? 'bg-inverse text-inverse-foreground' : 'text-ink hover:bg-cream',
               )}
             >
-              <Icon className={cn('h-4 w-4', active ? 'text-lemon' : 'text-dim group-hover:text-ink')} />
+              <Icon className={cn('h-4 w-4', active ? 'text-inverse-foreground' : 'text-dim group-hover:text-ink')} />
               <span>{item.label}</span>
               {item.id === 'receipts' && unmatchedReceiptCount > 0 && (
                 <span
                   className={cn(
                     'ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none',
-                    active ? 'bg-lemon text-ink' : 'bg-coral text-coral-ink',
+                    active ? 'bg-inverse-foreground text-inverse' : 'bg-coral text-on-coral',
                   )}
                 >
                   {unmatchedReceiptCount > 9 ? '9+' : unmatchedReceiptCount}
@@ -264,10 +267,10 @@ function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedR
           onClick={() => onViewChange?.('admin')}
           className={cn(
             'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-xs font-bold transition-colors',
-            currentView === 'admin' ? 'bg-ink text-lemon' : 'text-ink hover:bg-cream',
+            currentView === 'admin' ? 'bg-inverse text-inverse-foreground' : 'text-ink hover:bg-cream',
           )}
         >
-          <Settings className={cn('h-4 w-4', currentView === 'admin' ? 'text-lemon' : 'text-dim')} />
+          <Settings className={cn('h-4 w-4', currentView === 'admin' ? 'text-inverse-foreground' : 'text-dim')} />
           Admin & settings
         </button>
         <ProfileFooter user={user} onLogout={onLogout} />
@@ -281,7 +284,7 @@ function ProfileFooter({ user, onLogout }: { user?: CurrentUser; onLogout?: () =
   return (
     <ProfileMenu user={user} onLogout={onLogout}>
       <div className="mt-1 flex items-center gap-2.5 rounded-lg p-2 hover:bg-cream cursor-pointer">
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-coral font-bold text-coral-ink">
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-coral font-bold text-on-coral">
           {initial}
         </div>
         <div className="min-w-0 flex-1 text-left">
@@ -359,7 +362,7 @@ function ContextBar({
         >
           <Bell className="h-4 w-4" />
           {reviewCount > 0 && (
-            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-coral px-1 text-[10px] font-bold leading-none text-coral-ink">
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-coral px-1 text-[10px] font-bold leading-none text-on-coral">
               {reviewCount > 9 ? '9+' : reviewCount}
             </span>
           )}
@@ -388,6 +391,7 @@ function ProfileMenu({
   const [newPassword, setNewPassword] = useState('');
   const [totp, setTotp] = useState<{ qrDataUrl: string; code: string } | null>(null);
   const { toast } = useToast();
+  const { theme, setTheme } = useTheme();
 
   const resetPassword = async () => {
     if (!user) return;
@@ -447,6 +451,20 @@ function ProfileMenu({
             <div className="truncate font-bold text-ink">{user?.displayName ?? 'Admin'}</div>
             <div className="truncate text-xs text-dim">{user?.username}</div>
           </div>
+        </div>
+
+        <Separator className="my-3" />
+
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Moon className="h-4 w-4 text-dim" />
+            <span className="text-sm font-bold text-ink">Dark mode</span>
+          </div>
+          <Switch
+            checked={theme === 'dark'}
+            onCheckedChange={(checked) => setTheme(checked ? 'dark' : 'light')}
+            aria-label="Toggle dark mode"
+          />
         </div>
 
         <Separator className="my-3" />

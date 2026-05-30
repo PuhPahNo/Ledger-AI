@@ -138,9 +138,9 @@ function limitMerchant(value: string, max = 58): string {
 function receiptBadge(status: Transaction['receipt']) {
   switch (status) {
     case 'matched':
-      return { fg: 'hsl(var(--color-sage-ink))', bg: 'hsl(var(--color-sage))', glyph: '✓', title: 'Receipt matched' };
+      return { fg: 'hsl(var(--on-sage))', bg: 'hsl(var(--color-sage))', glyph: '✓', title: 'Receipt matched' };
     case 'missing':
-      return { fg: 'hsl(var(--color-coral-ink))', bg: 'hsl(var(--color-coral))', glyph: '!', title: 'Receipt missing' };
+      return { fg: 'hsl(var(--on-coral))', bg: 'hsl(var(--color-coral))', glyph: '!', title: 'Receipt missing' };
     case 'pending':
       return { fg: 'hsl(var(--color-lemon-ink))', bg: 'hsl(var(--color-lemon))', glyph: '…', title: 'Receipt pending OCR/match' };
     default:

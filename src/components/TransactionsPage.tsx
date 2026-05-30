@@ -262,14 +262,14 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
                 onClick={() => applySavedView(view.id)}
                 className={cn(
                   'inline-flex h-8 shrink-0 items-center gap-2 rounded-lg px-3 text-xs font-bold transition-colors',
-                  active ? 'bg-ink text-lemon' : 'text-ink hover:bg-cream',
+                  active ? 'bg-inverse text-inverse-foreground' : 'text-ink hover:bg-cream',
                 )}
               >
                 {view.label}
                 {badge !== undefined && badge > 0 && (
                   <span className={cn(
                     'rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none',
-                    active ? 'bg-lemon text-ink' : 'bg-coral/20 text-coral-ink',
+                    active ? 'bg-inverse-foreground text-inverse' : 'bg-coral/20 text-coral-ink',
                   )}>
                     {badge}
                   </span>
@@ -330,7 +330,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
                       onClick={() => { setDirection(opt.value); setOffset(0); }}
                       className={cn(
                         'rounded-md px-2 py-1 text-xs font-bold transition-colors',
-                        direction === opt.value ? 'bg-ink text-lemon' : 'bg-cream/40 text-ink hover:bg-cream',
+                        direction === opt.value ? 'bg-inverse text-inverse-foreground' : 'bg-cream/40 text-ink hover:bg-cream',
                       )}
                     >
                       {opt.label}
@@ -365,7 +365,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
                       >
                         <span className={cn(
                           'flex h-3.5 w-3.5 items-center justify-center rounded border',
-                          checked ? 'border-ink bg-ink text-lemon' : 'border-ink2/25',
+                          checked ? 'border-inverse bg-inverse text-inverse-foreground' : 'border-ink2/25',
                         )}>
                           {checked && <Check className="h-2.5 w-2.5" />}
                         </span>
@@ -431,7 +431,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
                       className={cn(
                         'rounded-md px-2 py-1 text-xs font-bold transition-colors',
                         receipts.includes(status)
-                          ? 'bg-ink text-lemon'
+                          ? 'bg-inverse text-inverse-foreground'
                           : 'bg-cream/40 text-ink hover:bg-cream',
                       )}
                     >

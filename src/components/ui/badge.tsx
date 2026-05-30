@@ -7,11 +7,11 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-ink text-lemon',
+        default: 'bg-inverse text-inverse-foreground',
         outline: 'border border-ink2/40 text-ink',
         secondary: 'bg-cream text-ink',
         muted: 'bg-ink/5 text-dim',
-        success: 'bg-sage text-sage-ink',
+        success: 'bg-sage text-on-sage',
         warning: 'bg-lemon text-lemon-ink',
         danger: 'bg-pink text-pink-ink',
       },

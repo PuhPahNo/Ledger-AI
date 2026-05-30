@@ -30,9 +30,9 @@ export function ReceiptDropTile({ onFile, status = { state: 'idle' } }: Props) {
       )}
     >
       <div className="flex items-baseline gap-2">
-        <StatLabel className="text-cream/70">RECEIPTS</StatLabel>
+        <StatLabel className="text-strong-foreground/70">RECEIPTS</StatLabel>
         {status.state !== 'idle' && (
-          <span className="ml-auto rounded-full bg-cream/15 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-cream/80">
+          <span className="ml-auto rounded-full bg-strong-foreground/15 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-strong-foreground/80">
             {status.state}
           </span>
         )}
@@ -53,16 +53,16 @@ export function ReceiptDropTile({ onFile, status = { state: 'idle' } }: Props) {
         onClick={() => fileInput.current?.click()}
         className={cn(
           'group flex flex-1 cursor-pointer flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed p-6 text-center transition-colors',
-          dragOver ? 'border-lemon bg-lemon/10' : 'border-cream/25 bg-cream/5 hover:bg-cream/10',
+          dragOver ? 'border-lemon bg-lemon/10' : 'border-strong-foreground/25 bg-strong-foreground/5 hover:bg-strong-foreground/10',
         )}
       >
-        <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-cream/15 text-cream transition-transform group-hover:scale-105">
+        <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-strong-foreground/15 text-strong-foreground transition-transform group-hover:scale-105">
           <Upload className="h-6 w-6" />
         </div>
-        <div className="font-display text-lg font-bold leading-tight text-cream">
+        <div className="font-display text-lg font-bold leading-tight text-strong-foreground">
           {titleFor(status.state)}
         </div>
-        <div className="text-xs leading-relaxed text-cream/70">
+        <div className="text-xs leading-relaxed text-strong-foreground/70">
           {status.message ?? "Drop a file, paste from clipboard, or use the buttons below. We'll OCR and try to match it automatically."}
         </div>
       </div>
@@ -96,11 +96,11 @@ export function ReceiptDropTile({ onFile, status = { state: 'idle' } }: Props) {
           <Camera className="h-4 w-4" />
           Camera
         </Button>
-        <Button variant="outline" size="sm" onClick={() => fileInput.current?.click()} className="border-cream/30 text-cream hover:bg-cream/10">
+        <Button variant="outline" size="sm" onClick={() => fileInput.current?.click()} className="border-strong-foreground/30 text-strong-foreground hover:bg-strong-foreground/10">
           <FolderOpen className="h-4 w-4" />
           Browse
         </Button>
-        <Button variant="outline" size="sm" onClick={() => void pasteFromClipboard().then((f) => f && onFile(f))} className="border-cream/30 text-cream hover:bg-cream/10">
+        <Button variant="outline" size="sm" onClick={() => void pasteFromClipboard().then((f) => f && onFile(f))} className="border-strong-foreground/30 text-strong-foreground hover:bg-strong-foreground/10">
           <ClipboardPaste className="h-4 w-4" />
           Paste
         </Button>

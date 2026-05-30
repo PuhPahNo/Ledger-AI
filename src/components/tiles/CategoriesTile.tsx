@@ -33,10 +33,10 @@ export function CategoriesTile({ categories, comparisons, comparisonBasis, onCom
         </div>
         <Tabs value={mode} onValueChange={(value) => setMode(value as 'breakdown' | 'compare')}>
           <TabsList className="h-8 bg-lemon-ink/10">
-            <TabsTrigger value="breakdown" className="h-7 text-[11px] data-[state=active]:bg-lemon-ink data-[state=active]:text-lemon">
+            <TabsTrigger value="breakdown" className="h-7 text-[11px] text-lemon-ink/70 data-[state=active]:bg-lemon-ink data-[state=active]:text-lemon">
               Breakdown
             </TabsTrigger>
-            <TabsTrigger value="compare" className="h-7 text-[11px] data-[state=active]:bg-lemon-ink data-[state=active]:text-lemon">
+            <TabsTrigger value="compare" className="h-7 text-[11px] text-lemon-ink/70 data-[state=active]:bg-lemon-ink data-[state=active]:text-lemon">
               Compare
             </TabsTrigger>
           </TabsList>

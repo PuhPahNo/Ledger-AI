@@ -178,7 +178,7 @@ export function AssistantPage({ user, onViewChange, onLogout }: Props) {
                 </button>
               ))}
             </div>
-            <div className="mt-5 rounded-lg bg-ink px-3 py-3 text-xs leading-relaxed text-cream">
+            <div className="mt-5 rounded-lg bg-strong px-3 py-3 text-xs leading-relaxed text-strong-foreground">
               Mutations require confirmation. Expanded transaction detail requires approval. Raw provider payloads and secrets are blocked.
             </div>
           </aside>
@@ -251,7 +251,7 @@ function MessageBubble({
 }) {
   if (message.role === 'user') {
     return (
-      <div className="ml-auto max-w-3xl rounded-xl bg-ink px-4 py-3 text-paper">
+      <div className="ml-auto max-w-3xl rounded-xl bg-strong px-4 py-3 text-strong-foreground">
         <RichText text={message.text} invert />
       </div>
     );
@@ -282,7 +282,7 @@ function MessageBubble({
 function RichText({ text, invert = false }: { text: string; invert?: boolean }) {
   const blocks = text.split(/\n{2,}/);
   return (
-    <div className={cn('space-y-2 text-sm leading-relaxed', invert ? 'text-paper' : 'text-ink')}>
+    <div className={cn('space-y-2 text-sm leading-relaxed', invert ? 'text-strong-foreground' : 'text-ink')}>
       {blocks.map((block, index) => {
         const lines = block.split('\n').filter(Boolean);
         const isList = lines.every((line) => /^[-*]\s+/.test(line.trim()));

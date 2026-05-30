@@ -29,7 +29,7 @@ export function EditableUser({ admin, onSave, onPassword, onActive }: Props) {
     <Collapsible open={open} onOpenChange={setOpen} className="rounded-lg border border-ink2/10 bg-[hsl(var(--color-sunken))]">
       <CollapsibleTrigger asChild>
         <button type="button" className="flex w-full items-center gap-3 px-4 py-3 text-left">
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-coral font-bold text-paper">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-coral font-bold text-on-coral">
             {(admin.displayName || admin.username).slice(0, 1).toUpperCase()}
           </span>
           <span className="min-w-0 flex-1">

@@ -20,6 +20,8 @@ const config: Config = {
         cream: 'hsl(var(--color-cream) / <alpha-value>)',
         sage: 'hsl(var(--color-sage) / <alpha-value>)',
         'sage-ink': 'hsl(var(--color-sage-ink) / <alpha-value>)',
+        'on-sage': 'hsl(var(--on-sage) / <alpha-value>)',
+        'on-coral': 'hsl(var(--on-coral) / <alpha-value>)',
         coral: 'hsl(var(--color-coral) / <alpha-value>)',
         'coral-ink': 'hsl(var(--color-coral-ink) / <alpha-value>)',
         sky: 'hsl(var(--color-sky) / <alpha-value>)',
@@ -38,6 +40,11 @@ const config: Config = {
           sunken: 'hsl(var(--color-sunken) / <alpha-value>)',
           ink: 'hsl(var(--color-ink) / <alpha-value>)',
         },
+        // Semantic "ink chip" pairs — theme-aware via CSS variables (see global.css).
+        inverse: 'hsl(var(--inverse) / <alpha-value>)',
+        'inverse-foreground': 'hsl(var(--inverse-foreground) / <alpha-value>)',
+        strong: 'hsl(var(--strong) / <alpha-value>)',
+        'strong-foreground': 'hsl(var(--strong-foreground) / <alpha-value>)',
         // shadcn-style aliases so generated components compile cleanly.
         border: 'hsl(var(--border) / <alpha-value>)',
         input: 'hsl(var(--input) / <alpha-value>)',
