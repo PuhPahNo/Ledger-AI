@@ -1,9 +1,21 @@
+import { timingSafeEqual } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { getEnv } from '../config/env.js';
 import { db } from '../db/client.js';
 import { connections } from '../db/schema.js';
 import { enqueue } from '../jobs/queue.js';
+import { unauthorized } from '../lib/errors.js';
+
+export function isValidWebhookSecret(expected: string, provided: string | undefined): boolean {
+  if (!expected) return true;
+  if (!provided) return false;
+
+  const expectedBuffer = Buffer.from(expected);
+  const providedBuffer = Buffer.from(provided);
+  return expectedBuffer.length === providedBuffer.length && timingSafeEqual(expectedBuffer, providedBuffer);
+}
 
 export async function webhookRoutes(app: FastifyInstance): Promise<void> {
   app.post('/webhooks/plaid', async (request) => {
@@ -21,6 +33,12 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/webhooks/google/pubsub', async (request) => {
+    const env = getEnv();
+    const query = z.object({ secret: z.string().optional() }).parse(request.query ?? {});
+    if (!isValidWebhookSecret(env.GOOGLE_PUBSUB_WEBHOOK_SECRET, query.secret)) {
+      unauthorized('Invalid Google Pub/Sub webhook secret');
+    }
+
     const body = z.object({
       message: z.object({ data: z.string(), messageId: z.string().optional() }),
     }).parse(request.body);

@@ -11,6 +11,13 @@
 3. Run `npm run db:seed` from the web service shell.
 4. Reset the admin password with `npm run admin:reset -- --username admin --password <strong-password>`.
 
+## Gmail Pub/Sub
+1. Create a Google Pub/Sub topic in the same Google Cloud project as the Gmail OAuth client.
+2. Grant `gmail-api-push@system.gserviceaccount.com` the Pub/Sub Publisher role on the topic.
+3. Set `GOOGLE_PUBSUB_TOPIC` to the full topic name, for example `projects/<project-id>/topics/ledger-ai-gmail`.
+4. Set `GOOGLE_PUBSUB_WEBHOOK_SECRET` to a generated secret.
+5. Create a push subscription with endpoint `https://<app-host>/api/webhooks/google/pubsub?secret=<GOOGLE_PUBSUB_WEBHOOK_SECRET>`.
+
 ## Smoke Test
 1. Visit `/healthz`.
 2. Log in as the admin user.

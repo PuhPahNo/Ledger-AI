@@ -29,6 +29,7 @@ const envSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
   GOOGLE_REDIRECT_URI: z.string().optional().default(''),
   GOOGLE_PUBSUB_TOPIC: z.string().optional().default(''),
+  GOOGLE_PUBSUB_WEBHOOK_SECRET: z.string().optional().default(''),
   LEDGER_ADMIN_USERNAME: z.string().default('admin'),
   LEDGER_ADMIN_PASSWORD: z.string().default('change-me-before-production'),
 });
