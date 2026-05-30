@@ -76,6 +76,26 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
     return { ...toApiReceipt(receipt), downloadUrl };
   });
 
+  app.get('/receipts/:id/file', async (request, reply) => {
+    await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const query = z.object({
+      download: z.enum(['true', 'false']).optional().transform((value) => value === 'true'),
+    }).parse(request.query);
+    const receipt = await db.query.receipts.findFirst({ where: eq(receipts.id, params.id) });
+    if (!receipt) notFound('Receipt not found');
+    if (!receipt.fileKey) notFound('Receipt file not found');
+
+    const fileName = receipt.fileName ?? 'receipt';
+    const mimeType = effectiveReceiptMimeType(receipt.mimeType, fileName);
+    reply
+      .header('Content-Type', textMimeTypeWithCharset(mimeType))
+      .header('Content-Disposition', `${query.download ? 'attachment' : 'inline'}; filename="${headerSafeFileName(fileName)}"`)
+      .header('X-Content-Type-Options', 'nosniff');
+
+    return reply.send(await storage().getStream(receipt.fileKey));
+  });
+
   app.post('/receipts', async (request) => {
     const user = await requireUser(request);
     const file = await request.file();
@@ -143,6 +163,26 @@ function sanitizeFileName(fileName: string): string {
   const base = parsed.name.replace(/[^a-z0-9._-]+/gi, '-').slice(0, 80) || 'receipt';
   const ext = parsed.ext.replace(/[^a-z0-9.]+/gi, '').slice(0, 12);
   return `${base}${ext}`;
+}
+
+function effectiveReceiptMimeType(mimeType: string | null, fileName: string): string {
+  if (mimeType && mimeType !== 'application/octet-stream') return mimeType;
+  if (/\.pdf$/i.test(fileName)) return 'application/pdf';
+  if (/\.png$/i.test(fileName)) return 'image/png';
+  if (/\.jpe?g$/i.test(fileName)) return 'image/jpeg';
+  if (/\.gif$/i.test(fileName)) return 'image/gif';
+  if (/\.webp$/i.test(fileName)) return 'image/webp';
+  if (/\.html?$/i.test(fileName)) return 'text/html';
+  if (/\.(txt|md|markdown|csv|tsv|json|log)$/i.test(fileName)) return 'text/plain';
+  return mimeType || 'application/octet-stream';
+}
+
+function textMimeTypeWithCharset(mimeType: string): string {
+  return mimeType.startsWith('text/') ? `${mimeType}; charset=utf-8` : mimeType;
+}
+
+function headerSafeFileName(fileName: string): string {
+  return fileName.replace(/["\r\n\\]+/g, '-').slice(0, 120) || 'receipt';
 }
 
 function cryptoRandom(): string {

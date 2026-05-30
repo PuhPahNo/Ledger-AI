@@ -1,5 +1,5 @@
 import type { BusinessId, ReceiptInboxItem, ReceiptSource, ReceiptStatus, Transaction } from '@/types/domain';
-import { http, useMockApi } from './client';
+import { API_BASE, ApiError, http, useMockApi } from './client';
 import { mapTransaction, type ApiTransaction } from './mapper';
 
 export interface UploadReceiptResult {
@@ -101,6 +101,21 @@ export function getReceipt(receiptId: string): Promise<ReceiptInboxItem> {
     return listReceipts().then((rows) => rows.find((row) => row.id === receiptId) ?? rows[0]);
   }
   return http<ReceiptInboxItem>(`/receipts/${receiptId}`);
+}
+
+export function receiptFileUrl(receiptId: string, options: { download?: boolean } = {}): string {
+  const query = options.download ? '?download=true' : '';
+  return `${API_BASE.replace(/\/$/, '')}/receipts/${encodeURIComponent(receiptId)}/file${query}`;
+}
+
+export async function fetchReceiptFileText(receiptId: string): Promise<string> {
+  if (useMockApi) return 'Mock receipt preview\n\nTotal: $129.00\nDate: 2026-05-22';
+  const res = await fetch(receiptFileUrl(receiptId), { credentials: 'include' });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new ApiError(res.status, body || `GET /receipts/${receiptId}/file -> ${res.status}`, body);
+  }
+  return res.text();
 }
 
 export function dismissReceipt(receiptId: string): Promise<{ ok: true }> {

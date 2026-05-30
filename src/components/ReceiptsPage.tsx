@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Check, ExternalLink, FileText, Link2, Search, XCircle } from 'lucide-react';
+import { Check, Eye, FileText, Link2, Search, XCircle } from 'lucide-react';
 import {
   attachReceipt,
   dismissReceipt,
-  getReceipt,
   listBusinesses,
   listReceipts,
   listTransactions,
@@ -23,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { ReceiptPreview } from './receipts/ReceiptPreview';
 
 interface Props {
   user?: CurrentUser;
@@ -165,22 +165,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
     }
   };
 
-  const openFile = async (receipt: ReceiptInboxItem) => {
-    try {
-      const detail = await getReceipt(receipt.id);
-      if (!detail.downloadUrl) {
-        toast({ variant: 'default', title: 'No file available', description: receiptLabel(receipt) });
-        return;
-      }
-      window.open(detail.downloadUrl, '_blank', 'noopener,noreferrer');
-    } catch (openError) {
-      toast({
-        variant: 'destructive',
-        title: 'Could not open receipt',
-        description: openError instanceof Error ? openError.message : 'Try again.',
-      });
-    }
-  };
+  const previewFile = (receipt: ReceiptInboxItem) => setSelectedReceiptId(receipt.id);
 
   return (
     <AppShell
@@ -253,7 +238,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                     busy={busyReceiptId === receipt.id}
                     onSelect={() => setSelectedReceiptId(receipt.id)}
                     onDismiss={() => handleDismiss(receipt)}
-                    onOpenFile={() => openFile(receipt)}
+                    onOpenFile={() => previewFile(receipt)}
                   />
                 ))}
               </div>
@@ -280,10 +265,6 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                         {selectedReceipt.confidence != null && <span>{Math.round(selectedReceipt.confidence * 100)}% OCR</span>}
                       </div>
                     </div>
-                    <Button variant="outline" size="sm" onClick={() => openFile(selectedReceipt)}>
-                      <ExternalLink className="h-4 w-4" />
-                      File
-                    </Button>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -295,60 +276,66 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                     </Button>
                   </div>
 
-                  <div className="grid gap-3 border-b border-ink2/10 p-3 md:grid-cols-[1fr_180px_180px]">
-                    <Field label="Candidate search">
-                      <Input value={candidateQuery} onChange={(event) => setCandidateQuery(event.target.value)} placeholder="Merchant, category, account" />
-                    </Field>
-                    <Field label="From">
-                      <Input type="date" value={candidateFrom} onChange={(event) => setCandidateFrom(event.target.value)} />
-                    </Field>
-                    <Field label="To">
-                      <Input type="date" value={candidateTo} onChange={(event) => setCandidateTo(event.target.value)} />
-                    </Field>
-                  </div>
+                  <div className="grid min-h-[620px] lg:grid-cols-[minmax(360px,0.9fr)_minmax(460px,1.1fr)]">
+                    <ReceiptPreview receipt={selectedReceipt} className="border-b border-ink2/10 lg:border-b-0 lg:border-r" />
 
-                  <Table className="table-fixed">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-28">Date</TableHead>
-                        <TableHead>Merchant</TableHead>
-                        <TableHead className="w-36">Category</TableHead>
-                        <TableHead className="w-32 text-right">Amount</TableHead>
-                        <TableHead className="w-28">Match</TableHead>
-                        <TableHead className="w-24 text-right">Pair</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {scoredCandidates.map(({ transaction, score }) => (
-                        <TableRow key={transaction.id}>
-                          <TableCell className="whitespace-nowrap text-dim">{transaction.date}</TableCell>
-                          <TableCell>
-                            <div className="truncate font-bold" title={transaction.merchant}>{transaction.merchant}</div>
-                            <div className="truncate text-xs text-dim">{transaction.src}</div>
-                          </TableCell>
-                          <TableCell className="truncate">{transaction.cat}</TableCell>
-                          <TableCell className="text-right font-display font-bold tabular-nums">{fmt$(transaction.amount)}</TableCell>
-                          <TableCell><MatchBadge score={score} /></TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              size="icon-sm"
-                              disabled={busyReceiptId === selectedReceipt.id}
-                              onClick={() => handlePair(selectedReceipt, transaction)}
-                              title="Pair receipt"
-                            >
-                              <Check className="h-4 w-4" />
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                  {loadingCandidates && <div className="p-6 text-center text-sm text-dim">Loading candidates...</div>}
-                  {!loadingCandidates && scoredCandidates.length === 0 && (
-                    <div className="p-4">
-                      <EmptyState title="No candidate transactions" icon={<Link2 className="h-5 w-5" />} />
+                    <div className="min-w-0">
+                      <div className="grid gap-3 border-b border-ink2/10 p-3 md:grid-cols-[1fr_150px_150px]">
+                        <Field label="Candidate search">
+                          <Input value={candidateQuery} onChange={(event) => setCandidateQuery(event.target.value)} placeholder="Merchant, category, account" />
+                        </Field>
+                        <Field label="From">
+                          <Input type="date" value={candidateFrom} onChange={(event) => setCandidateFrom(event.target.value)} />
+                        </Field>
+                        <Field label="To">
+                          <Input type="date" value={candidateTo} onChange={(event) => setCandidateTo(event.target.value)} />
+                        </Field>
+                      </div>
+
+                      <Table className="table-fixed">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-28">Date</TableHead>
+                            <TableHead>Merchant</TableHead>
+                            <TableHead className="w-32">Category</TableHead>
+                            <TableHead className="w-28 text-right">Amount</TableHead>
+                            <TableHead className="w-24">Match</TableHead>
+                            <TableHead className="w-20 text-right">Pair</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {scoredCandidates.map(({ transaction, score }) => (
+                            <TableRow key={transaction.id}>
+                              <TableCell className="whitespace-nowrap text-dim">{transaction.date}</TableCell>
+                              <TableCell>
+                                <div className="truncate font-bold" title={transaction.merchant}>{transaction.merchant}</div>
+                                <div className="truncate text-xs text-dim">{transaction.src}</div>
+                              </TableCell>
+                              <TableCell className="truncate">{transaction.cat}</TableCell>
+                              <TableCell className="text-right font-display font-bold tabular-nums">{fmt$(transaction.amount)}</TableCell>
+                              <TableCell><MatchBadge score={score} /></TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  size="icon-sm"
+                                  disabled={busyReceiptId === selectedReceipt.id}
+                                  onClick={() => handlePair(selectedReceipt, transaction)}
+                                  title="Pair receipt"
+                                >
+                                  <Check className="h-4 w-4" />
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                      {loadingCandidates && <div className="p-6 text-center text-sm text-dim">Loading candidates...</div>}
+                      {!loadingCandidates && scoredCandidates.length === 0 && (
+                        <div className="p-4">
+                          <EmptyState title="No candidate transactions" icon={<Link2 className="h-5 w-5" />} />
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </>
               ) : (
                 <div className="p-4">
@@ -409,8 +396,8 @@ function ReceiptRow({
       </div>
       <div className="flex gap-2">
         <Button type="button" variant="outline" size="sm" onClick={(event) => { event.stopPropagation(); onOpenFile(); }}>
-          <ExternalLink className="h-3.5 w-3.5" />
-          File
+          <Eye className="h-3.5 w-3.5" />
+          Preview
         </Button>
         <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={(event) => { event.stopPropagation(); onDismiss(); }}>
           <XCircle className="h-3.5 w-3.5" />
