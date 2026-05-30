@@ -216,7 +216,7 @@ export function AssistantPage({ user, onViewChange, onLogout }: Props) {
                 <Textarea
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
-                  placeholder="Ask about cash flow, top purchases, balances, missing receipts, or categorization cleanup..."
+                  placeholder="Ask about cash flow, top purchases, balances, pairing receipts, or categorization cleanup..."
                   className="max-h-36 min-h-[52px] flex-1 resize-none border-transparent bg-transparent shadow-none focus-visible:border-transparent focus-visible:ring-0"
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' && !event.shiftKey) {

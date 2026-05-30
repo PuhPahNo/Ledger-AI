@@ -36,6 +36,18 @@ describe('assistant approval tokens', () => {
     expect(verifyAssistantToken(token, userId, secret, new Date('2026-05-25T00:00:30Z'))?.payload.kind).toBe('transaction_update');
   });
 
+  it('verifies a receipt pairing token with pending receipt corrections', () => {
+    const token = signAssistantToken(userId, {
+      kind: 'receipt_pairing',
+      receiptId: '6f31088e-1970-46be-b86d-c89d560f77fb',
+      transactionId: '04d3d54d-681e-4b0b-a54f-6f7d2f4e5ed4',
+      updates: { totalCents: 250000 },
+    }, 60_000, secret, new Date('2026-05-25T00:00:00Z'));
+    const payload = verifyAssistantToken(token, userId, secret, new Date('2026-05-25T00:00:30Z'))?.payload;
+    expect(payload?.kind).toBe('receipt_pairing');
+    expect(payload?.kind === 'receipt_pairing' ? payload.updates?.totalCents : null).toBe(250000);
+  });
+
   it('rejects expired, wrong-user, and tampered tokens', () => {
     const token = signAssistantToken(userId, {
       kind: 'data_expansion',

@@ -4,18 +4,20 @@ import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, isNull, lte, 
 import { z } from 'zod';
 import type { AuthedUser } from '../auth/session.js';
 import { db } from '../db/client.js';
-import { accounts, businesses, categories, categoryRules, connections, transactions } from '../db/schema.js';
+import { accounts, businesses, categories, categoryRules, connections, receipts, transactions } from '../db/schema.js';
 import { audit } from './audit.js';
 import {
   ASSISTANT_MUTATION_LIMIT,
   DEFAULT_TRANSACTION_DETAIL_LIMIT,
   EXPANDED_TRANSACTION_DETAIL_LIMIT,
+  type AssistantReceiptUpdatePayload,
   needsExpandedDataApproval,
   requestedTransactionLimit,
   signAssistantToken,
   verifyAssistantToken,
 } from './assistantSecurity.js';
 import type { AssistantApprovalRequest, AssistantArtifact } from './assistantSchemas.js';
+import { attachReceipt } from './matching.js';
 
 type Direction = 'all' | 'inflow' | 'outflow' | 'operating-outflow' | 'transfer';
 type SortKey = 'date' | 'amount' | 'largest' | 'merchant' | 'business' | 'category' | 'account';
@@ -102,6 +104,37 @@ const categoryRuleSchema = z.object({
   priority: z.number().int().min(1).max(999).default(10),
 });
 
+const receiptStatusFilterSchema = z.enum(['matched', 'pending', 'missing', 'n/a', 'all']);
+
+const queryReceiptsSchema = z.object({
+  business: emptyToNull.describe('Business key/id/name, or null for all businesses.'),
+  status: receiptStatusFilterSchema.nullable().default('pending'),
+  source: z.enum(['upload', 'gmail', 'all']).nullable().default('all'),
+  unmatched: z.boolean().default(true),
+  q: emptyToNull.describe('Merchant, file name, or business search text.'),
+  from: emptyToNull.describe('Receipt date YYYY-MM-DD inclusive start date.'),
+  to: emptyToNull.describe('Receipt date YYYY-MM-DD inclusive end date.'),
+  limit: z.number().int().min(1).max(50).default(25),
+});
+
+const receiptEditFieldsSchema = z.object({
+  setMerchant: z.boolean().default(false),
+  merchant: z.string().trim().min(1).max(160).nullable().optional(),
+  setTotalCents: z.boolean().default(false),
+  totalCents: z.number().int().min(0).max(100_000_000).nullable().optional(),
+  setReceiptDate: z.boolean().default(false),
+  receiptDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+});
+
+const receiptUpdateSchema = receiptEditFieldsSchema.extend({
+  receiptId: z.string().uuid(),
+});
+
+const receiptPairingSchema = receiptEditFieldsSchema.extend({
+  receiptId: z.string().uuid(),
+  transactionId: z.string().uuid(),
+});
+
 export const assistantToolDefinitions = [
   functionTool('list_businesses', 'List active businesses with display colors and ids. Use before filtering when a business name is ambiguous.', z.object({})),
   functionTool('list_accounts', 'List safe Plaid account balance and sync metadata. Does not include full account numbers or tokens.', z.object({
@@ -113,9 +146,12 @@ export const assistantToolDefinitions = [
   functionTool('get_cash_flow', 'Return cash-basis inflow/outflow/net periods with YoY comparison. Transfers are excluded by default.', cashFlowSchema),
   functionTool('get_owner_insights', 'Return top purchases, missing receipts, uncategorized spend, transfers, income by business, and close summary.', ownerInsightsSchema),
   functionTool('get_account_balances', 'Return current/available balances grouped into bank cash and credit cards. Historical balance trends are unavailable.', z.object({ business: emptyToNull })),
+  functionTool('query_receipts', 'Return safe receipt inbox rows for matching. Does not include raw receipt files or signed download URLs.', queryReceiptsSchema),
   functionTool('propose_transaction_update', 'Prepare a single transaction edit. Does not mutate until user confirms the approval card.', transactionUpdateSchema),
   functionTool('propose_bulk_transaction_update', `Prepare a bulk transaction edit for up to ${ASSISTANT_MUTATION_LIMIT} exact ids. Does not mutate until user confirms.`, bulkTransactionUpdateSchema),
   functionTool('propose_category_rule', 'Prepare a merchant/category rule. Does not mutate until user confirms the approval card.', categoryRuleSchema),
+  functionTool('propose_receipt_update', 'Prepare a receipt metadata correction for merchant, amount, or date. Set the corresponding set* flag true only for fields the user wants changed. Does not mutate until user confirms.', receiptUpdateSchema),
+  functionTool('propose_receipt_pairing', 'Prepare a receipt-to-transaction pairing. Optional receipt corrections are saved before pairing. Set set* flags true only for receipt fields the user wants changed. Does not mutate until user confirms.', receiptPairingSchema),
 ];
 
 export async function callAssistantTool(name: string, rawArgs: unknown, context: AssistantToolContext): Promise<AssistantToolResult> {
@@ -137,12 +173,18 @@ export async function callAssistantTool(name: string, rawArgs: unknown, context:
         return getOwnerInsights(ownerInsightsSchema.parse(rawArgs));
       case 'get_account_balances':
         return ok('Retrieved account balances.', await getAccountBalances(z.object({ business: emptyToNull }).parse(rawArgs).business));
+      case 'query_receipts':
+        return queryReceipts(queryReceiptsSchema.parse(rawArgs));
       case 'propose_transaction_update':
         return proposeTransactionUpdate(transactionUpdateSchema.parse(rawArgs), context.user.id);
       case 'propose_bulk_transaction_update':
         return proposeBulkTransactionUpdate(bulkTransactionUpdateSchema.parse(rawArgs), context.user.id);
       case 'propose_category_rule':
         return proposeCategoryRule(categoryRuleSchema.parse(rawArgs), context.user.id);
+      case 'propose_receipt_update':
+        return proposeReceiptUpdate(receiptUpdateSchema.parse(rawArgs), context.user.id);
+      case 'propose_receipt_pairing':
+        return proposeReceiptPairing(receiptPairingSchema.parse(rawArgs), context.user.id);
       default:
         return { ok: false, message: `Unknown assistant tool: ${name}` };
     }
@@ -198,6 +240,24 @@ export async function confirmAssistantAction(
     await audit(context.request!, context.user, 'assistant_create_category_rule', 'category_rule', rule.id, redactPayload(payload));
     return { ok: true, message: 'Category rule created.' };
   }
+  if (payload.kind === 'receipt_update') {
+    await applyReceiptUpdates(payload.receiptId, payload.updates);
+    await audit(context.request!, context.user, 'assistant_update_receipt', 'receipt', payload.receiptId, redactPayload(payload));
+    return {
+      ok: true,
+      message: 'Receipt details updated.',
+      artifact: await receiptArtifact([payload.receiptId], 'Updated receipt'),
+    };
+  }
+  if (payload.kind === 'receipt_pairing') {
+    await confirmReceiptPairing(payload.receiptId, payload.transactionId, payload.updates);
+    await audit(context.request!, context.user, 'assistant_pair_receipt', 'receipt', payload.receiptId, redactPayload(payload));
+    return {
+      ok: true,
+      message: 'Receipt paired to transaction.',
+      artifact: await transactionArtifact([payload.transactionId], 'Paired transaction'),
+    };
+  }
   return { ok: false, message: 'Unsupported approval payload.' };
 }
 
@@ -211,9 +271,12 @@ export function toolEventDetail(name: string, status: 'called' | 'succeeded' | '
     get_cash_flow: 'cash-flow report',
     get_owner_insights: 'owner insights',
     get_account_balances: 'balance report',
+    query_receipts: 'receipt inbox search',
     propose_transaction_update: 'transaction edit proposal',
     propose_bulk_transaction_update: 'bulk edit proposal',
     propose_category_rule: 'category rule proposal',
+    propose_receipt_update: 'receipt edit proposal',
+    propose_receipt_pairing: 'receipt pairing proposal',
   };
   return `${verb} ${labels[name] ?? name}.`;
 }
@@ -234,6 +297,15 @@ function zodToJsonSchema(name: string, _schema: z.ZodTypeAny) {
   const list = { type: 'array', items: { type: 'string' } };
   const bool = { type: 'boolean' as const };
   const int = { type: 'integer' as const };
+  const nullableInt = { type: ['integer', 'null'] as const };
+  const receiptEditProperties = {
+    setMerchant: bool,
+    merchant: all,
+    setTotalCents: bool,
+    totalCents: nullableInt,
+    setReceiptDate: bool,
+    receiptDate: all,
+  };
   const commonFilters = {
     business: all,
     from: all,
@@ -264,6 +336,16 @@ function zodToJsonSchema(name: string, _schema: z.ZodTypeAny) {
     },
     get_owner_insights: { business: all, accountIds: list, from: all, to: all },
     get_account_balances: { business: all },
+    query_receipts: {
+      business: all,
+      status: { type: ['string', 'null'], enum: ['matched', 'pending', 'missing', 'n/a', 'all', null] },
+      source: { type: ['string', 'null'], enum: ['upload', 'gmail', 'all', null] },
+      unmatched: bool,
+      q: all,
+      from: all,
+      to: all,
+      limit: { ...int, minimum: 1, maximum: 50 },
+    },
     propose_transaction_update: {
       transactionId: { type: 'string' },
       categoryId: all,
@@ -287,6 +369,15 @@ function zodToJsonSchema(name: string, _schema: z.ZodTypeAny) {
       matchKind: { type: 'string', enum: ['merchant_exact', 'merchant_contains', 'plaid_category', 'amount_range'] },
       pattern: { type: 'string' },
       priority: { ...int, minimum: 1, maximum: 999 },
+    },
+    propose_receipt_update: {
+      receiptId: { type: 'string' },
+      ...receiptEditProperties,
+    },
+    propose_receipt_pairing: {
+      receiptId: { type: 'string' },
+      transactionId: { type: 'string' },
+      ...receiptEditProperties,
     },
   };
   const properties = schemas[name] ?? {};
@@ -547,6 +638,43 @@ async function getAccountBalances(business: string | null | undefined) {
   };
 }
 
+async function queryReceipts(args: z.infer<typeof queryReceiptsSchema>): Promise<AssistantToolResult> {
+  const selectedBusiness = await resolveBusiness(args.business);
+  const rows = await db
+    .select({
+      ...getTableColumns(receipts),
+      businessKey: businesses.key,
+      businessName: businesses.name,
+    })
+    .from(receipts)
+    .leftJoin(businesses, eq(receipts.businessId, businesses.id))
+    .where(and(
+      selectedBusiness ? eq(receipts.businessId, selectedBusiness.id) : sql`true`,
+      args.status && args.status !== 'all' ? eq(receipts.status, args.status) : sql`true`,
+      args.source && args.source !== 'all' ? eq(receipts.source, args.source) : sql`true`,
+      args.unmatched ? isNull(receipts.transactionId) : sql`true`,
+      args.from ? gte(receipts.receiptDate, args.from) : sql`true`,
+      args.to ? lte(receipts.receiptDate, args.to) : sql`true`,
+      args.q ? or(
+        ilike(receipts.merchant, `%${args.q}%`),
+        ilike(receipts.fileName, `%${args.q}%`),
+        ilike(businesses.name, `%${args.q}%`),
+      )! : sql`true`,
+    ))
+    .orderBy(desc(receipts.createdAt))
+    .limit(args.limit);
+  const safeRows = rows.map(safeReceiptRow);
+  return {
+    ok: true,
+    message: `Returned ${safeRows.length} safe receipt rows.`,
+    data: {
+      rows: safeRows,
+      note: 'Raw receipt files and signed download URLs are not shared with OpenAI.',
+    },
+    artifacts: [receiptsArtifact(safeRows, 'Receipt candidates')],
+  };
+}
+
 async function proposeTransactionUpdate(args: z.infer<typeof transactionUpdateSchema>, userId: string): Promise<AssistantToolResult> {
   const payload = await buildTransactionUpdatePayload(args);
   const approval = createApproval(userId, {
@@ -580,6 +708,42 @@ async function proposeCategoryRule(args: z.infer<typeof categoryRuleSchema>, use
     priority: args.priority,
   }, 'Confirm category rule', `Create ${args.matchKind} rule "${args.pattern}" for ${category.name}${business ? ` in ${business.name}` : ''}.`, 'Create rule');
   return { ok: true, message: 'Prepared category rule for confirmation.', approvalRequests: [approval] };
+}
+
+async function proposeReceiptUpdate(args: z.infer<typeof receiptUpdateSchema>, userId: string): Promise<AssistantToolResult> {
+  const receipt = await receiptById(args.receiptId);
+  if (!receipt) throw new Error('Receipt not found.');
+  const updates = receiptUpdatePayload(args);
+  if (Object.keys(updates).length === 0) throw new Error('No receipt changes were provided.');
+  const approval = createApproval(userId, {
+    kind: 'receipt_update',
+    receiptId: args.receiptId,
+    updates,
+  }, 'Confirm receipt update', describeReceiptUpdate(receipt, updates), 'Save receipt');
+  return { ok: true, message: 'Prepared receipt update for confirmation.', approvalRequests: [approval], data: { pendingMutation: updates } };
+}
+
+async function proposeReceiptPairing(args: z.infer<typeof receiptPairingSchema>, userId: string): Promise<AssistantToolResult> {
+  const [receipt, transaction] = await Promise.all([
+    receiptById(args.receiptId),
+    db.query.transactions.findFirst({ where: eq(transactions.id, args.transactionId) }),
+  ]);
+  if (!receipt) throw new Error('Receipt not found.');
+  if (!transaction) throw new Error('Transaction not found.');
+  assertPairingAllowed(receipt, transaction);
+  const updates = receiptUpdatePayload(args);
+  const approval = createApproval(userId, {
+    kind: 'receipt_pairing',
+    receiptId: args.receiptId,
+    transactionId: args.transactionId,
+    updates: Object.keys(updates).length ? updates : undefined,
+  }, 'Confirm receipt pairing', describeReceiptPairing(receipt, transaction, updates), 'Pair receipt');
+  return {
+    ok: true,
+    message: 'Prepared receipt pairing for confirmation.',
+    approvalRequests: [approval],
+    data: { pendingMutation: { receiptId: args.receiptId, transactionId: args.transactionId, updates } },
+  };
 }
 
 async function buildTransactionUpdatePayload(args: {
@@ -623,6 +787,66 @@ function transactionUpdatePayload(payload: {
   if ('businessId' in payload) update.businessId = payload.businessId ?? null;
   if ('note' in payload) update.note = payload.note ?? null;
   return update;
+}
+
+function receiptUpdatePayload(args: {
+  setMerchant?: boolean;
+  merchant?: string | null;
+  setTotalCents?: boolean;
+  totalCents?: number | null;
+  setReceiptDate?: boolean;
+  receiptDate?: string | null;
+}): AssistantReceiptUpdatePayload {
+  const updates: AssistantReceiptUpdatePayload = {};
+  if (args.setMerchant) {
+    if (!args.merchant) throw new Error('Receipt merchant must be provided when setMerchant is true.');
+    updates.merchant = args.merchant;
+  }
+  if (args.setTotalCents) {
+    if (args.totalCents == null) throw new Error('Receipt total must be provided when setTotalCents is true.');
+    updates.totalCents = args.totalCents;
+  }
+  if (args.setReceiptDate) {
+    if (!args.receiptDate) throw new Error('Receipt date must be provided when setReceiptDate is true.');
+    updates.receiptDate = args.receiptDate;
+  }
+  return updates;
+}
+
+async function applyReceiptUpdates(receiptId: string, updates: AssistantReceiptUpdatePayload | undefined): Promise<void> {
+  if (!updates || Object.keys(updates).length === 0) return;
+  const [updated] = await db
+    .update(receipts)
+    .set({ ...updates, updatedAt: new Date() })
+    .where(eq(receipts.id, receiptId))
+    .returning({ id: receipts.id });
+  if (!updated) throw new Error('Receipt not found.');
+}
+
+async function confirmReceiptPairing(
+  receiptId: string,
+  transactionId: string,
+  updates: AssistantReceiptUpdatePayload | undefined,
+): Promise<void> {
+  const [receipt, transaction] = await Promise.all([
+    receiptById(receiptId),
+    db.query.transactions.findFirst({ where: eq(transactions.id, transactionId) }),
+  ]);
+  if (!receipt) throw new Error('Receipt not found.');
+  if (!transaction) throw new Error('Transaction not found.');
+  assertPairingAllowed(receipt, transaction);
+  await applyReceiptUpdates(receiptId, updates);
+  const paired = await attachReceipt(transactionId, receiptId);
+  if (!paired) throw new Error('Transaction not found.');
+}
+
+function assertPairingAllowed(
+  receipt: typeof receipts.$inferSelect,
+  transaction: typeof transactions.$inferSelect,
+): void {
+  if (receipt.transactionId && receipt.transactionId !== transaction.id) throw new Error('Receipt is already matched to another transaction.');
+  if (transaction.receiptId && transaction.receiptId !== receipt.id) throw new Error('Transaction already has another receipt attached.');
+  if (receipt.businessId && receipt.businessId !== transaction.businessId) throw new Error('Receipt and transaction belong to different businesses.');
 }
 
 function createApproval(
@@ -871,6 +1095,67 @@ function transactionsArtifact(rows: ReturnType<typeof safeTransactionRow>[], tit
   };
 }
 
+async function receiptById(id: string) {
+  return db.query.receipts.findFirst({ where: eq(receipts.id, id) });
+}
+
+function safeReceiptRow(row: typeof receipts.$inferSelect & { businessKey?: string | null; businessName?: string | null }) {
+  return {
+    id: row.id,
+    businessId: row.businessId,
+    businessKey: row.businessKey ?? null,
+    businessName: row.businessName ?? row.businessKey ?? row.businessId,
+    source: row.source,
+    status: row.status,
+    merchant: row.merchant,
+    totalCents: row.totalCents,
+    receiptDate: row.receiptDate,
+    fileName: row.fileName,
+    mimeType: row.mimeType,
+    transactionId: row.transactionId,
+    confidence: row.confidence == null ? null : Number(row.confidence),
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+function receiptsArtifact(rows: ReturnType<typeof safeReceiptRow>[], title: string): AssistantArtifact {
+  return {
+    type: 'table',
+    id: crypto.randomUUID(),
+    title,
+    columns: [
+      { key: 'date', label: 'Date', align: 'left' },
+      { key: 'merchant', label: 'Merchant', align: 'left' },
+      { key: 'business', label: 'Business', align: 'left' },
+      { key: 'amount', label: 'Amount', align: 'right' },
+      { key: 'source', label: 'Source', align: 'left' },
+      { key: 'status', label: 'Status', align: 'left' },
+    ],
+    rows: rows.slice(0, DEFAULT_TRANSACTION_DETAIL_LIMIT).map((row) => ({
+      cells: [
+        row.receiptDate ?? 'Unknown',
+        row.merchant ?? row.fileName ?? 'Receipt',
+        row.businessName ?? 'Unassigned',
+        row.totalCents == null ? 'Unknown' : formatCentsDetailed(row.totalCents),
+        row.source,
+        row.status,
+      ],
+    })),
+  };
+}
+
+async function receiptArtifact(ids: string[], title: string): Promise<AssistantArtifact> {
+  const rows = await db.select({
+    ...getTableColumns(receipts),
+    businessKey: businesses.key,
+    businessName: businesses.name,
+  }).from(receipts)
+    .leftJoin(businesses, eq(receipts.businessId, businesses.id))
+    .where(inArray(receipts.id, ids))
+    .limit(DEFAULT_TRANSACTION_DETAIL_LIMIT);
+  return receiptsArtifact(rows.map(safeReceiptRow), title);
+}
+
 async function transactionArtifact(ids: string[], title: string): Promise<AssistantArtifact> {
   const rows = await db.select({
     ...getTableColumns(transactions),
@@ -914,12 +1199,47 @@ function formatCents(cents: number): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(cents / 100);
 }
 
+function formatCentsDetailed(cents: number): string {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(cents / 100);
+}
+
 function describeTransactionUpdate(payload: { categoryId?: string | null; businessId?: string | null; note?: string | null }, count: number): string {
   const parts = [];
   if ('categoryId' in payload) parts.push(payload.categoryId ? 'set category' : 'clear category');
   if ('businessId' in payload) parts.push(payload.businessId ? 'set business' : 'clear business');
   if ('note' in payload) parts.push(payload.note ? 'set note' : 'clear note');
   return `${parts.join(', ')} on ${count} transaction${count === 1 ? '' : 's'}.`;
+}
+
+function describeReceiptUpdate(
+  receipt: typeof receipts.$inferSelect,
+  updates: AssistantReceiptUpdatePayload,
+): string {
+  return `Update ${receiptLabel(receipt)}: ${describeReceiptUpdates(updates)}.`;
+}
+
+function describeReceiptPairing(
+  receipt: typeof receipts.$inferSelect,
+  transaction: typeof transactions.$inferSelect,
+  updates: AssistantReceiptUpdatePayload,
+): string {
+  const receiptAmount = updates.totalCents ?? receipt.totalCents;
+  const receiptDate = updates.receiptDate ?? receipt.receiptDate;
+  const receiptMerchant = updates.merchant ?? receiptLabel(receipt);
+  const corrections = Object.keys(updates).length ? ` Apply receipt corrections first: ${describeReceiptUpdates(updates)}.` : '';
+  return `Pair ${receiptMerchant}${receiptDate ? ` from ${receiptDate}` : ''}${receiptAmount == null ? '' : ` for ${formatCentsDetailed(receiptAmount)}`} to ${transaction.merchant} ${formatCentsDetailed(transaction.amountCents)} on ${transaction.date}.${corrections}`;
+}
+
+function describeReceiptUpdates(updates: AssistantReceiptUpdatePayload): string {
+  const parts = [];
+  if ('merchant' in updates) parts.push(`set merchant to "${updates.merchant}"`);
+  if ('totalCents' in updates && updates.totalCents != null) parts.push(`set total to ${formatCentsDetailed(updates.totalCents)}`);
+  if ('receiptDate' in updates) parts.push(`set date to ${updates.receiptDate}`);
+  return parts.join(', ') || 'no changes';
+}
+
+function receiptLabel(receipt: typeof receipts.$inferSelect): string {
+  return receipt.merchant ?? receipt.fileName ?? 'receipt';
 }
 
 function redactPayload(payload: Record<string, unknown>) {

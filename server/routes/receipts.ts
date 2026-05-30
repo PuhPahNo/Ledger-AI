@@ -57,23 +57,32 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
   app.get('/receipts/:id', async (request) => {
     await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
-    const [receipt] = await db
-      .select({
-        ...getTableColumns(receipts),
-        businessKey: businesses.key,
-        businessName: businesses.name,
-        uploadedByUserName: users.displayName,
-        uploadedByUploaderName: receiptUploaders.displayName,
-      })
-      .from(receipts)
-      .leftJoin(businesses, eq(receipts.businessId, businesses.id))
-      .leftJoin(users, eq(receipts.uploadedByUserId, users.id))
-      .leftJoin(receiptUploaders, eq(receipts.uploadedByUploaderId, receiptUploaders.id))
-      .where(eq(receipts.id, params.id))
-      .limit(1);
+    const receipt = await receiptWithPresentation(params.id);
     if (!receipt) notFound('Receipt not found');
     const downloadUrl = receipt.fileKey ? await storage().getSignedDownloadUrl(receipt.fileKey, receipt.fileName ?? undefined) : null;
     return { ...toApiReceipt(receipt), downloadUrl };
+  });
+
+  app.patch('/receipts/:id', async (request) => {
+    const user = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({
+      merchant: z.string().trim().min(1).max(160).nullable().optional(),
+      totalCents: z.number().int().min(0).max(100_000_000).nullable().optional(),
+      receiptDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+    }).parse(request.body);
+
+    const [updated] = await db
+      .update(receipts)
+      .set({ ...body, updatedAt: new Date() })
+      .where(eq(receipts.id, params.id))
+      .returning({ id: receipts.id });
+    if (!updated) notFound('Receipt not found');
+
+    await audit(request, user, 'update_receipt', 'receipt', params.id, body);
+    const receipt = await receiptWithPresentation(params.id);
+    if (!receipt) notFound('Receipt not found');
+    return toApiReceipt(receipt);
   });
 
   app.get('/receipts/:id/file', async (request, reply) => {
@@ -156,6 +165,24 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
     await audit(request, user, 'dismiss_receipt', 'receipt', params.id);
     return { ok: true };
   });
+}
+
+async function receiptWithPresentation(id: string) {
+  const [receipt] = await db
+    .select({
+      ...getTableColumns(receipts),
+      businessKey: businesses.key,
+      businessName: businesses.name,
+      uploadedByUserName: users.displayName,
+      uploadedByUploaderName: receiptUploaders.displayName,
+    })
+    .from(receipts)
+    .leftJoin(businesses, eq(receipts.businessId, businesses.id))
+    .leftJoin(users, eq(receipts.uploadedByUserId, users.id))
+    .leftJoin(receiptUploaders, eq(receipts.uploadedByUploaderId, receiptUploaders.id))
+    .where(eq(receipts.id, id))
+    .limit(1);
+  return receipt;
 }
 
 function sanitizeFileName(fileName: string): string {

@@ -7,6 +7,7 @@ import {
   listBusinesses,
   listReceipts,
   listTransactions,
+  updateReceipt,
   uploadReceipt,
 } from '@/api';
 import type { AppView } from '@/types/navigation';
@@ -21,7 +22,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ReceiptPreview } from './receipts/ReceiptPreview';
 
 interface Props {
@@ -45,17 +46,30 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
   const [loadingReceipts, setLoadingReceipts] = useState(true);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [busyReceiptId, setBusyReceiptId] = useState<string | null>(null);
+  const [savingReceiptId, setSavingReceiptId] = useState<string | null>(null);
+  const [detailMode, setDetailMode] = useState<'receipt' | 'pair'>('receipt');
+  const [receiptDraft, setReceiptDraft] = useState({ merchant: '', total: '', receiptDate: '' });
   const [error, setError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
 
   const selectedReceipt = receipts.find((receipt) => receipt.id === selectedReceiptId) ?? receipts[0] ?? null;
+  const receiptForMatching = useMemo(() => {
+    if (!selectedReceipt) return null;
+    const draftTotal = parseDollarInput(receiptDraft.total);
+    return {
+      ...selectedReceipt,
+      merchant: receiptDraft.merchant.trim() || null,
+      receiptDate: receiptDraft.receiptDate || null,
+      totalCents: draftTotal === undefined ? selectedReceipt.totalCents : draftTotal,
+    };
+  }, [receiptDraft, selectedReceipt]);
   const scoredCandidates = useMemo(() => (
-    selectedReceipt
+    receiptForMatching
       ? candidates
-        .map((transaction) => ({ transaction, score: scoreCandidate(selectedReceipt, transaction) }))
+        .map((transaction) => ({ transaction, score: scoreCandidate(receiptForMatching, transaction) }))
         .sort((a, b) => b.score - a.score)
       : []
-  ), [candidates, selectedReceipt]);
+  ), [candidates, receiptForMatching]);
   const gmailCount = receipts.filter((receipt) => receipt.source === 'gmail').length;
   const uploadCount = receipts.filter((receipt) => receipt.source === 'upload').length;
 
@@ -87,6 +101,12 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
       setCandidates([]);
       return;
     }
+    setDetailMode('receipt');
+    setReceiptDraft({
+      merchant: selectedReceipt.merchant ?? '',
+      total: formatCentsInput(selectedReceipt.totalCents),
+      receiptDate: selectedReceipt.receiptDate ?? '',
+    });
     const window = candidateWindow(selectedReceipt);
     setCandidateQuery('');
     setCandidateFrom(window.from);
@@ -114,6 +134,36 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
 
   const refresh = () => setRefreshKey((key) => key + 1);
 
+  const replaceReceipt = (updated: ReceiptInboxItem) => {
+    setReceipts((rows) => rows.map((receipt) => (receipt.id === updated.id ? updated : receipt)));
+    setReceiptDraft({
+      merchant: updated.merchant ?? '',
+      total: formatCentsInput(updated.totalCents),
+      receiptDate: updated.receiptDate ?? '',
+    });
+    return updated;
+  };
+
+  const saveReceiptEdits = async (receipt: ReceiptInboxItem, options: { silent?: boolean } = {}) => {
+    const totalCents = parseDollarInput(receiptDraft.total);
+    if (totalCents === undefined) {
+      throw new Error('Enter a valid receipt total.');
+    }
+    setSavingReceiptId(receipt.id);
+    try {
+      const updated = await updateReceipt(receipt.id, {
+        merchant: receiptDraft.merchant.trim() || null,
+        receiptDate: receiptDraft.receiptDate || null,
+        totalCents,
+      });
+      replaceReceipt(updated);
+      if (!options.silent) toast({ variant: 'success', title: 'Receipt details saved' });
+      return updated;
+    } finally {
+      setSavingReceiptId(null);
+    }
+  };
+
   const handleUpload = async (file: File) => {
     try {
       const selectedBusiness = businesses.find((item) => item.id === business);
@@ -132,8 +182,9 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
   const handlePair = async (receipt: ReceiptInboxItem, transaction: Transaction) => {
     setBusyReceiptId(receipt.id);
     try {
-      await attachReceipt(transaction.id, receipt.id);
-      toast({ variant: 'success', title: 'Receipt paired', description: `${receiptLabel(receipt)} matched to ${transaction.merchant}.` });
+      const updatedReceipt = await saveReceiptEdits(receipt, { silent: true });
+      await attachReceipt(transaction.id, updatedReceipt.id);
+      toast({ variant: 'success', title: 'Receipt paired', description: `${receiptLabel(updatedReceipt)} matched to ${transaction.merchant}.` });
       setSelectedReceiptId(null);
       refresh();
     } catch (pairError) {
@@ -224,7 +275,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
         {error ? (
           <div className="rounded-xl border border-coral/30 bg-coral/10 p-4 text-sm font-bold text-coral-ink">{error}</div>
         ) : (
-          <div className="grid gap-3 xl:grid-cols-[420px_1fr]">
+          <div className="grid gap-3 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)]">
             <div className="overflow-hidden rounded-xl border border-ink2/10 bg-paper shadow-sm">
               <div className="border-b border-ink2/10 px-4 py-3">
                 <h2 className="font-display text-xl font-bold">Unmatched receipts</h2>
@@ -252,7 +303,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
 
             <div className="overflow-hidden rounded-xl border border-ink2/10 bg-paper shadow-sm">
               {selectedReceipt ? (
-                <>
+                <Tabs value={detailMode} onValueChange={(value) => setDetailMode(value as 'receipt' | 'pair')}>
                   <div className="flex flex-wrap items-start gap-3 border-b border-ink2/10 px-4 py-3">
                     <div className="min-w-0 flex-1">
                       <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">
@@ -276,11 +327,32 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                     </Button>
                   </div>
 
-                  <div className="grid min-h-[620px] lg:grid-cols-[minmax(360px,0.9fr)_minmax(460px,1.1fr)]">
-                    <ReceiptPreview receipt={selectedReceipt} className="border-b border-ink2/10 lg:border-b-0 lg:border-r" />
+                  <div className="flex flex-wrap items-center gap-2 border-b border-ink2/10 bg-[hsl(var(--color-sunken))] px-4 py-2">
+                    <TabsList>
+                      <TabsTrigger value="receipt">Receipt</TabsTrigger>
+                      <TabsTrigger value="pair">Pair</TabsTrigger>
+                    </TabsList>
+                  </div>
 
-                    <div className="min-w-0">
-                      <div className="grid gap-3 border-b border-ink2/10 p-3 md:grid-cols-[1fr_150px_150px]">
+                  <TabsContent value="receipt" className="m-0">
+                    <ReceiptPreview
+                      receipt={selectedReceipt}
+                      className="h-[calc(100vh-330px)] min-h-[650px] border-0"
+                    />
+                  </TabsContent>
+
+                  <TabsContent value="pair" className="m-0">
+                    <div className="grid gap-4 p-4">
+                      <ReceiptEditForm
+                        draft={receiptDraft}
+                        saving={savingReceiptId === selectedReceipt.id}
+                        onDraftChange={setReceiptDraft}
+                        onSave={() => saveReceiptEdits(selectedReceipt).catch((saveError: Error) => {
+                          toast({ variant: 'destructive', title: 'Could not save receipt', description: saveError.message });
+                        })}
+                      />
+
+                      <div className="grid gap-3 rounded-lg border border-ink2/10 bg-[hsl(var(--color-sunken))] p-3 lg:grid-cols-[minmax(260px,1fr)_160px_160px]">
                         <Field label="Candidate search">
                           <Input value={candidateQuery} onChange={(event) => setCandidateQuery(event.target.value)} placeholder="Merchant, category, account" />
                         </Field>
@@ -292,42 +364,17 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                         </Field>
                       </div>
 
-                      <Table className="table-fixed">
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-28">Date</TableHead>
-                            <TableHead>Merchant</TableHead>
-                            <TableHead className="w-32">Category</TableHead>
-                            <TableHead className="w-28 text-right">Amount</TableHead>
-                            <TableHead className="w-24">Match</TableHead>
-                            <TableHead className="w-20 text-right">Pair</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {scoredCandidates.map(({ transaction, score }) => (
-                            <TableRow key={transaction.id}>
-                              <TableCell className="whitespace-nowrap text-dim">{transaction.date}</TableCell>
-                              <TableCell>
-                                <div className="truncate font-bold" title={transaction.merchant}>{transaction.merchant}</div>
-                                <div className="truncate text-xs text-dim">{transaction.src}</div>
-                              </TableCell>
-                              <TableCell className="truncate">{transaction.cat}</TableCell>
-                              <TableCell className="text-right font-display font-bold tabular-nums">{fmt$(transaction.amount)}</TableCell>
-                              <TableCell><MatchBadge score={score} /></TableCell>
-                              <TableCell className="text-right">
-                                <Button
-                                  size="icon-sm"
-                                  disabled={busyReceiptId === selectedReceipt.id}
-                                  onClick={() => handlePair(selectedReceipt, transaction)}
-                                  title="Pair receipt"
-                                >
-                                  <Check className="h-4 w-4" />
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
+                      <div className="grid gap-2">
+                        {scoredCandidates.map(({ transaction, score }) => (
+                          <CandidateRow
+                            key={transaction.id}
+                            transaction={transaction}
+                            score={score}
+                            disabled={busyReceiptId === selectedReceipt.id || savingReceiptId === selectedReceipt.id}
+                            onPair={() => handlePair(selectedReceipt, transaction)}
+                          />
+                        ))}
+                      </div>
                       {loadingCandidates && <div className="p-6 text-center text-sm text-dim">Loading candidates...</div>}
                       {!loadingCandidates && scoredCandidates.length === 0 && (
                         <div className="p-4">
@@ -335,8 +382,8 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                         </div>
                       )}
                     </div>
-                  </div>
-                </>
+                  </TabsContent>
+                </Tabs>
               ) : (
                 <div className="p-4">
                   <EmptyState title="Select a receipt" icon={<FileText className="h-5 w-5" />} />
@@ -402,6 +449,87 @@ function ReceiptRow({
         <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={(event) => { event.stopPropagation(); onDismiss(); }}>
           <XCircle className="h-3.5 w-3.5" />
           Dismiss
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ReceiptEditForm({
+  draft,
+  saving,
+  onDraftChange,
+  onSave,
+}: {
+  draft: { merchant: string; total: string; receiptDate: string };
+  saving: boolean;
+  onDraftChange: (draft: { merchant: string; total: string; receiptDate: string }) => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="grid gap-3 rounded-lg border border-ink2/10 bg-paper p-3 shadow-sm lg:grid-cols-[minmax(240px,1fr)_160px_170px_auto]">
+      <Field label="Merchant">
+        <Input
+          value={draft.merchant}
+          onChange={(event) => onDraftChange({ ...draft, merchant: event.target.value })}
+          placeholder="Merchant"
+        />
+      </Field>
+      <Field label="Receipt total">
+        <Input
+          value={draft.total}
+          onChange={(event) => onDraftChange({ ...draft, total: event.target.value })}
+          inputMode="decimal"
+          placeholder="0.00"
+        />
+      </Field>
+      <Field label="Receipt date">
+        <Input
+          type="date"
+          value={draft.receiptDate}
+          onChange={(event) => onDraftChange({ ...draft, receiptDate: event.target.value })}
+        />
+      </Field>
+      <div className="flex items-end">
+        <Button variant="outline" className="w-full" disabled={saving} onClick={onSave}>
+          Save edits
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function CandidateRow({
+  transaction,
+  score,
+  disabled,
+  onPair,
+}: {
+  transaction: Transaction;
+  score: number;
+  disabled: boolean;
+  onPair: () => void;
+}) {
+  return (
+    <div className="grid gap-3 rounded-lg border border-ink2/10 bg-paper p-3 shadow-sm md:grid-cols-[minmax(0,1fr)_150px_auto]">
+      <div className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <div className="truncate font-bold" title={transaction.merchant}>{transaction.merchant}</div>
+          <MatchBadge score={score} />
+        </div>
+        <div className="mt-1 flex flex-wrap gap-2 text-xs text-dim">
+          <span>{transaction.date}</span>
+          <span>{transaction.cat}</span>
+          <span>{transaction.src}</span>
+        </div>
+      </div>
+      <div className="self-center text-left md:text-right">
+        <div className="font-display text-lg font-bold tabular-nums">{fmt$(transaction.amount)}</div>
+      </div>
+      <div className="flex items-center justify-start md:justify-end">
+        <Button disabled={disabled} onClick={onPair}>
+          <Check className="h-4 w-4" />
+          Pair
         </Button>
       </div>
     </div>
@@ -505,4 +633,15 @@ function defaultFrom(): string {
 
 function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
+}
+
+function formatCentsInput(cents?: number | null): string {
+  return cents == null ? '' : (cents / 100).toFixed(2);
+}
+
+function parseDollarInput(value: string): number | null | undefined {
+  const normalized = value.replace(/[$,\s]/g, '');
+  if (!normalized) return null;
+  if (!/^\d+(\.\d{0,2})?$/.test(normalized)) return undefined;
+  return Math.round(Number(normalized) * 100);
 }

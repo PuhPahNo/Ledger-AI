@@ -103,6 +103,26 @@ export function getReceipt(receiptId: string): Promise<ReceiptInboxItem> {
   return http<ReceiptInboxItem>(`/receipts/${receiptId}`);
 }
 
+export interface UpdateReceiptInput {
+  merchant?: string | null;
+  totalCents?: number | null;
+  receiptDate?: string | null;
+}
+
+export function updateReceipt(receiptId: string, body: UpdateReceiptInput): Promise<ReceiptInboxItem> {
+  if (useMockApi) {
+    return listReceipts().then((rows) => ({
+      ...(rows.find((row) => row.id === receiptId) ?? rows[0]),
+      ...body,
+      updatedAt: new Date().toISOString(),
+    }));
+  }
+  return http<ReceiptInboxItem>(`/receipts/${receiptId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
 export function receiptFileUrl(receiptId: string, options: { download?: boolean } = {}): string {
   const query = options.download ? '?download=true' : '';
   return `${API_BASE.replace(/\/$/, '')}/receipts/${encodeURIComponent(receiptId)}/file${query}`;

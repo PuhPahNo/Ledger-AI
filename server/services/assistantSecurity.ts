@@ -5,6 +5,12 @@ export const DEFAULT_TRANSACTION_DETAIL_LIMIT = 100;
 export const EXPANDED_TRANSACTION_DETAIL_LIMIT = 1000;
 export const ASSISTANT_MUTATION_LIMIT = 50;
 
+export interface AssistantReceiptUpdatePayload {
+  merchant?: string | null;
+  totalCents?: number | null;
+  receiptDate?: string | null;
+}
+
 export type AssistantTokenPayload =
   | {
       kind: 'data_expansion';
@@ -32,6 +38,17 @@ export type AssistantTokenPayload =
       matchKind: string;
       pattern: string;
       priority: number;
+    }
+  | {
+      kind: 'receipt_update';
+      receiptId: string;
+      updates: AssistantReceiptUpdatePayload;
+    }
+  | {
+      kind: 'receipt_pairing';
+      receiptId: string;
+      transactionId: string;
+      updates?: AssistantReceiptUpdatePayload;
     };
 
 interface AssistantTokenEnvelope {
