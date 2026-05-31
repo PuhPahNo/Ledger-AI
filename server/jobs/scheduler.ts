@@ -6,6 +6,7 @@ import { enqueue } from './queue.js';
 export const DAILY_PLAID_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const DAILY_CATEGORIZATION_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const GMAIL_WATCH_RENEWAL_WINDOW_MS = 6 * 24 * 60 * 60 * 1000;
+export const RECEIPT_REMATCH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const PENDING_RECEIPT_EXTRACTION_LIMIT = 50;
 
 export function isPlaidConnectionDueForDailySync(
@@ -98,6 +99,41 @@ export async function enqueuePendingReceiptExtractions(now = new Date()): Promis
     queued += 1;
   }
   return queued;
+}
+
+export async function enqueueDueReceiptRematch(now = new Date()): Promise<number> {
+  if (await hasRecentReceiptRematch(now)) return 0;
+  const [pending] = await db
+    .select({ id: receipts.id })
+    .from(receipts)
+    .where(and(
+      isNull(receipts.transactionId),
+      eq(receipts.status, 'pending'),
+      sql`${receipts.totalCents} IS NOT NULL`,
+      sql`${receipts.receiptDate} IS NOT NULL`,
+    ))
+    .limit(1);
+  if (!pending) return 0;
+  await enqueue('receipt.rematch', {}, now);
+  return 1;
+}
+
+async function hasRecentReceiptRematch(now: Date): Promise<boolean> {
+  const cutoff = new Date(now.getTime() - RECEIPT_REMATCH_INTERVAL_MS);
+  const [existing] = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(and(
+      eq(jobs.type, 'receipt.rematch'),
+      sql`${jobs.createdAt} >= ${cutoff}`,
+      or(
+        inArray(jobs.status, ['queued', 'running', 'failed']),
+        eq(jobs.status, 'succeeded'),
+      ),
+    ))
+    .limit(1);
+
+  return Boolean(existing);
 }
 
 async function hasPendingPlaidSync(connectionId: string): Promise<boolean> {

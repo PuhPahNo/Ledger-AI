@@ -5,6 +5,7 @@ import {
   enqueueDueCategorizationScan,
   enqueueDueGmailWatchRenewals,
   enqueueDuePlaidSyncs,
+  enqueueDueReceiptRematch,
   enqueuePendingReceiptExtractions,
 } from './scheduler.js';
 
@@ -52,6 +53,8 @@ export function startWorkerLoop(options: { pollMs?: number; logger?: WorkerLogge
           if (receiptExtractionsQueued > 0) {
             logger.log(`Queued ${receiptExtractionsQueued} pending receipt extraction job${receiptExtractionsQueued === 1 ? '' : 's'}`);
           }
+          const receiptRematchQueued = await enqueueDueReceiptRematch();
+          if (receiptRematchQueued > 0) logger.log('Queued receipt re-match sweep');
         }
         await tick(logger);
       } catch (error) {

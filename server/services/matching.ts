@@ -1,4 +1,4 @@
-import { and, eq, gte, lte, or, sql } from 'drizzle-orm';
+import { and, eq, gte, isNull, lte, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { receiptMatches, receipts, transactions, type Receipt, type Transaction } from '../db/schema.js';
 import { reviewReceiptCategoryEvidence } from './categorizationFeedback.js';
@@ -9,34 +9,77 @@ export interface MatchResult {
   reasons: Record<string, number | string>;
 }
 
-const autoAttachThreshold = 0.82;
-const suggestedThreshold = 0.5;
+export interface ReceiptMatchOutcome extends MatchResult {
+  /** True when the score cleared the auto-attach bar and the receipt was attached to the transaction. */
+  attached: boolean;
+}
 
-export async function matchReceipt(receiptId: string): Promise<MatchResult | null> {
+export const AUTO_ATTACH_THRESHOLD = 0.82;
+export const SUGGESTED_THRESHOLD = 0.5;
+const REMATCH_BATCH_LIMIT = 200;
+
+export async function matchReceipt(receiptId: string): Promise<ReceiptMatchOutcome | null> {
   const receipt = await db.query.receipts.findFirst({ where: eq(receipts.id, receiptId) });
   if (!receipt || !receipt.totalCents || !receipt.receiptDate) return null;
+  // Already attached — nothing to do (also lets rematch sweeps run safely).
+  if (receipt.transactionId) return null;
 
   const candidates = await candidateTransactions(receipt);
   const scored = candidates
     .map((transaction) => scoreMatch(receipt, transaction))
     .sort((a, b) => b.score - a.score);
   const best = scored[0];
-  if (!best || best.score < suggestedThreshold) return null;
+  if (!best || best.score < SUGGESTED_THRESHOLD) return null;
 
+  // Idempotent across re-runs: drop any stale, undecided suggestion before recording the new best.
+  await db
+    .delete(receiptMatches)
+    .where(and(eq(receiptMatches.receiptId, receiptId), eq(receiptMatches.status, 'suggested')));
+
+  const attached = best.score >= AUTO_ATTACH_THRESHOLD;
   await db.insert(receiptMatches).values({
     receiptId,
     transactionId: best.transaction.id,
     score: best.score.toFixed(4),
-    status: best.score >= autoAttachThreshold ? 'auto' : 'suggested',
+    status: attached ? 'auto' : 'suggested',
     reasons: best.reasons,
   });
 
-  if (best.score >= autoAttachThreshold) {
+  if (attached) {
     await attachReceipt(best.transaction.id, receiptId);
   } else {
     await db.update(receipts).set({ status: 'pending', updatedAt: new Date() }).where(eq(receipts.id, receiptId));
   }
-  return best;
+  return { ...best, attached };
+}
+
+/**
+ * Retry matching for receipts that were ingested but never attached to a transaction —
+ * e.g. an emailed receipt that arrived before the card charge posted from Plaid. Runs after a
+ * Plaid sync brings in new transactions and on a periodic safety-net sweep. Only considers
+ * receipts that have the total + date `matchReceipt` needs, and is bounded per run.
+ */
+export async function rematchUnmatchedReceipts(
+  options: { limit?: number } = {},
+): Promise<{ processed: number; attached: number }> {
+  const limit = options.limit ?? REMATCH_BATCH_LIMIT;
+  const pending = await db
+    .select({ id: receipts.id })
+    .from(receipts)
+    .where(and(
+      isNull(receipts.transactionId),
+      eq(receipts.status, 'pending'),
+      sql`${receipts.totalCents} IS NOT NULL`,
+      sql`${receipts.receiptDate} IS NOT NULL`,
+    ))
+    .limit(limit);
+
+  let attached = 0;
+  for (const row of pending) {
+    const outcome = await matchReceipt(row.id);
+    if (outcome?.attached) attached += 1;
+  }
+  return { processed: pending.length, attached };
 }
 
 export async function attachReceipt(transactionId: string, receiptId: string): Promise<Transaction | null> {

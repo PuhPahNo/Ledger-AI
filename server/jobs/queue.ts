@@ -8,6 +8,7 @@ export type JobType =
   | 'gmail.backfill'
   | 'gmail.renew-watch'
   | 'receipt.extract'
+  | 'receipt.rematch'
   | 'categorization.apply-rule'
   | 'categorization.scan-uncategorized'
   | 'categorization.receipt-evidence-review'

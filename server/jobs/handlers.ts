@@ -3,7 +3,8 @@ import { db } from '../db/client.js';
 import { exportJobs, receipts } from '../db/schema.js';
 import { extractReceipt } from '../services/receiptExtraction.js';
 import { storage } from '../services/storage.js';
-import { matchReceipt } from '../services/matching.js';
+import { matchReceipt, rematchUnmatchedReceipts } from '../services/matching.js';
+import { enqueue } from './queue.js';
 import {
   resolveCategorizationReviewItem,
   reviewReceiptCategoryEvidence,
@@ -16,11 +17,13 @@ import { buildExport } from '../services/exporter.js';
 
 export async function handleJob(type: string, payload: Record<string, unknown>): Promise<void> {
   if (type === 'plaid.sync') {
-    await syncPlaidConnection(String(payload.connectionId), {
+    const added = await syncPlaidConnection(String(payload.connectionId), {
       resetCursor: Boolean(payload.resetCursor),
       daysRequested: typeof payload.daysRequested === 'number' ? payload.daysRequested : undefined,
       allowAiCategorization: payload.resetCursor ? false : undefined,
     });
+    // New transactions may match receipts that were ingested before the charge posted.
+    if (added > 0) await enqueue('receipt.rematch', {});
     return;
   }
   if (type === 'gmail.sync') {
@@ -38,6 +41,10 @@ export async function handleJob(type: string, payload: Record<string, unknown>):
   }
   if (type === 'receipt.extract') {
     await extractAndMatchReceipt(String(payload.receiptId));
+    return;
+  }
+  if (type === 'receipt.rematch') {
+    await rematchUnmatchedReceipts();
     return;
   }
   if (type === 'categorization.apply-rule') {
