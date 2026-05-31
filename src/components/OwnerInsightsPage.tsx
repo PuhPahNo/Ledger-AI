@@ -30,7 +30,7 @@ import type {
 import type { AppView } from '@/types/navigation';
 import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
-import { useResolvedColor } from '@/hooks/useTheme';
+import { useResolvedColor, useTheme } from '@/hooks/useTheme';
 import { AppShell } from './AppShell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -628,7 +628,28 @@ function BusinessScorecard({
   // Pull business breakdown from the latest period; sparkline uses 12-month series per business.
   const latest = cashFlow.periods.at(-1);
   const lastMonth = cashFlow.periods.length >= 2 ? cashFlow.periods.at(-2)! : null;
-  if (!latest || latest.businessBreakdown.length === 0) {
+  // List every business that had activity anywhere in the range — not just the latest month —
+  // so a business with no latest-month activity still appears (with zeroed current figures).
+  const businessMeta = new Map<string, { businessId: string; businessName: string; color: string }>();
+  for (const period of cashFlow.periods) {
+    for (const b of period.businessBreakdown) {
+      if (!businessMeta.has(b.businessId)) {
+        businessMeta.set(b.businessId, { businessId: b.businessId, businessName: b.businessName, color: b.color });
+      }
+    }
+  }
+  const latestById = new Map((latest?.businessBreakdown ?? []).map((b) => [b.businessId, b]));
+  const scorecardRows = [...businessMeta.values()]
+    .map((meta) => latestById.get(meta.businessId) ?? {
+      ...meta,
+      inflowCents: 0,
+      outflowCents: 0,
+      transferCents: 0,
+      netCents: 0,
+      previousNetCents: 0,
+    })
+    .sort((a, b) => b.netCents - a.netCents);
+  if (scorecardRows.length === 0) {
     return <div className="py-6 text-center text-sm text-dim">No business breakdown.</div>;
   }
   return (
@@ -646,12 +667,14 @@ function BusinessScorecard({
           </tr>
         </thead>
         <tbody>
-          {latest.businessBreakdown.map((row) => {
+          {scorecardRows.map((row) => {
             const prevMonth = lastMonth?.businessBreakdown.find((b) => b.businessId === row.businessId);
             const mom = prevMonth && prevMonth.netCents !== 0
               ? Math.round(((row.netCents - prevMonth.netCents) / Math.abs(prevMonth.netCents)) * 100)
               : 0;
-            const yoy = latest.previousNetCents !== 0 ? latest.netDeltaPct : 0;
+            const yoy = row.previousNetCents !== 0
+              ? Math.round(((row.netCents - row.previousNetCents) / Math.abs(row.previousNetCents)) * 100)
+              : 0;
             const spark = cashFlow.periods.map(
               (period) => period.businessBreakdown.find((b) => b.businessId === row.businessId)?.netCents ?? 0,
             );
@@ -718,7 +741,11 @@ function Delta({ value, invertColors }: { value: number; invertColors?: boolean 
 }
 
 function Sparkline({ values, color, positive }: { values: number[]; color?: string; positive?: boolean }) {
+  const { theme } = useTheme();
   const ink = useResolvedColor('--color-ink', '#15140f');
+  // Positive trend green must contrast with the background: dark sage-ink on light,
+  // light sage on dark (the dark green is invisible in dark mode).
+  const positiveStroke = theme === 'dark' ? 'hsl(95 31% 70%)' : 'hsl(105 35% 19%)';
   if (!values.length) return null;
   const min = Math.min(...values, 0);
   const max = Math.max(...values, 0);
@@ -733,7 +760,7 @@ function Sparkline({ values, color, positive }: { values: number[]; color?: stri
       <polyline
         points={points.join(' ')}
         fill="none"
-        stroke={positive ? 'hsl(105 35% 19%)' : (color ?? ink)}
+        stroke={positive ? positiveStroke : (color ?? ink)}
         strokeWidth="2"
         vectorEffect="non-scaling-stroke"
         strokeLinecap="round"

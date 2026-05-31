@@ -552,11 +552,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       : null;
     const periods = cashFlowPeriods(from, to, query.group);
     const rows = await Promise.all(periods.map(async (period) => {
-      const [current, previous, businessBreakdown] = await Promise.all([
+      const [current, previous, businessBreakdown, previousBusinessBreakdown] = await Promise.all([
         cashFlowTotals(period.from, period.to, selectedBusiness?.id ?? null, accountIds, includeTransfers),
         cashFlowTotals(shiftIsoYear(period.from, -1), shiftIsoYear(period.to, -1), selectedBusiness?.id ?? null, accountIds, includeTransfers),
         cashFlowBusinessBreakdown(period.from, period.to, selectedBusiness?.id ?? null, accountIds, includeTransfers),
+        cashFlowBusinessBreakdown(shiftIsoYear(period.from, -1), shiftIsoYear(period.to, -1), selectedBusiness?.id ?? null, accountIds, includeTransfers),
       ]);
+      const previousNetByBusiness = new Map(previousBusinessBreakdown.map((row) => [row.businessId, row.netCents]));
       const netDeltaCents = current.netCents - previous.netCents;
       return {
         label: period.label,
@@ -569,7 +571,10 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         previousNetCents: previous.netCents,
         netDeltaCents,
         netDeltaPct: previous.netCents !== 0 ? Math.round((netDeltaCents / Math.abs(previous.netCents)) * 100) : 0,
-        businessBreakdown,
+        businessBreakdown: businessBreakdown.map((row) => ({
+          ...row,
+          previousNetCents: previousNetByBusiness.get(row.businessId) ?? 0,
+        })),
       };
     }));
     const totals = sumCashFlowPeriods(rows);

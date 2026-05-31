@@ -107,6 +107,8 @@ export interface CashFlowBusinessBreakdown {
   outflowCents: number;
   transferCents: number;
   netCents: number;
+  /** Net for the same period one year earlier (for per-business YoY). */
+  previousNetCents: number;
 }
 
 export interface CashFlowPeriod {

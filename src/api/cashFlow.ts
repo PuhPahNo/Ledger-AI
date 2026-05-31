@@ -48,11 +48,13 @@ function mockCashFlow(params: CashFlowParams): CashFlowSummary {
       netDeltaPct: previous.netCents !== 0 ? Math.round((netDeltaCents / Math.abs(previous.netCents)) * 100) : 0,
       businessBreakdown: BUSINESSES.map((business) => {
         const summary = summarizeCashFlow(rows.filter((row) => row.biz === business.id), includeTransfers);
+        const prevSummary = summarizeCashFlow(previousRows.filter((row) => row.biz === business.id), includeTransfers);
         return {
           businessId: business.id,
           businessName: business.name,
           color: business.color,
           ...summary,
+          previousNetCents: prevSummary.netCents,
         };
       }).filter((row) => row.inflowCents || row.outflowCents || row.transferCents),
     };
