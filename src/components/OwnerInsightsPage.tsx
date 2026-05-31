@@ -265,7 +265,9 @@ export function OwnerInsightsPage({ user, onViewChange, onLogout }: Props) {
           <div className="grid gap-3 lg:grid-cols-3">
             {briefing.stories.map((story, index) => {
               const tones = {
-                lemon: { bg: 'bg-lemon/30', tag: 'bg-lemon-ink/10 text-lemon-ink', stat: 'text-lemon-ink' },
+                // lemon-ink stays dark (it's mostly used on solid bright lemon chips), so on these
+                // tinted cards it needs a light lemon in dark mode. sage-ink/coral-ink already flip.
+                lemon: { bg: 'bg-lemon/30', tag: 'bg-lemon-ink/10 text-lemon-ink dark:bg-lemon/15 dark:text-lemon', stat: 'text-lemon-ink dark:text-lemon' },
                 coral: { bg: 'bg-coral/20', tag: 'bg-coral-ink/10 text-coral-ink', stat: 'text-coral-ink' },
                 sage: { bg: 'bg-sage/25', tag: 'bg-sage-ink/10 text-sage-ink', stat: 'text-sage-ink' },
               }[story.tone];

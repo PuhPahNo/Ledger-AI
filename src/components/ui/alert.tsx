@@ -10,7 +10,7 @@ const alertVariants = cva(
         default: 'border-ink2/15 bg-paper text-ink',
         destructive: 'border-coral/40 bg-coral/15 text-coral-ink [&>svg]:text-coral-ink',
         success: 'border-sage-ink/30 bg-sage/40 text-sage-ink [&>svg]:text-sage-ink',
-        warning: 'border-lemon-ink/30 bg-lemon/40 text-lemon-ink [&>svg]:text-lemon-ink',
+        warning: 'border-lemon-ink/30 bg-lemon/40 text-lemon-ink [&>svg]:text-lemon-ink dark:border-lemon/30 dark:text-lemon dark:[&>svg]:text-lemon',
       },
     },
     defaultVariants: { variant: 'default' },
