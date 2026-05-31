@@ -477,6 +477,9 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
     const inflowFilters = [
       ...movementFilters,
       sql`${transactions.amountCents} > 0`,
+      // Exclude transfers so internal account-to-account moves aren't counted as income.
+      // Matches the Transactions page operating-inflow definition (transfers excluded).
+      sql`NOT (${transferCategoryFilter()})`,
     ] as const;
     const current = await movementSummary(from, to, spendFilters, inflowFilters);
     const prior = await movementSummary(priorFrom, priorTo, spendFilters, inflowFilters);
