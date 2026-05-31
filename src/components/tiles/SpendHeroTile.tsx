@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { StatLabel } from '@/components/ui/stat-label';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { colors } from '@/theme/tokens';
-import { useResolvedColor } from '@/hooks/useTheme';
+import { useResolvedColor, useTheme } from '@/hooks/useTheme';
 import { Sparkline } from './Sparkline';
 
 export type DashboardFlowMode = 'outflow' | 'inflow' | 'both';
@@ -49,9 +49,13 @@ interface Props {
 }
 
 export function SpendHeroTile({ summary, contextLabel, detailLabel, mode, onModeChange }: Props) {
-  // Sparkline base line follows the theme so it stays visible on the (flipping) tile.
+  // Chart colors follow the theme so they stay visible on the (flipping) tile.
+  const { theme } = useTheme();
   const inkLine = useResolvedColor('--color-ink', colors.ink);
-  const view = viewModel(summary, mode, inkLine);
+  // Inflow green: dark sage-ink on the light tile, light sage on the dark tile
+  // (sage-ink is nearly invisible against the dark background).
+  const positiveGreen = theme === 'dark' ? colors.sage : colors.sageInk;
+  const view = viewModel(summary, mode, inkLine, positiveGreen);
   const up = view.deltaPct >= 0;
   return (
     <Tile tone="cream" pad="lg" colSpan={8} rowSpan={2} className="gap-4">
@@ -108,7 +112,7 @@ export function SpendHeroTile({ summary, contextLabel, detailLabel, mode, onMode
   );
 }
 
-function viewModel(summary: SpendSummary, mode: DashboardFlowMode, inkLine: string): HeroView {
+function viewModel(summary: SpendSummary, mode: DashboardFlowMode, inkLine: string, positiveGreen: string): HeroView {
   const inflowValues = summary.trailingInflowMonthCents ?? [];
   const outflowValues = summary.trailingOutflowMonthCents ?? summary.trailingMonthCents ?? [];
   if (mode === 'inflow') {
@@ -121,8 +125,8 @@ function viewModel(summary: SpendSummary, mode: DashboardFlowMode, inkLine: stri
       values: inflowValues,
       segments: summary.trailingInflowBusinessCents,
       series: undefined,
-      baseColor: colors.sage,
-      highlightColor: colors.sageInk,
+      baseColor: positiveGreen,
+      highlightColor: positiveGreen,
       stats: [
         { label: 'Last month', value: summary.lastInflow ?? 0 },
         { label: 'Avg / month', value: summary.avgInflow ?? 0 },
@@ -139,7 +143,7 @@ function viewModel(summary: SpendSummary, mode: DashboardFlowMode, inkLine: stri
       values: undefined,
       segments: undefined,
       series: [
-        { id: 'inflow', label: 'In', color: colors.sageInk, values: inflowValues },
+        { id: 'inflow', label: 'In', color: positiveGreen, values: inflowValues },
         { id: 'outflow', label: 'Out', color: colors.coral, values: outflowValues },
       ],
       baseColor: inkLine,
