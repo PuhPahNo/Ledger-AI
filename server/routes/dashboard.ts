@@ -788,12 +788,14 @@ async function cashFlowTotals(
   accountIds: string[],
   includeTransfers: boolean,
 ) {
-  const includedMovementFilter = includeTransfers ? sql`true` : categoryIsVisibleSpend();
+  // Operating cash flow: inflow includes revenue but excludes transfers; outflow excludes
+  // transfers and income. The includeTransfers toggle widens both to all movement.
+  const inflowFilter = includeTransfers ? sql`true` : sql`NOT (${transferCategoryFilter()})`;
+  const spendFilter = includeTransfers ? sql`true` : categoryIsVisibleSpend();
   const [row] = await db.select({
-    inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
-    outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
+    inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${inflowFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+    outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${spendFilter} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
     transferCents: sql<number>`coalesce(sum(CASE WHEN ${transferCategoryFilter()} THEN abs(${transactions.amountCents}) ELSE 0 END), 0)::int`,
-    netCents: sql<number>`coalesce(sum(CASE WHEN ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
   })
     .from(transactions)
     .leftJoin(categories, eq(transactions.categoryId, categories.id))
@@ -804,11 +806,13 @@ async function cashFlowTotals(
       businessId ? eq(transactions.businessId, businessId) : sql`true`,
       accountSpendFilter(accountIds),
     ));
+  const inflowCents = Number(row?.inflowCents ?? 0);
+  const outflowCents = Number(row?.outflowCents ?? 0);
   return {
-    inflowCents: Number(row?.inflowCents ?? 0),
-    outflowCents: Number(row?.outflowCents ?? 0),
+    inflowCents,
+    outflowCents,
     transferCents: Number(row?.transferCents ?? 0),
-    netCents: Number(row?.netCents ?? 0),
+    netCents: inflowCents - outflowCents,
   };
 }
 
@@ -819,15 +823,15 @@ async function cashFlowBusinessBreakdown(
   accountIds: string[],
   includeTransfers: boolean,
 ) {
-  const includedMovementFilter = includeTransfers ? sql`true` : categoryIsVisibleSpend();
+  const inflowFilter = includeTransfers ? sql`true` : sql`NOT (${transferCategoryFilter()})`;
+  const spendFilter = includeTransfers ? sql`true` : categoryIsVisibleSpend();
   const rows = await db.select({
     businessId: businesses.key,
     businessName: businesses.name,
     color: businesses.color,
-    inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
-    outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
+    inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${inflowFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+    outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${spendFilter} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
     transferCents: sql<number>`coalesce(sum(CASE WHEN ${transferCategoryFilter()} THEN abs(${transactions.amountCents}) ELSE 0 END), 0)::int`,
-    netCents: sql<number>`coalesce(sum(CASE WHEN ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
   })
     .from(transactions)
     .innerJoin(businesses, eq(transactions.businessId, businesses.id))
@@ -841,15 +845,19 @@ async function cashFlowBusinessBreakdown(
     ))
     .groupBy(businesses.key, businesses.name, businesses.color)
     .orderBy(desc(sql`abs(sum(${transactions.amountCents}))`));
-  return rows.map((row) => ({
-    businessId: row.businessId,
-    businessName: row.businessName,
-    color: row.color,
-    inflowCents: Number(row.inflowCents ?? 0),
-    outflowCents: Number(row.outflowCents ?? 0),
-    transferCents: Number(row.transferCents ?? 0),
-    netCents: Number(row.netCents ?? 0),
-  }));
+  return rows.map((row) => {
+    const inflowCents = Number(row.inflowCents ?? 0);
+    const outflowCents = Number(row.outflowCents ?? 0);
+    return {
+      businessId: row.businessId,
+      businessName: row.businessName,
+      color: row.color,
+      inflowCents,
+      outflowCents,
+      transferCents: Number(row.transferCents ?? 0),
+      netCents: inflowCents - outflowCents,
+    };
+  });
 }
 
 function sumCashFlowPeriods(rows: Array<{
