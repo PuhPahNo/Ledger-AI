@@ -125,7 +125,7 @@ function PreviewBody({
 
   if (kind === 'text') {
     return (
-      <div className="h-[560px] overflow-auto rounded-md border border-ink2/10 bg-white p-3 lg:h-full">
+      <div className="h-[560px] overflow-auto rounded-md border border-ink2/10 bg-paper p-3 lg:h-full">
         {loadingText ? (
           <div className="flex h-full items-center justify-center gap-2 text-sm text-dim">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -141,7 +141,7 @@ function PreviewBody({
   }
 
   return (
-    <div className="flex h-[560px] items-center justify-center rounded-md border border-dashed border-ink2/20 bg-white p-6 text-center lg:h-full">
+    <div className="flex h-[560px] items-center justify-center rounded-md border border-dashed border-ink2/20 bg-paper p-6 text-center lg:h-full">
       <PreviewFallback
         title="Preview unavailable"
         detail="This file type cannot be rendered in the browser."
