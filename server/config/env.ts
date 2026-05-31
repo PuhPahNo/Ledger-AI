@@ -21,6 +21,9 @@ const envSchema = z.object({
   OPENAI_ASSISTANT_REASONING_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh']).default('medium'),
   OPENAI_RECEIPT_MODEL: z.string().default('gpt-4.1-mini'),
   OPENAI_CATEGORIZATION_MODEL: z.string().default('gpt-4.1-mini'),
+  // Let the AI categorizer use OpenAI's hosted web search to identify unfamiliar merchants.
+  // Set to 'false' to disable (saves cost/latency on the AI-fallback path).
+  OPENAI_CATEGORIZATION_WEB_SEARCH: z.string().optional().default('true').transform((value) => value !== 'false'),
   PLAID_ENV: z.enum(['sandbox', 'development', 'production']).default('sandbox'),
   PLAID_CLIENT_ID: z.string().optional().default(''),
   PLAID_SECRET: z.string().optional().default(''),

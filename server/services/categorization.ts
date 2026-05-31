@@ -310,8 +310,10 @@ async function suggestCategoryWithAi(
     const feedbackExamples = await loadFeedbackExamples(input);
     const direction = input.amountCents > 0 ? 'inflow/income' : input.amountCents < 0 ? 'outflow/expense' : 'zero amount';
     const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+    const useWebSearch = env.OPENAI_CATEGORIZATION_WEB_SEARCH;
     const response = await client.responses.parse({
       model: env.OPENAI_CATEGORIZATION_MODEL,
+      ...(useWebSearch ? { tools: [{ type: 'web_search_preview' as const }] } : {}),
       input: [{
         role: 'user',
         content: [{
@@ -322,6 +324,9 @@ async function suggestCategoryWithAi(
             `Transaction direction: ${direction}. Never contradict the direction.`,
             'Prefer tax-oriented Schedule C categories over miscellaneous internal categories.',
             'Do not create new categories or tax codes.',
+            useWebSearch
+              ? 'If the merchant or domain is unfamiliar, use web search to identify what the company sells before choosing a category (e.g. "elevenlabs.io" is an AI voice/text-to-speech SaaS → Software). Cite what you found in the reason.'
+              : '',
             `Transaction: ${JSON.stringify({
               merchant: input.merchant,
               amountCents: input.amountCents,
@@ -329,7 +334,7 @@ async function suggestCategoryWithAi(
             })}`,
             `Accepted feedback examples: ${JSON.stringify(feedbackExamples)}`,
             `Categories: ${JSON.stringify(availableCategories)}`,
-          ].join('\n'),
+          ].filter(Boolean).join('\n'),
         }],
       }],
       text: {

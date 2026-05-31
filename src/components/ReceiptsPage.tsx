@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Check, Eye, FileText, Link2, Search, XCircle } from 'lucide-react';
 import {
@@ -51,6 +51,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
   const [receiptDraft, setReceiptDraft] = useState({ merchant: '', total: '', receiptDate: '' });
   const [error, setError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  const detailRef = useRef<HTMLDivElement>(null);
 
   const selectedReceipt = receipts.find((receipt) => receipt.id === selectedReceiptId) ?? receipts[0] ?? null;
   const receiptForMatching = useMemo(() => {
@@ -216,6 +217,14 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
     }
   };
 
+  // Bring the preview/detail panel into view when a receipt is chosen (it can be above the
+  // current scroll position when selecting from the bottom of a long list).
+  useEffect(() => {
+    if (selectedReceiptId) {
+      detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [selectedReceiptId]);
+
   const previewFile = (receipt: ReceiptInboxItem) => setSelectedReceiptId(receipt.id);
 
   return (
@@ -301,7 +310,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
               )}
             </div>
 
-            <div className="overflow-hidden rounded-xl border border-ink2/10 bg-paper shadow-sm">
+            <div ref={detailRef} className="overflow-hidden rounded-xl border border-ink2/10 bg-paper shadow-sm scroll-mt-4">
               {selectedReceipt ? (
                 <Tabs value={detailMode} onValueChange={(value) => setDetailMode(value as 'receipt' | 'pair')}>
                   <div className="flex flex-wrap items-start gap-3 border-b border-ink2/10 px-4 py-3">
@@ -425,7 +434,7 @@ function ReceiptRow({
         active ? 'bg-lemon/20' : 'hover:bg-cream/70',
       )}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex min-w-0 items-start gap-3">
         <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-cream">
           <FileText className="h-4 w-4" />
         </div>
