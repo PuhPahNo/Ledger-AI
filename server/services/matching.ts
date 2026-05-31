@@ -1,12 +1,17 @@
-import { and, eq, gte, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { receiptMatches, receipts, transactions, type Receipt, type Transaction } from '../db/schema.js';
+import { accounts, receiptMatches, receipts, transactions, type Receipt, type Transaction } from '../db/schema.js';
 import { reviewReceiptCategoryEvidence } from './categorizationFeedback.js';
 
 export interface MatchResult {
   transaction: Transaction;
   score: number;
   reasons: Record<string, number | string>;
+}
+
+export interface ScoredCandidate extends MatchResult {
+  /** Receipt total equals the transaction amount (within rounding). */
+  exactAmount: boolean;
 }
 
 export interface ReceiptMatchOutcome extends MatchResult {
@@ -26,17 +31,20 @@ export async function matchReceipt(receiptId: string): Promise<ReceiptMatchOutco
 
   const candidates = await candidateTransactions(receipt);
   const scored = candidates
-    .map((transaction) => scoreMatch(receipt, transaction))
+    .map(({ transaction, accountMask }) => {
+      const result = scoreMatch(receipt, transaction, accountMask);
+      return { ...result, exactAmount: isExactAmount(receipt.totalCents, transaction.amountCents) };
+    })
     .sort((a, b) => b.score - a.score);
-  const best = scored[0];
-  if (!best || best.score < SUGGESTED_THRESHOLD) return null;
+  const decision = decideMatch(scored);
+  if (!decision) return null;
+  const { best, attach: attached } = decision;
 
   // Idempotent across re-runs: drop any stale, undecided suggestion before recording the new best.
   await db
     .delete(receiptMatches)
     .where(and(eq(receiptMatches.receiptId, receiptId), eq(receiptMatches.status, 'suggested')));
 
-  const attached = best.score >= AUTO_ATTACH_THRESHOLD;
   await db.insert(receiptMatches).values({
     receiptId,
     transactionId: best.transaction.id,
@@ -113,14 +121,20 @@ export async function attachReceipt(transactionId: string, receiptId: string): P
   return updated ?? null;
 }
 
-async function candidateTransactions(receipt: Receipt): Promise<Transaction[]> {
+interface Candidate {
+  transaction: Transaction;
+  /** Last-4 card mask of the transaction's account, when known. */
+  accountMask: string | null;
+}
+
+async function candidateTransactions(receipt: Receipt): Promise<Candidate[]> {
   const date = new Date(`${receipt.receiptDate}T00:00:00Z`);
   const from = new Date(date);
   from.setUTCDate(from.getUTCDate() - 5);
   const to = new Date(date);
   to.setUTCDate(to.getUTCDate() + 5);
 
-  return db
+  const rows = await db
     .select()
     .from(transactions)
     .where(and(
@@ -132,19 +146,87 @@ async function candidateTransactions(receipt: Receipt): Promise<Transaction[]> {
       or(eq(transactions.receiptStatus, 'missing'), eq(transactions.receiptStatus, 'pending')),
     ))
     .limit(50);
+
+  const accountIds = [...new Set(rows.map((row) => row.accountId).filter((id): id is string => Boolean(id)))];
+  const maskRows = accountIds.length
+    ? await db.select({ id: accounts.id, mask: accounts.mask }).from(accounts).where(inArray(accounts.id, accountIds))
+    : [];
+  const maskByAccount = new Map(maskRows.map((row) => [row.id, row.mask]));
+
+  return rows.map((transaction) => ({
+    transaction,
+    accountMask: transaction.accountId ? maskByAccount.get(transaction.accountId) ?? null : null,
+  }));
 }
 
-export function scoreMatch(receipt: Receipt, transaction: Transaction): MatchResult {
+/**
+ * Decide whether the best-scoring candidate should be auto-attached or left as a suggestion.
+ * Pure so the policy is unit-testable. `scored` must be sorted by descending score.
+ *
+ * Attaches when the score clears the auto-attach bar, OR when there is an *unambiguous* exact
+ * amount + in-window date match whose card doesn't contradict (covers receipts whose payee name
+ * never resembles the bank descriptor, e.g. taxes/invoices). Never attaches when a runner-up is
+ * essentially tied — we can't tell which transaction it belongs to.
+ */
+export function decideMatch(scored: ScoredCandidate[]): { best: ScoredCandidate; attach: boolean } | null {
+  const best = scored[0];
+  if (!best || best.score < SUGGESTED_THRESHOLD) return null;
+
+  const runnerUp = scored[1];
+  const ambiguous = Boolean(runnerUp && runnerUp.score >= SUGGESTED_THRESHOLD && best.score - runnerUp.score < 0.02);
+
+  const exactUnique = best.exactAmount
+    && scored.filter((candidate) => candidate.exactAmount).length === 1
+    && Number(best.reasons.dateScore) > 0
+    && Number(best.reasons.cardScore) >= 0.5; // card matches or is unknown — not a contradiction
+
+  const attach = !ambiguous && (best.score >= AUTO_ATTACH_THRESHOLD || exactUnique);
+  return { best, attach };
+}
+
+/**
+ * Score a receipt against a transaction. Amount and date carry the match; merchant similarity and
+ * the card last-4 are corroborating signals (merchant names on receipts rarely resemble the bank
+ * descriptor, so it can't be a gate). `accountMask` is the transaction account's last-4, if known.
+ */
+export function scoreMatch(receipt: Receipt, transaction: Transaction, accountMask: string | null = null): MatchResult {
   const amountScore = scoreAmount(receipt.totalCents, transaction.amountCents);
   const dateScore = scoreDate(receipt.receiptDate, transaction.date);
   const merchantScore = scoreMerchant(receipt.merchant ?? '', transaction.merchant);
   const businessScore = receipt.businessId && receipt.businessId === transaction.businessId ? 1 : 0.7;
-  const score = round((amountScore * 0.45) + (merchantScore * 0.3) + (dateScore * 0.15) + (businessScore * 0.1));
+  const cardScore = scoreCard(receiptLast4(receipt), accountMask);
+  const score = round(
+    (amountScore * 0.45) + (dateScore * 0.25) + (merchantScore * 0.15) + (cardScore * 0.1) + (businessScore * 0.05),
+  );
   return {
     transaction,
     score,
-    reasons: { amountScore, merchantScore, dateScore, businessScore },
+    reasons: { amountScore, merchantScore, dateScore, cardScore, businessScore },
   };
+}
+
+function isExactAmount(receiptCents: number | null, transactionCents: number): boolean {
+  if (!receiptCents) return false;
+  return Math.abs(Math.abs(receiptCents) - Math.abs(transactionCents)) <= 2;
+}
+
+/** 1 when the receipt's card matches the account, 0 on a known contradiction, 0.5 when unknown. */
+function scoreCard(receiptCardLast4: string | null, accountMask: string | null): number {
+  const receiptDigits = normalizeLast4(receiptCardLast4);
+  const accountDigits = normalizeLast4(accountMask);
+  if (!receiptDigits || !accountDigits) return 0.5;
+  return receiptDigits === accountDigits ? 1 : 0;
+}
+
+function normalizeLast4(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const digits = value.replace(/\D/g, '');
+  return digits.length >= 4 ? digits.slice(-4) : null;
+}
+
+function receiptLast4(receipt: Receipt): string | null {
+  const raw = (receipt.ocrJson as Record<string, unknown> | null | undefined)?.paymentLast4;
+  return typeof raw === 'string' ? raw : null;
 }
 
 function scoreAmount(receiptCents: number | null, transactionCents: number): number {

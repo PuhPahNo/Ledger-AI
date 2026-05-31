@@ -433,7 +433,7 @@ function ReceiptRow({
           <div className="truncate font-bold">{receiptLabel(receipt)}</div>
           <div className="truncate text-xs text-dim">{receipt.fileName ?? receipt.source}</div>
         </div>
-        <Badge variant={receipt.source === 'gmail' ? 'secondary' : 'muted'}>{receipt.source}</Badge>
+        <Badge variant={receipt.source === 'gmail' ? 'secondary' : 'muted'} className="shrink-0 whitespace-nowrap">{receipt.source}</Badge>
       </div>
       <div className="flex flex-wrap items-center gap-2 text-xs text-dim">
         {receipt.businessName && <span>{receipt.businessName}</span>}
