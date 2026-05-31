@@ -247,16 +247,38 @@ function scoreDate(receiptDate: string | null, transactionDate: string): number 
 }
 
 function scoreMerchant(receiptMerchant: string, transactionMerchant: string): number {
+  // Word-overlap similarity (handles reordered/partial names).
   const a = tokens(receiptMerchant);
   const b = tokens(transactionMerchant);
-  if (!a.size || !b.size) return 0;
-  const overlap = [...a].filter((token) => b.has(token)).length;
-  const union = new Set([...a, ...b]).size;
-  return round(overlap / union);
+  let jaccard = 0;
+  if (a.size && b.size) {
+    const overlap = [...a].filter((token) => b.has(token)).length;
+    jaccard = overlap / new Set([...a, ...b]).size;
+  }
+  // Condensed similarity — strips spaces/punctuation/suffixes/TLDs so "Eleven Labs Inc."
+  // and "Elevenlabs.io" both reduce to "elevenlabs". Bank descriptors rarely match the
+  // receipt payee word-for-word, so this catches the common case word overlap misses.
+  const na = condenseMerchant(receiptMerchant);
+  const nb = condenseMerchant(transactionMerchant);
+  let condensed = 0;
+  if (na && nb) {
+    if (na === nb) condensed = 1;
+    else if (na.length >= 4 && nb.length >= 4 && (na.includes(nb) || nb.includes(na))) condensed = 0.9;
+  }
+  return round(Math.max(jaccard, condensed));
 }
 
 function tokens(value: string): Set<string> {
   return new Set(value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter((token) => token.length > 1));
+}
+
+/** Reduce a merchant name to comparable letters: drop TLDs, corporate suffixes, and punctuation. */
+function condenseMerchant(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\.(io|com|net|org|ai|app|co|inc|gov|biz)\b/g, ' ')
+    .replace(/\b(inc|llc|ltd|co|corp|corporation|company|the|payment|payments|pymt|bill|subscription)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, '');
 }
 
 function round(value: number): number {

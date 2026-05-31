@@ -91,6 +91,16 @@ describe('scoreMatch', () => {
     // A confirmed card match should clear the auto-attach bar even with zero merchant overlap.
     expect(matched.score).toBeGreaterThanOrEqual(AUTO_ATTACH_THRESHOLD);
   });
+
+  it('matches "Eleven Labs Inc." to bank descriptor "Elevenlabs.io" via condensed name', () => {
+    const result = scoreMatch(
+      makeReceipt({ merchant: 'Eleven Labs Inc.', totalCents: 2376, receiptDate: '2026-03-25' }),
+      makeTransaction({ merchant: 'Elevenlabs.io', amountCents: -2376, date: '2026-03-26' }),
+    );
+    // Strong amount + date + condensed-merchant match should auto-attach even without card info.
+    expect(Number(result.reasons.merchantScore)).toBeGreaterThanOrEqual(0.9);
+    expect(result.score).toBeGreaterThanOrEqual(AUTO_ATTACH_THRESHOLD);
+  });
 });
 
 describe('decideMatch', () => {

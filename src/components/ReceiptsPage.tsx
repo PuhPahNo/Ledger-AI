@@ -621,9 +621,26 @@ function merchantScore(receiptMerchant: string, transactionMerchant: string): nu
   const a = tokens(receiptMerchant);
   const b = tokens(transactionMerchant);
   if (!a.size || !b.size) return 0.5;
+  let jaccard = 0;
   const overlap = [...a].filter((token) => b.has(token)).length;
-  const union = new Set([...a, ...b]).size;
-  return overlap / union;
+  jaccard = overlap / new Set([...a, ...b]).size;
+  // Condensed match: "Eleven Labs Inc." and "Elevenlabs.io" both reduce to "elevenlabs".
+  const na = condenseMerchant(receiptMerchant);
+  const nb = condenseMerchant(transactionMerchant);
+  let condensed = 0;
+  if (na && nb) {
+    if (na === nb) condensed = 1;
+    else if (na.length >= 4 && nb.length >= 4 && (na.includes(nb) || nb.includes(na))) condensed = 0.9;
+  }
+  return Math.max(jaccard, condensed);
+}
+
+function condenseMerchant(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\.(io|com|net|org|ai|app|co|inc|gov|biz)\b/g, ' ')
+    .replace(/\b(inc|llc|ltd|co|corp|corporation|company|the|payment|payments|pymt|bill|subscription)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, '');
 }
 
 function tokens(value: string): Set<string> {
