@@ -1,5 +1,5 @@
 import { closeDb } from '../db/client.js';
-import { claimNextJob, markJobFailed, markJobSucceeded } from './queue.js';
+import { claimNextJob, enqueue, markJobFailed, markJobSucceeded } from './queue.js';
 import { handleJob } from './handlers.js';
 import {
   enqueueDueCategorizationScan,
@@ -39,6 +39,14 @@ export function startWorkerLoop(options: { pollMs?: number; logger?: WorkerLogge
 
   const done = (async () => {
     logger.log('Ledger AI worker started');
+    // Force one re-match pass on boot so a deploy immediately re-pairs the existing
+    // backlog with the latest matching logic (the periodic sweep is throttled to 6h).
+    try {
+      await enqueue('receipt.rematch', {});
+      logger.log('Queued startup receipt re-match sweep');
+    } catch (error) {
+      logger.error('Failed to queue startup receipt re-match', error);
+    }
     while (!stopping) {
       try {
         if (Date.now() >= nextScheduleCheckAt) {
