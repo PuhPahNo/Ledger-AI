@@ -14,6 +14,7 @@ import { serviceUnavailable } from '../lib/errors.js';
 import { resolveTransactionBusinessId } from './accountAssignment.js';
 import { categorizeTransactionWithDetails, isExcludedFromSpendCategory } from './categorization.js';
 import { createAiCategorySuggestionReview } from './categorizationFeedback.js';
+import { getReceiptTrackingSince } from './appSettings.js';
 
 export const PLAID_TRANSACTION_HISTORY_DAYS = 365;
 
@@ -92,6 +93,8 @@ export async function syncPlaidConnection(
   let cursor: string | undefined = options.resetCursor ? undefined : connection.plaidCursor ?? undefined;
   let addedCount = 0;
   let hasMore = true;
+  // Spend dated before this cutoff isn't expected to have a receipt (imported as 'waived').
+  const receiptTrackingSince = await getReceiptTrackingSince();
 
   while (hasMore) {
     const res = await client.transactionsSync({
@@ -105,12 +108,14 @@ export async function syncPlaidConnection(
     for (const txn of data.added ?? []) {
       const inserted = await upsertTransaction(connectionId, connection.businessId ?? undefined, txn, {
         allowAiCategorization: options.allowAiCategorization,
+        receiptTrackingSince,
       });
       if (inserted) addedCount += 1;
     }
     for (const txn of data.modified ?? []) {
       await upsertTransaction(connectionId, connection.businessId ?? undefined, txn, {
         allowAiCategorization: options.allowAiCategorization,
+        receiptTrackingSince,
       });
     }
     for (const removed of data.removed ?? []) {
@@ -162,7 +167,7 @@ async function upsertTransaction(
   connectionId: string,
   fallbackBusinessId: string | undefined,
   raw: Record<string, any>,
-  options: { allowAiCategorization?: boolean } = {},
+  options: { allowAiCategorization?: boolean; receiptTrackingSince?: string | null } = {},
 ): Promise<boolean> {
   const account = await db.query.accounts.findFirst({ where: eq(accounts.plaidAccountId, raw.account_id) });
   const businessId = resolveTransactionBusinessId(account?.businessId, fallbackBusinessId);
@@ -189,7 +194,12 @@ async function upsertTransaction(
   const appliedCategoryEvidence = shouldReviewAi
     ? { reason: 'ai_suggestion_deferred_to_review', suggestion: categorization }
     : categorization.evidence;
-  const receiptStatus = await receiptStatusForPlaidTransaction(amountCents, appliedCategoryId);
+  const receiptStatus = await receiptStatusForPlaidTransaction(
+    amountCents,
+    appliedCategoryId,
+    raw.date,
+    options.receiptTrackingSince ?? null,
+  );
   const sourceLabel = account ? `${account.name}${account.mask ? ` ${account.mask}` : ''}` : `Plaid ${connectionId.slice(0, 8)}`;
 
   const [saved] = await db.insert(transactions).values({
@@ -231,6 +241,8 @@ async function upsertTransaction(
         ELSE excluded.category_confidence
       END`,
       receiptStatus: sql`CASE
+        WHEN ${transactions.receiptStatus} IN ('matched', 'waived')
+          THEN ${transactions.receiptStatus}
         WHEN ${transactions.categorySource} IN ('manual', 'user_confirmed_rule', 'receipt_evidence')
           THEN ${transactions.receiptStatus}
         ELSE excluded.receipt_status
@@ -252,11 +264,20 @@ async function upsertTransaction(
   return !existing;
 }
 
-async function receiptStatusForPlaidTransaction(amountCents: number, categoryId: string | null): Promise<'missing' | 'n/a'> {
+async function receiptStatusForPlaidTransaction(
+  amountCents: number,
+  categoryId: string | null,
+  date: string | null | undefined,
+  receiptTrackingSince: string | null,
+): Promise<'missing' | 'n/a' | 'waived'> {
   if (amountCents >= 0) return 'n/a';
-  if (!categoryId) return 'missing';
-  const category = await db.query.categories.findFirst({ where: eq(categories.id, categoryId) });
-  return category && isExcludedFromSpendCategory(category) ? 'n/a' : 'missing';
+  if (categoryId) {
+    const category = await db.query.categories.findFirst({ where: eq(categories.id, categoryId) });
+    if (category && isExcludedFromSpendCategory(category)) return 'n/a';
+  }
+  // Spend that predates receipt tracking isn't expected to have a receipt.
+  if (receiptTrackingSince && date && date < receiptTrackingSince) return 'waived';
+  return 'missing';
 }
 
 async function fallbackUncategorizedCategoryId(): Promise<string | null> {

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
@@ -13,6 +13,7 @@ import {
   resolveCategorizationReviewItem,
 } from '../services/categorizationFeedback.js';
 import { normalizeTransactionOverride } from '../services/transactionOverrides.js';
+import { getReceiptTrackingSince, setReceiptTrackingSince } from '../services/appSettings.js';
 import {
   toApiAlert,
   toApiBusiness,
@@ -245,6 +246,41 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(transactions.id, params.id))
       .limit(1);
     return toApiTransaction(row[0] as any);
+  });
+
+  // Receipt-tracking cutoff: the date before which spend isn't expected to have a receipt.
+  app.get('/transactions/receipt-tracking', async (request) => {
+    await requireUser(request);
+    const query = z.object({
+      before: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    }).parse(request.query);
+    const since = await getReceiptTrackingSince();
+    let waivable = 0;
+    if (query.before) {
+      const [row] = await db
+        .select({ count: sql<number>`count(${transactions.id})::int` })
+        .from(transactions)
+        .where(and(eq(transactions.receiptStatus, 'missing'), lt(transactions.date, query.before)));
+      waivable = Number(row?.count ?? 0);
+    }
+    return { since, waivable };
+  });
+
+  // Bulk-waive missing receipts before a cutoff date, and remember that date so future imports
+  // of older spend are auto-waived. Only flips 'missing' -> 'waived' (won't touch matched/n-a).
+  app.post('/transactions/waive-missing', async (request) => {
+    const user = await requireUser(request);
+    const body = z.object({
+      before: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    }).parse(request.body);
+    const updated = await db
+      .update(transactions)
+      .set({ receiptStatus: 'waived', updatedAt: new Date() })
+      .where(and(eq(transactions.receiptStatus, 'missing'), lt(transactions.date, body.before)))
+      .returning({ id: transactions.id });
+    await setReceiptTrackingSince(body.before);
+    await audit(request, user, 'waive_missing_receipts', 'transaction', 'bulk', { before: body.before, count: updated.length });
+    return { waived: updated.length, since: body.before };
   });
 
   app.get('/categories', async (request) => {
@@ -1129,7 +1165,7 @@ function transactionSortColumn(sort: 'date' | 'amount' | 'largest' | 'merchant' 
 
 type TransactionDirection = 'all' | 'inflow' | 'outflow' | 'operating-outflow' | 'transfer';
 
-const receiptStatuses = ['matched', 'pending', 'missing', 'n/a'] as const;
+const receiptStatuses = ['matched', 'pending', 'missing', 'n/a', 'waived'] as const;
 type ReceiptStatus = typeof receiptStatuses[number];
 
 function isReceiptStatus(value: string): value is ReceiptStatus {

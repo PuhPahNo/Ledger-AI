@@ -51,7 +51,7 @@ const transactionFilterSchema = z.object({
   q: emptyToNull.describe('Merchant/category/account/note search text.'),
   accountIds: z.array(z.string()).default([]),
   categories: z.array(z.string()).default([]),
-  receipts: z.array(z.enum(['matched', 'pending', 'missing', 'n/a'])).default([]),
+  receipts: z.array(z.enum(['matched', 'pending', 'missing', 'n/a', 'waived'])).default([]),
   direction: z.enum(['all', 'inflow', 'outflow', 'operating-outflow', 'transfer']).default('all'),
 });
 

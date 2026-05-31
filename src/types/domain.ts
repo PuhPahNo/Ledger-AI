@@ -19,7 +19,8 @@ export type ReceiptStatus =
   | 'matched'   // a receipt is attached and verified
   | 'pending'   // a receipt was uploaded/found but not yet matched
   | 'missing'   // no receipt; user needs to upload or it needs gmail scan
-  | 'n/a';      // inflow / non-receiptable
+  | 'n/a'       // inflow / non-receiptable
+  | 'waived';   // intentionally not expected (e.g. spend before receipt tracking began)
 
 export type ReceiptSource = 'upload' | 'gmail';
 

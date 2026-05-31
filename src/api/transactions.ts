@@ -110,6 +110,35 @@ export function updateTransaction(
   }).then(mapTransaction);
 }
 
+export interface ReceiptTracking {
+  since: string | null;
+  waivable: number;
+}
+
+/** Current receipt-tracking cutoff, plus how many missing receipts predate `before` (if given). */
+export function getReceiptTracking(before?: string): Promise<ReceiptTracking> {
+  if (useMockApi) {
+    const waivable = before
+      ? TRANSACTIONS.filter((t) => t.receipt === 'missing' && t.date < before).length
+      : 0;
+    return Promise.resolve({ since: null, waivable });
+  }
+  const query = before ? `?before=${encodeURIComponent(before)}` : '';
+  return http<ReceiptTracking>(`/transactions/receipt-tracking${query}`);
+}
+
+/** Bulk-mark missing receipts dated before `before` as waived, and set the tracking cutoff. */
+export function waiveMissingReceipts(before: string): Promise<{ waived: number; since: string }> {
+  if (useMockApi) {
+    const waived = TRANSACTIONS.filter((t) => t.receipt === 'missing' && t.date < before).length;
+    return Promise.resolve({ waived, since: before });
+  }
+  return http<{ waived: number; since: string }>('/transactions/waive-missing', {
+    method: 'POST',
+    body: JSON.stringify({ before }),
+  });
+}
+
 function compareTransactions(
   a: Transaction,
   b: Transaction,

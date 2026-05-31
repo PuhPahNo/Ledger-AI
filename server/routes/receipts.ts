@@ -17,7 +17,7 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
   app.get('/receipts', async (request) => {
     await requireUser(request);
     const query = z.object({
-      status: z.enum(['matched', 'pending', 'missing', 'n/a']).optional(),
+      status: z.enum(['matched', 'pending', 'missing', 'n/a', 'waived']).optional(),
       unmatched: z.enum(['true', 'false']).optional().transform((value) => value === 'true'),
       biz: z.string().optional(),
       source: z.enum(['upload', 'gmail', 'all']).optional().default('all'),

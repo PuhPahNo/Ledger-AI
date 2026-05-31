@@ -18,7 +18,7 @@ export const userRole = pgEnum('user_role', ['admin']);
 export const connectionKind = pgEnum('connection_kind', ['bank', 'card', 'gmail']);
 export const connectionStatus = pgEnum('connection_status', ['live', 'reauth', 'disconnected']);
 export const accountKind = pgEnum('account_kind', ['checking', 'savings', 'credit', 'other']);
-export const receiptStatus = pgEnum('receipt_status', ['matched', 'pending', 'missing', 'n/a']);
+export const receiptStatus = pgEnum('receipt_status', ['matched', 'pending', 'missing', 'n/a', 'waived']);
 export const receiptSource = pgEnum('receipt_source', ['upload', 'gmail']);
 export const receiptMatchStatus = pgEnum('receipt_match_status', ['suggested', 'accepted', 'rejected', 'auto']);
 export const alertKind = pgEnum('alert_kind', ['dup', 'missing', 'orphan', 'spike', 'reauth']);
@@ -370,6 +370,13 @@ export const exportJobs = pgTable('export_jobs', {
   fileKey: text('file_key'),
   error: text('error'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Simple workspace-wide key/value settings (e.g. receipt_tracking_since).
+export const appSettings = pgTable('app_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

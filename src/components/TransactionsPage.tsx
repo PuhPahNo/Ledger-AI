@@ -23,6 +23,7 @@ import {
   listCategories,
   listTransactions,
   uploadReceipt,
+  waiveMissingReceipts,
 } from '@/api';
 import type {
   Account,
@@ -42,6 +43,7 @@ import { AppShell } from './AppShell';
 import { TransactionDrawer } from './TransactionDrawer';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/cn';
@@ -98,6 +100,8 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
     receipt: false,
   });
   const [missingOutflowCount, setMissingOutflowCount] = useState(0);
+  const [waiveBefore, setWaiveBefore] = useState(ninetyDaysAgo());
+  const [waiving, setWaiving] = useState(false);
 
   useEffect(() => {
     setBusiness(initialFilters?.business ?? 'all');
@@ -163,6 +167,28 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
       .then((summary) => setMissingOutflowCount(summary.rows))
       .catch(() => setMissingOutflowCount(0));
   }, [from, to, refreshKey]);
+
+  const handleWaiveOld = async () => {
+    if (!waiveBefore) return;
+    setWaiving(true);
+    try {
+      const result = await waiveMissingReceipts(waiveBefore);
+      toast({
+        variant: 'success',
+        title: `Waived ${result.waived} receipt${result.waived === 1 ? '' : 's'}`,
+        description: `Spend before ${waiveBefore} is no longer flagged as missing.`,
+      });
+      setRefreshKey((key) => key + 1);
+    } catch (waiveError) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not waive receipts',
+        description: waiveError instanceof Error ? waiveError.message : 'Try again.',
+      });
+    } finally {
+      setWaiving(false);
+    }
+  };
 
   const businessById = useMemo(() => new Map(businesses.map((item) => [item.id, item])), [businesses]);
   const accountById = useMemo(() => new Map(accounts.map((item) => [item.id, item])), [accounts]);
@@ -420,7 +446,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
                 onToggle={() => toggleGroup('receipt')}
               >
                 <div className="grid grid-cols-2 gap-1">
-                  {(['missing', 'pending', 'matched', 'n/a'] as const).map((status) => (
+                  {(['missing', 'pending', 'matched', 'n/a', 'waived'] as const).map((status) => (
                     <button
                       key={status}
                       type="button"
@@ -438,6 +464,28 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
                       {status}
                     </button>
                   ))}
+                </div>
+
+                <div className="mt-3 border-t border-ink2/10 pt-3">
+                  <div className="font-mono text-[10px] font-medium uppercase tracking-wider text-dim">
+                    Waive old receipts
+                  </div>
+                  <p className="mt-1 text-[11px] leading-snug text-dim">
+                    Mark spend before this date as not needing a receipt (e.g. history pulled before
+                    you started collecting receipts).
+                  </p>
+                  <div className="mt-2 flex items-center gap-2">
+                    <Input
+                      type="date"
+                      value={waiveBefore}
+                      max={today()}
+                      onChange={(event) => setWaiveBefore(event.target.value)}
+                      className="h-8 flex-1 text-xs"
+                    />
+                    <Button size="sm" variant="outline" disabled={waiving || !waiveBefore} onClick={handleWaiveOld}>
+                      {waiving ? 'Waiving…' : 'Waive'}
+                    </Button>
+                  </div>
                 </div>
               </FacetGroup>
             </aside>
@@ -784,6 +832,12 @@ function today(): string {
 
 function startOfMonth(): string {
   return `${new Date().toISOString().slice(0, 7)}-01`;
+}
+
+function ninetyDaysAgo(): string {
+  const date = new Date();
+  date.setDate(date.getDate() - 90);
+  return date.toISOString().slice(0, 10);
 }
 
 function shiftDays(value: string, delta: number): string {
