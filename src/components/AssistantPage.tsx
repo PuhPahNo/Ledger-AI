@@ -3,6 +3,7 @@ import { Check, Loader2, Send, Sparkles, Wrench } from 'lucide-react';
 import { confirmAssistantAction, sendAssistantMessage, uploadReceipt } from '@/api';
 import type {
   AssistantApprovalRequest,
+  AssistantArtifactAction,
   AssistantArtifact,
   AssistantResponse,
   AssistantToolEvent,
@@ -200,7 +201,7 @@ export function AssistantPage({ user, onViewChange, onLogout }: Props) {
                 </div>
               )}
               {messages.map((message) => (
-                <MessageBubble key={message.id} message={message} onConfirm={confirm} onAsk={ask} busy={busy} />
+                <MessageBubble key={message.id} message={message} onConfirm={confirm} onAsk={ask} onViewChange={onViewChange} busy={busy} />
               ))}
               {busy && <LiveToolCallPanel live={live} />}
             </div>
@@ -242,11 +243,13 @@ function MessageBubble({
   message,
   onConfirm,
   onAsk,
+  onViewChange,
   busy,
 }: {
   message: ChatMessage;
   onConfirm: (approval: AssistantApprovalRequest) => void;
   onAsk: (message: string) => void;
+  onViewChange?: (view: AppView) => void;
   busy: boolean;
 }) {
   if (message.role === 'user') {
@@ -262,7 +265,7 @@ function MessageBubble({
         <RichText text={message.text} />
       </div>
       {message.toolEvents.length > 0 && <ToolEventStrip events={message.toolEvents} />}
-      {message.artifacts.map((artifact) => <ArtifactView key={artifact.id} artifact={artifact} />)}
+      {message.artifacts.map((artifact) => <ArtifactView key={artifact.id} artifact={artifact} onViewChange={onViewChange} />)}
       {message.approvals.map((approval) => (
         <ApprovalCard key={approval.id} approval={approval} onConfirm={onConfirm} busy={busy} />
       ))}
@@ -356,11 +359,54 @@ function ApprovalCard({ approval, onConfirm, busy }: { approval: AssistantApprov
   );
 }
 
-function ArtifactView({ artifact }: { artifact: AssistantArtifact }) {
-  if (artifact.type === 'metric_grid') return <MetricGrid artifact={artifact} />;
-  if (artifact.type === 'chart') return <ChartArtifact artifact={artifact} />;
-  if (artifact.type === 'transactions') return <TransactionsArtifact artifact={artifact} />;
-  return <TableArtifact artifact={artifact} />;
+function ArtifactView({ artifact, onViewChange }: { artifact: AssistantArtifact; onViewChange?: (view: AppView) => void }) {
+  return (
+    <div className="space-y-2">
+      {artifact.type === 'metric_grid' && <MetricGrid artifact={artifact} />}
+      {artifact.type === 'chart' && <ChartArtifact artifact={artifact} />}
+      {artifact.type === 'transactions' && <TransactionsArtifact artifact={artifact} />}
+      {artifact.type === 'table' && <TableArtifact artifact={artifact} />}
+      <ArtifactEvidence artifact={artifact} onViewChange={onViewChange} />
+    </div>
+  );
+}
+
+function ArtifactEvidence({ artifact, onViewChange }: { artifact: AssistantArtifact; onViewChange?: (view: AppView) => void }) {
+  if (!artifact.sources?.length && !artifact.actions?.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-ink2/10 bg-paper/70 px-3 py-2 text-xs text-dim">
+      {artifact.sources?.map((source, index) => (
+        <span key={`${source.type}-${index}`} className="font-medium">
+          Evidence: {source.ids?.length ?? 0} {sourceLabel(source.type)}
+        </span>
+      ))}
+      <span className="flex-1" />
+      {artifact.actions?.map((action) => (
+        <Button key={`${action.view}-${action.label}`} type="button" variant="outline" size="sm" onClick={() => handleArtifactAction(action, onViewChange)}>
+          {action.label}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+function handleArtifactAction(action: AssistantArtifactAction, onViewChange?: (view: AppView) => void) {
+  onViewChange?.(action.view as AppView);
+}
+
+function sourceLabel(type: string): string {
+  switch (type) {
+    case 'transactions':
+      return 'transaction rows';
+    case 'receipts':
+      return 'receipt rows';
+    case 'cash_flow':
+      return 'cash-flow periods';
+    case 'owner_insights':
+      return 'owner insight rows';
+    default:
+      return 'source rows';
+  }
 }
 
 function MetricGrid({ artifact }: { artifact: Extract<AssistantArtifact, { type: 'metric_grid' }> }) {

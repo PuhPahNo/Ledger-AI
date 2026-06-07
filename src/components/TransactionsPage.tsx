@@ -79,9 +79,9 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
   const [activeView, setActiveView] = useState<string>('all');
   const [business, setBusiness] = useState(initialFilters?.business ?? 'all');
   const [accountIds, setAccountIds] = useState<string[]>(initialFilters?.accountIds ?? []);
-  const [categoryName, setCategoryName] = useState('all');
-  const [receipts, setReceipts] = useState<ReceiptStatus[]>([]);
-  const [direction, setDirection] = useState<TransactionDirection>('all');
+  const [categoryName, setCategoryName] = useState(initialFilters?.categories?.[0] ?? 'all');
+  const [receipts, setReceipts] = useState<ReceiptStatus[]>(initialFilters?.receipts ?? []);
+  const [direction, setDirection] = useState<TransactionDirection>(initialFilters?.direction ?? 'all');
   const [query, setQuery] = useState(initialFilters?.query ?? '');
   const [from, setFrom] = useState(initialFilters?.from ?? defaultFrom());
   const [to, setTo] = useState(initialFilters?.to ?? today());
@@ -106,6 +106,9 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
   useEffect(() => {
     setBusiness(initialFilters?.business ?? 'all');
     setAccountIds(initialFilters?.accountIds ?? []);
+    setCategoryName(initialFilters?.categories?.[0] ?? 'all');
+    setReceipts(initialFilters?.receipts ?? []);
+    setDirection(initialFilters?.direction ?? 'all');
     setQuery(initialFilters?.query ?? '');
     setFrom(initialFilters?.from ?? defaultFrom());
     setTo(initialFilters?.to ?? today());

@@ -87,7 +87,7 @@ export default function App() {
   if (view === 'admin') return <AdminPage user={user} onViewChange={setView} onLogout={handleLogout} />;
   if (view === 'balances') return <AccountBalancesPage user={user} onViewChange={setView} onLogout={handleLogout} />;
   if (view === 'cash-flow') return <CashFlowPage user={user} onViewChange={setView} onLogout={handleLogout} />;
-  if (view === 'insights') return <OwnerInsightsPage user={user} onViewChange={setView} onLogout={handleLogout} />;
+  if (view === 'insights') return <OwnerInsightsPage user={user} onViewChange={setView} onOpenTransactions={openTransactions} onLogout={handleLogout} />;
   if (view === 'assistant') return <AssistantPage user={user} onViewChange={setView} onLogout={handleLogout} />;
   if (view === 'receipts') return <ReceiptsPage user={user} onViewChange={setView} onLogout={handleLogout} />;
   if (view === 'transactions') {

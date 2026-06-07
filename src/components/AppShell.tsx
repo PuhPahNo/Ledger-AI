@@ -36,6 +36,7 @@ import { useToast } from '@/hooks/useToast';
 import { useTheme } from '@/hooks/useTheme';
 import { cn } from '@/lib/cn';
 import { CategorizationReviewCenter } from './CategorizationReviewCenter';
+import { LogoMark } from './LogoMark';
 
 interface NavItem {
   id: AppView;
@@ -206,9 +207,7 @@ function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedR
   return (
     <aside className="sticky top-3 hidden h-[calc(100vh-24px)] w-[220px] shrink-0 flex-col rounded-xl border border-ink2/10 bg-paper shadow-sm md:flex">
       <div className="flex items-center gap-2.5 border-b border-ink2/10 px-4 py-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-inverse font-display text-lg font-bold text-inverse-foreground">
-          L
-        </div>
+        <LogoMark className="h-9 w-9" />
         <div className="min-w-0">
           <div className="truncate font-display text-sm font-bold tracking-tight text-ink">Ledger AI</div>
           <div className="truncate font-mono text-[9px] uppercase tracking-wider text-dim">Multi-business</div>
@@ -280,12 +279,11 @@ function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedR
 }
 
 function ProfileFooter({ user, onLogout }: { user?: CurrentUser; onLogout?: () => void }) {
-  const initial = (user?.displayName || user?.username || 'A').slice(0, 1).toUpperCase();
   return (
     <ProfileMenu user={user} onLogout={onLogout}>
       <div className="mt-1 flex items-center gap-2.5 rounded-lg p-2 hover:bg-cream cursor-pointer">
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-coral font-bold text-on-coral">
-          {initial}
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-cream text-dim ring-1 ring-ink2/10">
+          <UserRound className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1 text-left">
           <div className="truncate text-xs font-bold text-ink">{user?.displayName ?? 'Admin'}</div>

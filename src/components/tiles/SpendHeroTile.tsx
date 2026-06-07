@@ -28,6 +28,7 @@ interface HeroStat {
 
 interface HeroView {
   badge: string;
+  rangeLabel: string;
   total: number;
   signed: boolean;
   deltaPct: number;
@@ -56,6 +57,9 @@ export function SpendHeroTile({ summary, contextLabel, detailLabel, mode, onMode
   // (sage-ink is nearly invisible against the dark background).
   const positiveGreen = theme === 'dark' ? colors.sage : colors.sageInk;
   const view = viewModel(summary, mode, inkLine, positiveGreen);
+  const labels = summary.flowBuckets?.length
+    ? summary.flowBuckets.map((bucket) => bucket.label)
+    : summary.trailingMonthLabels;
   const up = view.deltaPct >= 0;
   return (
     <Tile tone="cream" pad="lg" colSpan={8} rowSpan={2} className="gap-4">
@@ -87,7 +91,7 @@ export function SpendHeroTile({ summary, contextLabel, detailLabel, mode, onMode
           <Sparkline
             points={view.points}
             values={view.values}
-            labels={summary.trailingMonthLabels}
+            labels={labels}
             segments={view.segments}
             series={view.series}
             baseColor={view.baseColor}
@@ -96,7 +100,7 @@ export function SpendHeroTile({ summary, contextLabel, detailLabel, mode, onMode
           />
         </div>
         <dl className="grid w-[180px] gap-1.5 text-xs text-dim">
-          <div className="font-bold text-ink">Trailing 12 months</div>
+          <div className="font-bold text-ink">{view.rangeLabel}</div>
           {detailLabel && <div className="text-ink">{detailLabel}</div>}
           {view.stats.map((stat) => (
             <div key={stat.label} className="flex justify-between gap-2">
@@ -113,29 +117,36 @@ export function SpendHeroTile({ summary, contextLabel, detailLabel, mode, onMode
 }
 
 function viewModel(summary: SpendSummary, mode: DashboardFlowMode, inkLine: string, positiveGreen: string): HeroView {
-  const inflowValues = summary.trailingInflowMonthCents ?? [];
-  const outflowValues = summary.trailingOutflowMonthCents ?? summary.trailingMonthCents ?? [];
+  const buckets = summary.flowBuckets?.length ? summary.flowBuckets : null;
+  const inflowValues = buckets?.map((bucket) => bucket.inflowCents) ?? summary.trailingInflowMonthCents ?? [];
+  const outflowValues = buckets?.map((bucket) => bucket.outflowCents) ?? summary.trailingOutflowMonthCents ?? summary.trailingMonthCents ?? [];
+  const outflowSegments = buckets?.map((bucket) => bucket.outflowBusinessCents) ?? summary.trailingOutflowBusinessCents ?? summary.trailingMonthBusinessCents;
+  const inflowSegments = buckets?.map((bucket) => bucket.inflowBusinessCents) ?? summary.trailingInflowBusinessCents;
+  const rangeLabel = rangeLabelFor(summary.bucketGranularity);
+  const avgLabel = avgLabelFor(summary.bucketGranularity);
   if (mode === 'inflow') {
     return {
       badge: 'INFLOW',
+      rangeLabel,
       total: summary.inflow ?? 0,
       signed: false,
       deltaPct: summary.inflowDeltaPct ?? 0,
       points: normalizedPoints(inflowValues),
       values: inflowValues,
-      segments: summary.trailingInflowBusinessCents,
+      segments: inflowSegments,
       series: undefined,
       baseColor: positiveGreen,
       highlightColor: positiveGreen,
       stats: [
-        { label: 'Last month', value: summary.lastInflow ?? 0 },
-        { label: 'Avg / month', value: summary.avgInflow ?? 0 },
+        { label: 'Prior period', value: summary.lastInflow ?? 0 },
+        { label: avgLabel, value: averageDollars(inflowValues) },
       ],
     };
   }
   if (mode === 'both') {
     return {
       badge: 'FLOW',
+      rangeLabel,
       total: summary.net ?? 0,
       signed: true,
       deltaPct: summary.netDeltaPct ?? 0,
@@ -157,18 +168,19 @@ function viewModel(summary: SpendSummary, mode: DashboardFlowMode, inkLine: stri
   }
   return {
     badge: 'SPEND',
+    rangeLabel,
     total: summary.outflow ?? summary.total,
     signed: false,
     deltaPct: summary.outflowDeltaPct ?? summary.deltaPct,
-    points: summary.trailingMonths,
+    points: normalizedPoints(outflowValues.length ? outflowValues : summary.trailingMonths),
     values: outflowValues,
-    segments: summary.trailingOutflowBusinessCents ?? summary.trailingMonthBusinessCents,
+    segments: outflowSegments,
     series: undefined,
     baseColor: inkLine,
     highlightColor: colors.coral,
     stats: [
-      { label: 'Last month', value: summary.lastOutflow ?? summary.lastMonth },
-      { label: 'Avg / month', value: summary.avgOutflow ?? summary.avgMonth },
+      { label: 'Prior period', value: summary.lastOutflow ?? summary.lastMonth },
+      { label: avgLabel, value: averageDollars(outflowValues) },
     ],
   };
 }
@@ -176,6 +188,24 @@ function viewModel(summary: SpendSummary, mode: DashboardFlowMode, inkLine: stri
 function normalizedPoints(values: number[]): number[] {
   const max = Math.max(...values, 1);
   return values.map((value) => Number((value / max).toFixed(3)));
+}
+
+function rangeLabelFor(granularity: SpendSummary['bucketGranularity']): string {
+  if (granularity === 'day') return 'Daily view';
+  if (granularity === 'week') return 'Weekly view';
+  if (granularity === 'month') return 'Monthly view';
+  return 'Trailing 12 months';
+}
+
+function avgLabelFor(granularity: SpendSummary['bucketGranularity']): string {
+  if (granularity === 'day') return 'Avg / day';
+  if (granularity === 'week') return 'Avg / week';
+  return 'Avg / month';
+}
+
+function averageDollars(values: number[]): number {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length / 100;
 }
 
 function fmt$kSigned(value: number): string {

@@ -70,6 +70,7 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
     from: timeWindow.from,
     to: timeWindow.to,
     label: timeWindow.label,
+    bucketPreset: timePreset,
   });
 
   useEffect(() => {

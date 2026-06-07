@@ -9,9 +9,9 @@ import { enqueue } from '../jobs/queue.js';
 import { sha256Buffer } from '../lib/crypto.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
-import { matchReceipt } from '../services/matching.js';
+import { matchReceipt, receiptMatchCandidates } from '../services/matching.js';
 import { storage } from '../services/storage.js';
-import { toApiReceipt } from './mappers.js';
+import { toApiReceipt, toApiTransaction } from './mappers.js';
 
 export async function receiptRoutes(app: FastifyInstance): Promise<void> {
   app.get('/receipts', async (request) => {
@@ -61,6 +61,21 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
     if (!receipt) notFound('Receipt not found');
     const downloadUrl = receipt.fileKey ? await storage().getSignedDownloadUrl(receipt.fileKey, receipt.fileName ?? undefined) : null;
     return { ...toApiReceipt(receipt), downloadUrl };
+  });
+
+  app.get('/receipts/:id/candidates', async (request) => {
+    await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const candidates = await receiptMatchCandidates(params.id);
+    return candidates.map((candidate) => ({
+      transaction: toApiTransaction(candidate.transaction as any),
+      score: candidate.score,
+      reasons: candidate.reasons,
+      exactAmount: candidate.exactAmount,
+      ambiguous: candidate.ambiguous,
+      suggested: candidate.suggested,
+      wouldAutoAttach: candidate.wouldAutoAttach,
+    }));
   });
 
   app.patch('/receipts/:id', async (request) => {

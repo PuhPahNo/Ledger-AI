@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { LogoMark } from '@/components/LogoMark';
 
 interface Props {
   onLogin: (user: CurrentUser) => void;
@@ -41,9 +42,7 @@ export function LoginPage({ onLogin }: Props) {
     <main className="grid min-h-screen place-items-center bg-bg p-6">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-inverse font-display text-xl font-bold text-inverse-foreground">
-            L
-          </div>
+          <LogoMark className="h-10 w-10" />
           <div>
             <div className="font-display text-2xl font-bold tracking-tight">Ledger AI</div>
             <div className="text-xs text-dim">Sign in to continue</div>

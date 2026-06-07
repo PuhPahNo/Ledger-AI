@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AUTO_ATTACH_THRESHOLD,
+  annotateCandidates,
   decideMatch,
   scoreMatch,
   type ScoredCandidate,
@@ -139,5 +140,16 @@ describe('decideMatch', () => {
   it('returns null when nothing clears the suggested floor', () => {
     expect(decideMatch([scored({ score: 0.3 })])).toBeNull();
     expect(decideMatch([])).toBeNull();
+  });
+
+  it('annotates the best tied candidate as ambiguous instead of auto-safe', () => {
+    const [best, second] = annotateCandidates([
+      scored({ score: 0.86 }),
+      scored({ score: 0.855, transaction: makeTransaction({ id: 't2' }) }),
+    ]);
+    expect(best.suggested).toBe(true);
+    expect(best.ambiguous).toBe(true);
+    expect(best.wouldAutoAttach).toBe(false);
+    expect(second.suggested).toBe(false);
   });
 });

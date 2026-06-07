@@ -178,20 +178,39 @@ export interface AssistantMetric {
   tone: AssistantTone;
 }
 
+export interface AssistantArtifactAction {
+  label: string;
+  view: AppViewName;
+  filters?: Record<string, string | string[] | boolean | null>;
+}
+
+export interface AssistantArtifactSource {
+  type: 'transactions' | 'receipts' | 'cash_flow' | 'owner_insights';
+  ids?: string[];
+  filters?: Record<string, string | string[] | boolean | null>;
+}
+
+export type AppViewName = 'dashboard' | 'transactions' | 'receipts' | 'cash-flow' | 'balances' | 'insights' | 'assistant' | 'admin';
+
+interface AssistantArtifactEvidence {
+  actions?: AssistantArtifactAction[];
+  sources?: AssistantArtifactSource[];
+}
+
 export type AssistantArtifact =
   | {
       type: 'metric_grid';
       id: string;
       title: string;
       metrics: AssistantMetric[];
-    }
+    } & AssistantArtifactEvidence
   | {
       type: 'table';
       id: string;
       title: string;
       columns: Array<{ key: string; label: string; align?: 'left' | 'right' }>;
       rows: Array<{ cells: string[] }>;
-    }
+    } & AssistantArtifactEvidence
   | {
       type: 'transactions';
       id: string;
@@ -206,7 +225,7 @@ export type AssistantArtifact =
         amountCents: number;
         receiptStatus: string;
       }>;
-    }
+    } & AssistantArtifactEvidence
   | {
       type: 'chart';
       id: string;
@@ -215,7 +234,7 @@ export type AssistantArtifact =
       valueType: 'currency_cents' | 'count' | 'percent';
       labels: string[];
       series: Array<{ name: string; color: string | null; values: number[] }>;
-    };
+    } & AssistantArtifactEvidence;
 
 export interface AssistantApprovalRequest {
   id: string;
@@ -279,6 +298,27 @@ export interface Connection {
   lastSyncAt?: string | null;
   txns: number;
   biz: BusinessId | 'all';
+  health?: ConnectionHealth;
+}
+
+export interface ConnectionHealth {
+  lastSyncAt: string | null;
+  lastWebhookAt: string | null;
+  lastPubSubAt: string | null;
+  gmailWatchExpiration: string | null;
+  gmailWatchRenewalDue: boolean;
+  lastJobType: string | null;
+  lastJobStatus: string | null;
+  lastJobAt: string | null;
+  lastJobError: string | null;
+  queuedJobCount: number;
+  failedJobCount: number;
+  actions: {
+    canSync: boolean;
+    canBackfill: boolean;
+    gmailBackfillDays: number[];
+    plaidBackfillMonths: number[];
+  };
 }
 
 export type AccountKind = 'checking' | 'savings' | 'credit' | 'other';
@@ -352,9 +392,27 @@ export interface CategorizationReviewItem {
       uncategorized: number;
       conflicts: number;
     };
+    proposedRule?: {
+      matchKind: string;
+      pattern: string;
+      priority: number;
+    };
   };
   createdAt: string;
   updatedAt: string;
+}
+
+export type FlowBucketGranularity = 'day' | 'week' | 'month';
+
+export interface FlowBucket {
+  label: string;
+  from: string;
+  to: string;
+  inflowCents: number;
+  outflowCents: number;
+  netCents: number;
+  inflowBusinessCents: TrailingMonthBusinessSpend[];
+  outflowBusinessCents: TrailingMonthBusinessSpend[];
 }
 
 /** Aggregate the dashboard hero card uses. */
@@ -373,6 +431,8 @@ export interface SpendSummary {
   inflowDeltaPct?: number;
   outflowDeltaPct?: number;
   netDeltaPct?: number;
+  bucketGranularity?: FlowBucketGranularity;
+  flowBuckets?: FlowBucket[];
   trailingMonths: number[];   // 0..1 normalized sparkline points
   trailingMonthLabels?: string[];
   trailingMonthCents?: number[];
@@ -405,6 +465,39 @@ export interface TrailingMonthBusinessSpend {
   businessName: string;
   color: string;
   cents: number;
+}
+
+export interface ReceiptMatchCandidate {
+  transaction: Transaction;
+  score: number;
+  reasons: Record<string, number | string>;
+  exactAmount: boolean;
+  ambiguous: boolean;
+  suggested: boolean;
+  wouldAutoAttach: boolean;
+}
+
+export type CloseReadinessSeverity = 'blocker' | 'review' | 'ready';
+
+export interface CloseReadinessItem {
+  id: string;
+  label: string;
+  detail: string;
+  severity: CloseReadinessSeverity;
+  count: number;
+  cents?: number;
+  actionView: AppViewName;
+  filters?: Record<string, string | string[] | boolean | null>;
+}
+
+export interface CloseReadiness {
+  from: string;
+  to: string;
+  biz: BusinessId | 'all';
+  signedOff: boolean;
+  signedOffAt?: string | null;
+  canSignOff: boolean;
+  items: CloseReadinessItem[];
 }
 
 export interface CurrentUser {

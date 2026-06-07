@@ -1,6 +1,6 @@
-import { and, eq, gte, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, eq, gte, isNull, lte, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { accounts, receiptMatches, receipts, transactions, type Receipt, type Transaction } from '../db/schema.js';
+import { accounts, businesses, categories, receiptMatches, receipts, transactions, type Receipt, type Transaction } from '../db/schema.js';
 import { reviewReceiptCategoryEvidence } from './categorizationFeedback.js';
 
 export interface MatchResult {
@@ -17,6 +17,17 @@ export interface ScoredCandidate extends MatchResult {
 export interface ReceiptMatchOutcome extends MatchResult {
   /** True when the score cleared the auto-attach bar and the receipt was attached to the transaction. */
   attached: boolean;
+}
+
+export interface ReceiptMatchCandidate extends ScoredCandidate {
+  transaction: Transaction & {
+    businessKey?: string | null;
+    categoryName?: string | null;
+    categoryTaxCode?: string | null;
+  };
+  ambiguous: boolean;
+  suggested: boolean;
+  wouldAutoAttach: boolean;
 }
 
 export const AUTO_ATTACH_THRESHOLD = 0.82;
@@ -59,6 +70,19 @@ export async function matchReceipt(receiptId: string): Promise<ReceiptMatchOutco
     await db.update(receipts).set({ status: 'pending', updatedAt: new Date() }).where(eq(receipts.id, receiptId));
   }
   return { ...best, attached };
+}
+
+export async function receiptMatchCandidates(receiptId: string): Promise<ReceiptMatchCandidate[]> {
+  const receipt = await db.query.receipts.findFirst({ where: eq(receipts.id, receiptId) });
+  if (!receipt || !receipt.totalCents || !receipt.receiptDate) return [];
+  const candidates = await candidateTransactionRows(receipt);
+  const scored = candidates
+    .map(({ transaction, accountMask }) => {
+      const result = scoreMatch(receipt, transaction, accountMask);
+      return { ...result, exactAmount: isExactAmount(receipt.totalCents, transaction.amountCents) };
+    })
+    .sort((a, b) => b.score - a.score);
+  return annotateCandidates(scored);
 }
 
 /**
@@ -128,6 +152,18 @@ interface Candidate {
 }
 
 async function candidateTransactions(receipt: Receipt): Promise<Candidate[]> {
+  const rows = await candidateTransactionRows(receipt);
+  return rows.map(({ transaction, accountMask }) => ({ transaction, accountMask }));
+}
+
+async function candidateTransactionRows(receipt: Receipt): Promise<Array<{
+  transaction: Transaction & {
+    businessKey?: string | null;
+    categoryName?: string | null;
+    categoryTaxCode?: string | null;
+  };
+  accountMask: string | null;
+}>> {
   const date = new Date(`${receipt.receiptDate}T00:00:00Z`);
   const from = new Date(date);
   from.setUTCDate(from.getUTCDate() - 5);
@@ -135,8 +171,17 @@ async function candidateTransactions(receipt: Receipt): Promise<Candidate[]> {
   to.setUTCDate(to.getUTCDate() + 5);
 
   const rows = await db
-    .select()
+    .select({
+      transaction: transactions,
+      accountMask: accounts.mask,
+      businessKey: businesses.key,
+      categoryName: categories.name,
+      categoryTaxCode: categories.taxCode,
+    })
     .from(transactions)
+    .innerJoin(businesses, eq(transactions.businessId, businesses.id))
+    .leftJoin(categories, eq(transactions.categoryId, categories.id))
+    .leftJoin(accounts, eq(transactions.accountId, accounts.id))
     .where(and(
       gte(transactions.date, from.toISOString().slice(0, 10)),
       lte(transactions.date, to.toISOString().slice(0, 10)),
@@ -147,15 +192,14 @@ async function candidateTransactions(receipt: Receipt): Promise<Candidate[]> {
     ))
     .limit(50);
 
-  const accountIds = [...new Set(rows.map((row) => row.accountId).filter((id): id is string => Boolean(id)))];
-  const maskRows = accountIds.length
-    ? await db.select({ id: accounts.id, mask: accounts.mask }).from(accounts).where(inArray(accounts.id, accountIds))
-    : [];
-  const maskByAccount = new Map(maskRows.map((row) => [row.id, row.mask]));
-
-  return rows.map((transaction) => ({
-    transaction,
-    accountMask: transaction.accountId ? maskByAccount.get(transaction.accountId) ?? null : null,
+  return rows.map((row) => ({
+    transaction: {
+      ...row.transaction,
+      businessKey: row.businessKey,
+      categoryName: row.categoryName,
+      categoryTaxCode: row.categoryTaxCode,
+    },
+    accountMask: row.accountMask ?? null,
   }));
 }
 
@@ -182,6 +226,28 @@ export function decideMatch(scored: ScoredCandidate[]): { best: ScoredCandidate;
 
   const attach = !ambiguous && (best.score >= AUTO_ATTACH_THRESHOLD || exactUnique);
   return { best, attach };
+}
+
+export function annotateCandidates<T extends ScoredCandidate>(scored: T[]): Array<T & {
+  ambiguous: boolean;
+  suggested: boolean;
+  wouldAutoAttach: boolean;
+}> {
+  const decision = decideMatch(scored);
+  const bestId = decision?.best.transaction.id;
+  const runnerUp = scored[1];
+  const ambiguous = Boolean(
+    scored[0]
+    && runnerUp
+    && runnerUp.score >= SUGGESTED_THRESHOLD
+    && scored[0].score - runnerUp.score < 0.02,
+  );
+  return scored.map((candidate) => ({
+    ...candidate,
+    ambiguous: candidate.transaction.id === bestId && ambiguous,
+    suggested: candidate.transaction.id === bestId && Boolean(decision),
+    wouldAutoAttach: candidate.transaction.id === bestId && Boolean(decision?.attach),
+  }));
 }
 
 /**

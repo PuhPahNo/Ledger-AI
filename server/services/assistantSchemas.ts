@@ -26,6 +26,20 @@ const assistantTableRowSchema = z.object({
 });
 const assistantChartTypeSchema = z.enum(['bar', 'stacked_bar', 'line', 'donut']);
 const assistantValueTypeSchema = z.enum(['currency_cents', 'count', 'percent']);
+const assistantActionSchema = z.object({
+  label: z.string(),
+  view: z.enum(['dashboard', 'transactions', 'receipts', 'cash-flow', 'balances', 'insights', 'assistant', 'admin']),
+  filters: z.record(z.string(), z.union([z.string(), z.array(z.string()), z.boolean(), z.null()])).optional(),
+});
+const assistantSourceSchema = z.object({
+  type: z.enum(['transactions', 'receipts', 'cash_flow', 'owner_insights']),
+  ids: z.array(z.string()).optional(),
+  filters: z.record(z.string(), z.union([z.string(), z.array(z.string()), z.boolean(), z.null()])).optional(),
+});
+const artifactEvidenceShape = {
+  actions: z.array(assistantActionSchema).max(6).optional(),
+  sources: z.array(assistantSourceSchema).max(6).optional(),
+};
 
 export const assistantArtifactSchema = z.discriminatedUnion('type', [
   z.object({
@@ -33,6 +47,7 @@ export const assistantArtifactSchema = z.discriminatedUnion('type', [
     id: z.string(),
     title: z.string(),
     metrics: z.array(assistantMetricSchema).max(12),
+    ...artifactEvidenceShape,
   }),
   z.object({
     type: z.literal('table'),
@@ -40,6 +55,7 @@ export const assistantArtifactSchema = z.discriminatedUnion('type', [
     title: z.string(),
     columns: z.array(assistantTableColumnSchema).max(8),
     rows: z.array(assistantTableRowSchema).max(50),
+    ...artifactEvidenceShape,
   }),
   z.object({
     type: z.literal('transactions'),
@@ -55,6 +71,7 @@ export const assistantArtifactSchema = z.discriminatedUnion('type', [
       amountCents: z.number().int(),
       receiptStatus: z.string(),
     })).max(100),
+    ...artifactEvidenceShape,
   }),
   z.object({
     type: z.literal('chart'),
@@ -64,6 +81,7 @@ export const assistantArtifactSchema = z.discriminatedUnion('type', [
     valueType: assistantValueTypeSchema,
     labels: z.array(z.string()).max(36),
     series: z.array(assistantChartSeriesSchema).max(8),
+    ...artifactEvidenceShape,
   }),
 ]);
 

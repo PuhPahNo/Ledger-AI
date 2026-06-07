@@ -20,7 +20,27 @@ export function toApiBusiness(row: Business) {
   };
 }
 
-export function toApiConnection(row: Connection, businessKey?: string) {
+export interface ApiConnectionHealth {
+  lastSyncAt: string | null;
+  lastWebhookAt: string | null;
+  lastPubSubAt: string | null;
+  gmailWatchExpiration: string | null;
+  gmailWatchRenewalDue: boolean;
+  lastJobType: string | null;
+  lastJobStatus: string | null;
+  lastJobAt: string | null;
+  lastJobError: string | null;
+  queuedJobCount: number;
+  failedJobCount: number;
+  actions: {
+    canSync: boolean;
+    canBackfill: boolean;
+    gmailBackfillDays: number[];
+    plaidBackfillMonths: number[];
+  };
+}
+
+export function toApiConnection(row: Connection, businessKey?: string, health?: ApiConnectionHealth) {
   return {
     id: row.id,
     businessId: row.businessId,
@@ -32,6 +52,7 @@ export function toApiConnection(row: Connection, businessKey?: string) {
     lastSyncAt: row.lastSyncAt?.toISOString() ?? null,
     txns: row.syncedTransactionCount,
     biz: businessKey ?? 'all',
+    health,
   };
 }
 

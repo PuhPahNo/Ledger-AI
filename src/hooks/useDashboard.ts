@@ -64,6 +64,7 @@ export interface DashboardParams {
   from?: string;
   to?: string;
   label?: string;
+  bucketPreset?: 'month' | 'last3' | 'last12' | 'ytd';
   refreshKey?: number;
   comparisonBasis?: 'month' | 'year';
   accountIds?: string[];
@@ -134,6 +135,7 @@ export function useDashboard(params: DashboardParams = {}): DashboardState {
     cacheKey,
     params.from,
     params.label,
+    params.bucketPreset,
     params.period,
     params.query,
     params.refreshKey,
@@ -197,6 +199,7 @@ async function fetchDashboardData(params: DashboardParams): Promise<DashboardDat
       label: params.label,
       biz: params.business ?? 'all',
       accountIds,
+      bucketPreset: params.bucketPreset,
     }),
   ]);
 
@@ -224,6 +227,7 @@ function dashboardCacheKey(params: DashboardParams): string {
     business: params.business ?? 'all',
     from: window.from,
     label: params.label ?? '',
+    bucketPreset: params.bucketPreset ?? '',
     period: params.period ?? '',
     query: params.query ?? '',
     to: window.to,

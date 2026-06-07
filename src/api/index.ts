@@ -16,3 +16,4 @@ export * from './assistant';
 export * from './insights';
 export * from './cashFlow';
 export * from './ownerInsights';
+export * from './closeReadiness';

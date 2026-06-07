@@ -154,7 +154,7 @@ export function FieldSwitch({
 export function ListRow({ left, right }: { left: React.ReactNode; right: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between gap-3 rounded-md border border-ink2/8 bg-[hsl(var(--color-sunken))] px-3 py-2 text-sm">
-      <span className="min-w-0 flex-1 truncate font-medium text-ink">{left}</span>
+      <div className="min-w-0 flex-1 truncate font-medium text-ink">{left}</div>
       <span className="shrink-0 text-dim">{right}</span>
     </div>
   );

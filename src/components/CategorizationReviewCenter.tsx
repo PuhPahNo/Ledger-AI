@@ -105,9 +105,15 @@ export function CategorizationReviewCenter({ open, items, businesses, onClose, o
                   )}
                 </div>
 
-                <div className="grid gap-1 text-xs text-dim sm:grid-cols-3">
+                <div className="grid gap-1 text-xs text-dim sm:grid-cols-4">
                   <ReviewFact label="Merchant" value={item.payload.merchant} />
                   <ReviewFact label="Proposed" value={item.payload.proposedCategoryName} />
+                  <ReviewFact
+                    label="Rule"
+                    value={item.payload.proposedRule
+                      ? `${ruleKindLabel(item.payload.proposedRule.matchKind)} · ${item.payload.proposedRule.pattern}`
+                      : undefined}
+                  />
                   <ReviewFact
                     label="Matches"
                     value={item.payload.matchCounts
@@ -158,5 +164,20 @@ function labelForType(type: CategorizationReviewItem['type']): string {
       return 'Conflict';
     default:
       return 'Review';
+  }
+}
+
+function ruleKindLabel(kind: string): string {
+  switch (kind) {
+    case 'merchant_exact':
+      return 'Merchant exact';
+    case 'merchant_contains':
+      return 'Merchant contains';
+    case 'plaid_category':
+      return 'Plaid category';
+    case 'amount_range':
+      return 'Amount range';
+    default:
+      return kind;
   }
 }

@@ -1,11 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, lt, lte, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, isNull, lt, lte, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
-import { accounts, alerts, businesses, categories, connections, transactions } from '../db/schema.js';
-import { notFound } from '../lib/errors.js';
+import { accounts, alerts, businesses, categories, connections, exportJobs, jobs, receipts, transactions } from '../db/schema.js';
+import { badRequest, notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
+import { isGmailWatchRenewalDue } from '../jobs/scheduler.js';
 import { isIncomeCategory } from '../services/categorization.js';
 import {
   createManualCategorizationFeedback,
@@ -13,8 +14,9 @@ import {
   resolveCategorizationReviewItem,
 } from '../services/categorizationFeedback.js';
 import { normalizeTransactionOverride } from '../services/transactionOverrides.js';
-import { getReceiptTrackingSince, setReceiptTrackingSince } from '../services/appSettings.js';
+import { getReceiptTrackingSince, getSetting, setReceiptTrackingSince, setSetting } from '../services/appSettings.js';
 import {
+  type ApiConnectionHealth,
   toApiAlert,
   toApiBusiness,
   toApiCategorizationReviewItem,
@@ -227,12 +229,13 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post('/transactions/:id/receipt', async (request) => {
-    await requireUser(request);
+    const user = await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({ receiptId: z.string().uuid() }).parse(request.body);
     const { attachReceipt } = await import('../services/matching.js');
     const updated = await attachReceipt(params.id, body.receiptId);
     if (!updated) notFound('Transaction not found');
+    await audit(request, user, 'attach_receipt', 'transaction', params.id, { receiptId: body.receiptId });
     const row = await db
       .select({
         ...getTableColumns(transactions),
@@ -362,7 +365,8 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
         sql`${connections.status} <> 'disconnected'`,
       ))
       .orderBy(connections.kind, connections.label);
-    return rows.map((row) => toApiConnection(row.connection, row.businessKey ?? undefined));
+    const health = await connectionHealthById(rows.map((row) => row.connection));
+    return rows.map((row) => toApiConnection(row.connection, row.businessKey ?? undefined, health.get(row.connection.id)));
   });
 
   app.get('/alerts', async (request) => {
@@ -494,12 +498,14 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       label: z.string().optional(),
       biz: z.string().optional(),
       accounts: z.string().optional(),
+      bucketPreset: z.enum(['month', 'last3', 'last12', 'ytd']).optional(),
     }).parse(request.query);
     const accountIds = parseAccountIds(query.accounts);
     const period = query.period ?? new Date().toISOString().slice(0, 7);
     const { from, to, label } = dateWindow(period, query.from, query.to);
     const { priorFrom, priorTo } = previousDateWindow(from, to);
     const labels = trailingMonthWindows(to);
+    const flowWindows = flowBucketWindows(from, to, query.bucketPreset);
     const selectedBusiness = query.biz && query.biz !== 'all'
       ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
       : null;
@@ -519,6 +525,15 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
     ] as const;
     const current = await movementSummary(from, to, spendFilters, inflowFilters);
     const prior = await movementSummary(priorFrom, priorTo, spendFilters, inflowFilters);
+    const [flowRows, flowOutflowBusinessRows, flowInflowBusinessRows] = await Promise.all([
+      Promise.all(flowWindows.windows.map((window) => movementSummary(window.from, window.to, spendFilters, inflowFilters))),
+      Promise.all(flowWindows.windows.map(({ from: bucketFrom, to: bucketTo }) => (
+        movementBusinessBreakdown(bucketFrom, bucketTo, spendFilters, sql`abs(sum(${transactions.amountCents}))`)
+      ))),
+      Promise.all(flowWindows.windows.map(({ from: bucketFrom, to: bucketTo }) => (
+        movementBusinessBreakdown(bucketFrom, bucketTo, inflowFilters, sql`sum(${transactions.amountCents})`)
+      ))),
+    ]);
     const trailingRows = await Promise.all(labels.map(async ({ from: monthFrom, to: monthTo }) => {
       return movementSummary(monthFrom, monthTo, spendFilters, inflowFilters);
     }));
@@ -549,6 +564,17 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       inflowDeltaPct: prior.inflowCents > 0 ? Math.round(((current.inflowCents - prior.inflowCents) / prior.inflowCents) * 100) : 0,
       outflowDeltaPct: priorTotal > 0 ? Math.round(((currentTotal - priorTotal) / priorTotal) * 100) : 0,
       netDeltaPct: prior.netCents !== 0 ? Math.round(((current.netCents - prior.netCents) / Math.abs(prior.netCents)) * 100) : 0,
+      bucketGranularity: flowWindows.granularity,
+      flowBuckets: flowWindows.windows.map((window, index) => ({
+        label: window.label,
+        from: window.from,
+        to: window.to,
+        inflowCents: flowRows[index]?.inflowCents ?? 0,
+        outflowCents: flowRows[index]?.outflowCents ?? 0,
+        netCents: flowRows[index]?.netCents ?? 0,
+        inflowBusinessCents: flowInflowBusinessRows[index] ?? [],
+        outflowBusinessCents: flowOutflowBusinessRows[index] ?? [],
+      })),
       trailingMonths: trailingOutflowRows.map((value) => Number((value / max).toFixed(3))),
       trailingMonthCents: trailingOutflowRows.map((value) => Number(value ?? 0)),
       trailingMonthBusinessCents: trailingOutflowBusinessRows,
@@ -746,6 +772,54 @@ export async function dashboardRoutes(app: FastifyInstance): Promise<void> {
       },
     };
   });
+
+  app.get('/close-readiness', async (request) => {
+    await requireUser(request);
+    const query = z.object({
+      from: z.string().optional(),
+      to: z.string().optional(),
+      biz: z.string().optional(),
+      accounts: z.string().optional(),
+    }).parse(request.query);
+    const to = query.to ?? isoDate(new Date());
+    const from = query.from ?? isoDate(new Date(dateFromIso(to).getFullYear(), dateFromIso(to).getMonth(), 1));
+    const accountIds = parseAccountIds(query.accounts);
+    return buildCloseReadiness({ from, to, biz: query.biz, accountIds });
+  });
+
+  app.post('/close-readiness/sign-off', async (request) => {
+    const user = await requireUser(request);
+    const body = z.object({
+      from: z.string(),
+      to: z.string(),
+      biz: z.string().optional(),
+      accounts: z.array(z.string()).optional().default([]),
+    }).parse(request.body);
+    const readiness = await buildCloseReadiness({
+      from: body.from,
+      to: body.to,
+      biz: body.biz,
+      accountIds: body.accounts,
+    });
+    if (!readiness.canSignOff) badRequest('Period still has close blockers.');
+    const signedOffAt = new Date().toISOString();
+    await setSetting(closeSignoffKey(readiness.biz, readiness.from, readiness.to), JSON.stringify({
+      signedOffAt,
+      signedOffByUserId: user.id,
+    }));
+    await audit(request, user, 'sign_off_close_period', 'close_period', `${readiness.biz}:${readiness.from}:${readiness.to}`, {
+      from: readiness.from,
+      to: readiness.to,
+      biz: readiness.biz,
+    });
+    return {
+      ...readiness,
+      signedOff: true,
+      signedOffAt,
+      canSignOff: false,
+      items: readiness.items.filter((item) => item.id !== 'sign-off'),
+    };
+  });
 }
 
 function normalizeInsightMetric(row?: { count?: number | null; cents?: number | null }) {
@@ -753,6 +827,279 @@ function normalizeInsightMetric(row?: { count?: number | null; cents?: number | 
     count: Number(row?.count ?? 0),
     cents: Number(row?.cents ?? 0),
   };
+}
+
+async function buildCloseReadiness(input: {
+  from: string;
+  to: string;
+  biz?: string;
+  accountIds: string[];
+}) {
+  const selectedBusiness = input.biz && input.biz !== 'all'
+    ? await db.query.businesses.findFirst({ where: eq(businesses.key, input.biz) })
+    : null;
+  const biz = selectedBusiness?.key ?? 'all';
+  const baseTransactionFilters = [
+    gte(transactions.date, input.from),
+    lte(transactions.date, input.to),
+    selectedBusiness ? eq(transactions.businessId, selectedBusiness.id) : sql`true`,
+    accountSpendFilter(input.accountIds),
+  ] as const;
+  const [missingReceipts, uncategorized, transfers, unmatchedReceipts, reviewItems, exportRows] = await Promise.all([
+    db.select({
+      count: sql<number>`count(${transactions.id})::int`,
+      cents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
+    }).from(transactions)
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+      .where(and(...baseTransactionFilters, sql`${transactions.amountCents} < 0`, categoryIsVisibleSpend(), eq(transactions.receiptStatus, 'missing'))),
+    db.select({
+      count: sql<number>`count(${transactions.id})::int`,
+      cents: sql<number>`coalesce(abs(sum(${transactions.amountCents})), 0)::int`,
+    }).from(transactions)
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+      .where(and(...baseTransactionFilters, sql`${transactions.amountCents} < 0`, categoryIsVisibleSpend(), or(sql`${categories.id} IS NULL`, eq(categories.name, 'Uncategorized')))),
+    db.select({
+      count: sql<number>`count(${transactions.id})::int`,
+      cents: sql<number>`coalesce(sum(abs(${transactions.amountCents})), 0)::int`,
+    }).from(transactions)
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+      .where(and(...baseTransactionFilters, transferCategoryFilter())),
+    db.select({
+      count: sql<number>`count(${receipts.id})::int`,
+    }).from(receipts)
+      .leftJoin(businesses, eq(receipts.businessId, businesses.id))
+      .where(and(
+        selectedBusiness ? eq(receipts.businessId, selectedBusiness.id) : sql`true`,
+        eq(receipts.status, 'pending'),
+        isNull(receipts.transactionId),
+        or(
+          isNull(receipts.receiptDate),
+          and(gte(receipts.receiptDate, input.from), lte(receipts.receiptDate, input.to)),
+        )!,
+      )),
+    listCategorizationReviewItems({ status: 'open', businessKey: input.biz }),
+    db.select().from(exportJobs).where(and(
+      eq(exportJobs.dateFrom, input.from),
+      eq(exportJobs.dateTo, input.to),
+      selectedBusiness ? eq(exportJobs.businessId, selectedBusiness.id) : sql`${exportJobs.businessId} IS NULL`,
+    )).orderBy(desc(exportJobs.createdAt)).limit(1),
+  ]);
+
+  const failedSyncCount = await failedSyncCountForBusiness(selectedBusiness?.id ?? null);
+  const items = [
+    closeItem({
+      id: 'missing-receipts',
+      label: `${normalizeInsightMetric(missingReceipts[0]).count} missing receipt${normalizeInsightMetric(missingReceipts[0]).count === 1 ? '' : 's'}`,
+      detail: `${formatCentsForClose(normalizeInsightMetric(missingReceipts[0]).cents)} of operating outflow still needs documentation.`,
+      severity: 'blocker',
+      metric: normalizeInsightMetric(missingReceipts[0]),
+      actionView: 'transactions',
+      filters: { from: input.from, to: input.to, receipts: ['missing'], direction: 'operating-outflow', biz },
+    }),
+    closeItem({
+      id: 'unmatched-receipts',
+      label: `${Number(unmatchedReceipts[0]?.count ?? 0)} unmatched receipt${Number(unmatchedReceipts[0]?.count ?? 0) === 1 ? '' : 's'}`,
+      detail: 'Receipts are waiting for transaction pairing or dismissal.',
+      severity: 'blocker',
+      count: Number(unmatchedReceipts[0]?.count ?? 0),
+      actionView: 'receipts',
+      filters: { source: 'all', biz },
+    }),
+    closeItem({
+      id: 'uncategorized',
+      label: `${normalizeInsightMetric(uncategorized[0]).count} uncategorized transaction${normalizeInsightMetric(uncategorized[0]).count === 1 ? '' : 's'}`,
+      detail: `${formatCentsForClose(normalizeInsightMetric(uncategorized[0]).cents)} needs category review.`,
+      severity: 'blocker',
+      metric: normalizeInsightMetric(uncategorized[0]),
+      actionView: 'transactions',
+      filters: { from: input.from, to: input.to, categories: ['Uncategorized'], direction: 'operating-outflow', biz },
+    }),
+    closeItem({
+      id: 'sync-failures',
+      label: `${failedSyncCount} failed sync${failedSyncCount === 1 ? '' : 's'}`,
+      detail: 'Resolve failed provider jobs or reauth prompts before signing off.',
+      severity: 'blocker',
+      count: failedSyncCount,
+      actionView: 'admin',
+      filters: { tab: 'connections' },
+    }),
+    closeItem({
+      id: 'category-reviews',
+      label: `${reviewItems.length} rule/category review${reviewItems.length === 1 ? '' : 's'}`,
+      detail: 'Open suggestions should be accepted or dismissed before close.',
+      severity: 'blocker',
+      count: reviewItems.length,
+      actionView: 'admin',
+      filters: { tab: 'rules' },
+    }),
+    closeItem({
+      id: 'transfers',
+      label: `${normalizeInsightMetric(transfers[0]).count} transfer${normalizeInsightMetric(transfers[0]).count === 1 ? '' : 's'} to audit`,
+      detail: `${formatCentsForClose(normalizeInsightMetric(transfers[0]).cents)} of transfer movement is visible for review.`,
+      severity: 'review',
+      metric: normalizeInsightMetric(transfers[0]),
+      actionView: 'transactions',
+      filters: { from: input.from, to: input.to, direction: 'transfer', biz },
+    }),
+  ].filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+  const exportJob = exportRows[0];
+  items.push({
+    id: 'export',
+    label: exportJob ? `Export ${exportJob.status}` : 'Queue audit export',
+    detail: exportJob
+      ? 'An audit export exists for this period.'
+      : 'Queue an audit export from Admin after the blocking items are clear.',
+    severity: 'ready',
+    count: exportJob ? 1 : 0,
+    cents: undefined,
+    actionView: 'admin',
+    filters: { tab: 'exports' },
+  });
+
+  const signoff = await readCloseSignoff(biz, input.from, input.to);
+  const blockers = items.filter((item) => item.severity === 'blocker' && item.count > 0);
+  const canSignOff = blockers.length === 0 && !signoff.signedOff;
+  if (canSignOff) {
+    items.push({
+      id: 'sign-off',
+      label: 'Sign off period close',
+      detail: 'All blocking close items are clear.',
+      severity: 'ready',
+      count: 1,
+      cents: undefined,
+      actionView: 'insights',
+      filters: { from: input.from, to: input.to, biz },
+    });
+  }
+  return {
+    from: input.from,
+    to: input.to,
+    biz,
+    signedOff: signoff.signedOff,
+    signedOffAt: signoff.signedOffAt,
+    canSignOff,
+    items,
+  };
+}
+
+function closeItem(input: {
+  id: string;
+  label: string;
+  detail: string;
+  severity: 'blocker' | 'review' | 'ready';
+  metric?: { count: number; cents: number };
+  count?: number;
+  actionView: 'dashboard' | 'transactions' | 'receipts' | 'cash-flow' | 'balances' | 'insights' | 'assistant' | 'admin';
+  filters?: Record<string, string | string[] | boolean | null>;
+}) {
+  const count = input.metric?.count ?? input.count ?? 0;
+  if (count <= 0 && input.severity !== 'ready') return null;
+  return {
+    id: input.id,
+    label: input.label,
+    detail: input.detail,
+    severity: input.severity,
+    count,
+    cents: input.metric?.cents,
+    actionView: input.actionView,
+    filters: input.filters,
+  };
+}
+
+async function failedSyncCountForBusiness(businessId: string | null): Promise<number> {
+  const connectionRows = await db
+    .select({ id: connections.id, status: connections.status })
+    .from(connections)
+    .where(and(
+      sql`${connections.status} <> 'disconnected'`,
+      businessId ? eq(connections.businessId, businessId) : sql`true`,
+    ));
+  const connectionIds = connectionRows.map((row) => row.id);
+  if (!connectionIds.length) return 0;
+  const [row] = await db
+    .select({ count: sql<number>`count(${jobs.id})::int` })
+    .from(jobs)
+    .where(and(
+      eq(jobs.status, 'failed'),
+      or(...connectionIds.map((id) => sql`${jobs.payload} ->> 'connectionId' = ${id}`))!,
+    ));
+  return Number(row?.count ?? 0) + connectionRows.filter((connection) => connection.status === 'reauth').length;
+}
+
+async function readCloseSignoff(biz: string, from: string, to: string): Promise<{ signedOff: boolean; signedOffAt: string | null }> {
+  const raw = await getSetting(closeSignoffKey(biz, from, to));
+  if (!raw) return { signedOff: false, signedOffAt: null };
+  try {
+    const parsed = JSON.parse(raw) as { signedOffAt?: unknown };
+    return { signedOff: true, signedOffAt: typeof parsed.signedOffAt === 'string' ? parsed.signedOffAt : null };
+  } catch {
+    return { signedOff: true, signedOffAt: null };
+  }
+}
+
+function closeSignoffKey(biz: string, from: string, to: string): string {
+  return `close_signoff:${biz}:${from}:${to}`;
+}
+
+function formatCentsForClose(cents: number): string {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(cents / 100);
+}
+
+async function connectionHealthById(connectionRows: Array<typeof connections.$inferSelect>): Promise<Map<string, ApiConnectionHealth>> {
+  const map = new Map<string, ApiConnectionHealth>();
+  const ids = connectionRows.map((row) => row.id);
+  const jobRows = ids.length
+    ? await db
+      .select()
+      .from(jobs)
+      .where(or(...ids.map((id) => sql`${jobs.payload} ->> 'connectionId' = ${id}`))!)
+      .orderBy(desc(jobs.createdAt))
+      .limit(Math.max(100, ids.length * 20))
+    : [];
+  const jobsByConnection = new Map<string, typeof jobRows>();
+  for (const job of jobRows) {
+    const connectionId = typeof job.payload.connectionId === 'string' ? job.payload.connectionId : null;
+    if (!connectionId) continue;
+    const list = jobsByConnection.get(connectionId) ?? [];
+    list.push(job);
+    jobsByConnection.set(connectionId, list);
+  }
+
+  for (const connection of connectionRows) {
+    const metadata = connection.metadata ?? {};
+    const relatedJobs = jobsByConnection.get(connection.id) ?? [];
+    const lastJob = relatedJobs[0];
+    map.set(connection.id, {
+      lastSyncAt: connection.lastSyncAt?.toISOString() ?? null,
+      lastWebhookAt: stringOrNull(metadata.lastWebhookAt),
+      lastPubSubAt: stringOrNull(metadata.lastPubSubAt),
+      gmailWatchExpiration: connection.gmailWatchExpiration?.toISOString() ?? null,
+      gmailWatchRenewalDue: connection.kind === 'gmail'
+        ? isGmailWatchRenewalDue(connection.gmailWatchExpiration ?? null)
+        : false,
+      lastJobType: lastJob?.type ?? null,
+      lastJobStatus: lastJob?.status ?? null,
+      lastJobAt: lastJob?.updatedAt.toISOString() ?? lastJob?.createdAt.toISOString() ?? null,
+      lastJobError: lastJob?.lastError ?? null,
+      queuedJobCount: relatedJobs.filter((job) => job.status === 'queued' || job.status === 'running').length,
+      failedJobCount: relatedJobs.filter((job) => job.status === 'failed').length,
+      actions: {
+        canSync: connection.status === 'live',
+        canBackfill: connection.status === 'live',
+        gmailBackfillDays: connection.kind === 'gmail' ? [7, 30, 90, 365] : [],
+        plaidBackfillMonths: connection.kind === 'gmail' ? [] : [12],
+      },
+    });
+  }
+  return map;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 interface MovementSummaryCents {
@@ -1062,6 +1409,84 @@ function previousDateWindow(from: string, to: string) {
     priorFrom: isoDate(priorStart),
     priorTo: isoDate(priorEnd),
   };
+}
+
+export type FlowBucketPreset = 'month' | 'last3' | 'last12' | 'ytd';
+export type FlowBucketGranularity = 'day' | 'week' | 'month';
+
+export function flowBucketWindows(from: string, to: string, preset?: FlowBucketPreset): {
+  granularity: FlowBucketGranularity;
+  windows: Array<{ from: string; to: string; label: string }>;
+} {
+  const granularity = preset === 'last3'
+    ? 'week'
+    : preset === 'last12' || preset === 'ytd'
+      ? 'month'
+      : preset === 'month'
+        ? 'day'
+        : inferBucketGranularity(from, to);
+  if (granularity === 'day') return { granularity, windows: dailyWindows(from, to) };
+  if (granularity === 'week') return { granularity, windows: weeklyWindows(from, to) };
+  return { granularity, windows: monthlyWindows(from, to) };
+}
+
+function inferBucketGranularity(from: string, to: string): FlowBucketGranularity {
+  const days = Math.max(1, Math.round((dateFromIso(to).getTime() - dateFromIso(from).getTime()) / 86400000) + 1);
+  if (days <= 45) return 'day';
+  if (days <= 120) return 'week';
+  return 'month';
+}
+
+function dailyWindows(from: string, to: string) {
+  const end = dateFromIso(to);
+  const cursor = dateFromIso(from);
+  const windows: Array<{ from: string; to: string; label: string }> = [];
+  while (cursor <= end) {
+    windows.push({
+      from: isoDate(cursor),
+      to: isoDate(cursor),
+      label: cursor.toLocaleString('en-US', { month: 'short', day: 'numeric' }),
+    });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return windows;
+}
+
+function weeklyWindows(from: string, to: string) {
+  const end = dateFromIso(to);
+  const cursor = dateFromIso(from);
+  const windows: Array<{ from: string; to: string; label: string }> = [];
+  while (cursor <= end) {
+    const start = new Date(cursor);
+    const weekEnd = new Date(cursor);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    const cappedEnd = weekEnd > end ? end : weekEnd;
+    windows.push({
+      from: isoDate(start),
+      to: isoDate(cappedEnd),
+      label: `${start.toLocaleString('en-US', { month: 'short', day: 'numeric' })}`,
+    });
+    cursor.setDate(cursor.getDate() + 7);
+  }
+  return windows;
+}
+
+function monthlyWindows(from: string, to: string) {
+  const start = dateFromIso(from);
+  const end = dateFromIso(to);
+  const cursor = new Date(start.getFullYear(), start.getMonth(), 1);
+  const windows: Array<{ from: string; to: string; label: string }> = [];
+  while (cursor <= end) {
+    const periodStart = new Date(cursor);
+    const periodEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+    windows.push({
+      from: isoDate(periodStart < start ? start : periodStart),
+      to: isoDate(periodEnd > end ? end : periodEnd),
+      label: cursor.toLocaleString('en-US', { month: 'short', year: '2-digit' }),
+    });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return windows;
 }
 
 function trailingMonthWindows(to: string) {

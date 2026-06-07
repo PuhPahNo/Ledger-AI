@@ -587,7 +587,7 @@ async function getOwnerInsights(args: z.infer<typeof ownerInsightsSchema>): Prom
       .innerJoin(businesses, eq(transactions.businessId, businesses.id))
       .leftJoin(categories, eq(transactions.categoryId, categories.id))
       .leftJoin(accounts, eq(transactions.accountId, accounts.id))
-      .where(and(...filters, sql`${transactions.amountCents} > 0`, categoryIsVisibleSpend()))
+      .where(and(...filters, sql`${transactions.amountCents} > 0`, sql`NOT (${transferCategoryFilter()})`))
       .groupBy(businesses.key, businesses.name, businesses.color)
       .orderBy(desc(sql`sum(${transactions.amountCents})`)),
   ]);
@@ -967,12 +967,13 @@ function transactionSortColumn(sort: SortKey) {
 }
 
 async function cashFlowTotals(from: string, to: string, businessId: string | null, accountIds: string[], includeTransfers: boolean) {
-  const includedMovementFilter = includeTransfers ? sql`true` : categoryIsVisibleSpend();
+  const inflowFilter = includeTransfers ? sql`true` : sql`NOT (${transferCategoryFilter()})`;
+  const spendFilter = includeTransfers ? sql`true` : categoryIsVisibleSpend();
   const [row] = await db.select({
-    inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
-    outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
+    inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${inflowFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+    outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${spendFilter} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
     transferCents: sql<number>`coalesce(sum(CASE WHEN ${transferCategoryFilter()} THEN abs(${transactions.amountCents}) ELSE 0 END), 0)::int`,
-    netCents: sql<number>`coalesce(sum(CASE WHEN ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+    netCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${inflowFilter} THEN ${transactions.amountCents} WHEN ${transactions.amountCents} < 0 AND ${spendFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
   }).from(transactions)
     .leftJoin(categories, eq(transactions.categoryId, categories.id))
     .leftJoin(accounts, eq(transactions.accountId, accounts.id))
@@ -986,15 +987,16 @@ async function cashFlowTotals(from: string, to: string, businessId: string | nul
 }
 
 async function cashFlowBusinessBreakdown(from: string, to: string, businessId: string | null, accountIds: string[], includeTransfers: boolean) {
-  const includedMovementFilter = includeTransfers ? sql`true` : categoryIsVisibleSpend();
+  const inflowFilter = includeTransfers ? sql`true` : sql`NOT (${transferCategoryFilter()})`;
+  const spendFilter = includeTransfers ? sql`true` : categoryIsVisibleSpend();
   const rows = await db.select({
     businessId: businesses.key,
     businessName: businesses.name,
     color: businesses.color,
-    inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
-    outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
+    inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${inflowFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+    outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${spendFilter} THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
     transferCents: sql<number>`coalesce(sum(CASE WHEN ${transferCategoryFilter()} THEN abs(${transactions.amountCents}) ELSE 0 END), 0)::int`,
-    netCents: sql<number>`coalesce(sum(CASE WHEN ${includedMovementFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
+    netCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND ${inflowFilter} THEN ${transactions.amountCents} WHEN ${transactions.amountCents} < 0 AND ${spendFilter} THEN ${transactions.amountCents} ELSE 0 END), 0)::int`,
   }).from(transactions)
     .innerJoin(businesses, eq(transactions.businessId, businesses.id))
     .leftJoin(categories, eq(transactions.categoryId, categories.id))
@@ -1078,10 +1080,13 @@ function safeTransactionRow(row: typeof transactions.$inferSelect & { businessKe
 }
 
 function transactionsArtifact(rows: ReturnType<typeof safeTransactionRow>[], title: string): AssistantArtifact {
+  const ids = rows.slice(0, DEFAULT_TRANSACTION_DETAIL_LIMIT).map((row) => row.id);
   return {
     type: 'transactions',
     id: crypto.randomUUID(),
     title,
+    sources: [{ type: 'transactions', ids }],
+    actions: [{ label: 'Open transactions', view: 'transactions' }],
     rows: rows.slice(0, DEFAULT_TRANSACTION_DETAIL_LIMIT).map((row) => ({
       id: row.id,
       date: row.date,
@@ -1119,10 +1124,13 @@ function safeReceiptRow(row: typeof receipts.$inferSelect & { businessKey?: stri
 }
 
 function receiptsArtifact(rows: ReturnType<typeof safeReceiptRow>[], title: string): AssistantArtifact {
+  const ids = rows.slice(0, DEFAULT_TRANSACTION_DETAIL_LIMIT).map((row) => row.id);
   return {
     type: 'table',
     id: crypto.randomUUID(),
     title,
+    sources: [{ type: 'receipts', ids }],
+    actions: [{ label: 'Open receipts', view: 'receipts' }],
     columns: [
       { key: 'date', label: 'Date', align: 'left' },
       { key: 'merchant', label: 'Merchant', align: 'left' },
@@ -1176,6 +1184,8 @@ function cashFlowChart(periods: Array<{ label: string; inflowCents: number; outf
     type: 'chart',
     id: crypto.randomUUID(),
     title: includeTransfers ? 'All Movement Cash Flow' : 'Operating Cash Flow',
+    sources: [{ type: 'cash_flow', filters: { includeTransfers } }],
+    actions: [{ label: 'Open cash flow', view: 'cash-flow', filters: { includeTransfers } }],
     chartType: 'bar',
     valueType: 'currency_cents',
     labels: periods.map((period) => period.label),

@@ -16,6 +16,7 @@ export function getSummary(params: {
   label?: string;
   biz?: BusinessId | 'all';
   accountIds?: string[];
+  bucketPreset?: 'month' | 'last3' | 'last12' | 'ytd';
 } = {}): Promise<SpendSummary> {
   if (useMockApi) {
     const visibleTransactions = visibleMockTransactions(TRANSACTIONS, params.accountIds);
@@ -41,5 +42,6 @@ export function getSummary(params: {
   if (params.label) query.set('label', params.label);
   if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
   if (params.accountIds?.length) query.set('accounts', params.accountIds.join(','));
+  if (params.bucketPreset) query.set('bucketPreset', params.bucketPreset);
   return http<ApiSpendSummary>(`/summary?${query.toString()}`).then(mapSummary);
 }

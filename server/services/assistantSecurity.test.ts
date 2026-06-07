@@ -89,6 +89,28 @@ describe('assistant safety and artifacts', () => {
     })).toThrow();
   });
 
+  it('validates evidence metadata and safe artifact actions', () => {
+    const artifact = assistantArtifactSchema.parse({
+      type: 'transactions',
+      id: 'tx-artifact',
+      title: 'Evidence rows',
+      rows: [{
+        id: 'tx-1',
+        date: '2026-06-01',
+        merchant: 'Vendor',
+        business: 'Draft Sharks',
+        category: 'Software',
+        account: 'Amex',
+        amountCents: -1200,
+        receiptStatus: 'missing',
+      }],
+      sources: [{ type: 'transactions', ids: ['tx-1'], filters: { direction: 'outflow' } }],
+      actions: [{ label: 'Open transactions', view: 'transactions', filters: { direction: 'outflow' } }],
+    });
+    expect(artifact.sources?.[0]?.ids).toEqual(['tx-1']);
+    expect(artifact.actions?.[0]?.view).toBe('transactions');
+  });
+
   it('uses an OpenAI-compatible structured output schema for artifacts', () => {
     const format = zodTextFormat(assistantStructuredOutputSchema, 'ledger_ai_assistant_response');
     const schema = JSON.stringify(format);

@@ -154,27 +154,27 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
 
   const refreshConnection = async (connection: Connection) => {
     if (!connection.id) return;
-    await syncConnection(connection.id);
-    toast({ title: 'Sync queued', description: `Sync queued for ${connection.label}.` });
+    const result = await syncConnection(connection.id);
+    toast({ title: 'Sync queued', description: `Sync queued for ${connection.label}${result.jobId ? ` · ${result.jobId.slice(0, 8)}` : ''}.` });
     onRefresh();
   };
 
   const backfillConnection = async (connection: Connection) => {
     if (!connection.id) return;
-    await backfillPlaidConnection(connection.id, 12);
+    const result = await backfillPlaidConnection(connection.id, 12);
     toast({
       title: '12-month pull queued',
-      description: 'If this connection was created before 12-month history was enabled, reconnect it to expand the window.',
+      description: `If this connection was created before 12-month history was enabled, reconnect it to expand the window.${result.jobId ? ` Job ${result.jobId.slice(0, 8)}.` : ''}`,
     });
     onRefresh();
   };
 
-  const backfillGmail = async (connection: Connection) => {
+  const backfillGmail = async (connection: Connection, days = 90) => {
     if (!connection.id) return;
-    const result = await backfillGmailConnection(connection.id, 90);
+    const result = await backfillGmailConnection(connection.id, days);
     toast({
       title: 'Gmail backfill queued',
-      description: `Ledger AI will scan the last ${result.daysRequested} days for receipts.`,
+      description: `Ledger AI will scan the last ${result.daysRequested} days for receipts${result.jobId ? ` · ${result.jobId.slice(0, 8)}` : ''}.`,
     });
     onRefresh();
   };
@@ -299,6 +299,7 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
                     onRename={(label) => renameConnection(connection, label)}
                     onSync={() => refreshConnection(connection)}
                     onBackfill={connection.kind === 'gmail' ? () => backfillGmail(connection) : () => backfillConnection(connection)}
+                    onBackfillDays={connection.kind === 'gmail' ? (days) => backfillGmail(connection, days) : undefined}
                     backfillLabel={connection.kind === 'gmail' ? '90d' : '12m'}
                     backfillTooltip={connection.kind === 'gmail' ? 'Pull 90 days of Gmail receipts' : 'Pull 12 months of Plaid history'}
                     onDisconnect={() => removeConnection(connection)}

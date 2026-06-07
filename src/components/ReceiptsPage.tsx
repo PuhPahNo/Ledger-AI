@@ -5,13 +5,13 @@ import {
   attachReceipt,
   dismissReceipt,
   listBusinesses,
+  listReceiptCandidates,
   listReceipts,
-  listTransactions,
   updateReceipt,
   uploadReceipt,
 } from '@/api';
 import type { AppView } from '@/types/navigation';
-import type { Business, CurrentUser, ReceiptInboxItem, ReceiptSource, Transaction } from '@/types/domain';
+import type { Business, CurrentUser, ReceiptInboxItem, ReceiptMatchCandidate, ReceiptSource, Transaction } from '@/types/domain';
 import { fmt$ } from '@/lib/format';
 import { cn } from '@/lib/cn';
 import { useToast } from '@/hooks/useToast';
@@ -39,10 +39,8 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
   const [query, setQuery] = useState('');
   const [receipts, setReceipts] = useState<ReceiptInboxItem[]>([]);
   const [selectedReceiptId, setSelectedReceiptId] = useState<string | null>(null);
-  const [candidates, setCandidates] = useState<Transaction[]>([]);
+  const [candidates, setCandidates] = useState<ReceiptMatchCandidate[]>([]);
   const [candidateQuery, setCandidateQuery] = useState('');
-  const [candidateFrom, setCandidateFrom] = useState(defaultFrom());
-  const [candidateTo, setCandidateTo] = useState(today());
   const [loadingReceipts, setLoadingReceipts] = useState(true);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [busyReceiptId, setBusyReceiptId] = useState<string | null>(null);
@@ -66,11 +64,9 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
   }, [receiptDraft, selectedReceipt]);
   const scoredCandidates = useMemo(() => (
     receiptForMatching
-      ? candidates
-        .map((transaction) => ({ transaction, score: scoreCandidate(receiptForMatching, transaction) }))
-        .sort((a, b) => b.score - a.score)
+      ? candidates.filter((candidate) => candidateMatchesQuery(candidate, candidateQuery))
       : []
-  ), [candidates, receiptForMatching]);
+  ), [candidateQuery, candidates, receiptForMatching]);
   const gmailCount = receipts.filter((receipt) => receipt.source === 'gmail').length;
   const uploadCount = receipts.filter((receipt) => receipt.source === 'upload').length;
 
@@ -108,30 +104,17 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
       total: formatCentsInput(selectedReceipt.totalCents),
       receiptDate: selectedReceipt.receiptDate ?? '',
     });
-    const window = candidateWindow(selectedReceipt);
     setCandidateQuery('');
-    setCandidateFrom(window.from);
-    setCandidateTo(window.to);
   }, [selectedReceipt?.id]);
 
   useEffect(() => {
     if (!selectedReceipt) return;
     setLoadingCandidates(true);
-    listTransactions({
-      biz: selectedReceipt.biz === 'all' ? 'all' : selectedReceipt.biz,
-      q: candidateQuery || undefined,
-      from: candidateFrom || undefined,
-      to: candidateTo || undefined,
-      receipts: ['missing', 'pending'],
-      direction: 'operating-outflow',
-      sort: 'date',
-      dir: 'desc',
-      limit: 50,
-    })
+    listReceiptCandidates(selectedReceipt.id)
       .then(setCandidates)
       .catch((loadError: Error) => toast({ variant: 'destructive', title: 'Could not load candidates', description: loadError.message }))
       .finally(() => setLoadingCandidates(false));
-  }, [candidateFrom, candidateQuery, candidateTo, selectedReceipt?.id, toast]);
+  }, [selectedReceipt?.id, toast]);
 
   const refresh = () => setRefreshKey((key) => key + 1);
 
@@ -361,26 +344,20 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                         })}
                       />
 
-                      <div className="grid gap-3 rounded-lg border border-ink2/10 bg-[hsl(var(--color-sunken))] p-3 lg:grid-cols-[minmax(260px,1fr)_160px_160px]">
+                      <div className="grid gap-3 rounded-lg border border-ink2/10 bg-[hsl(var(--color-sunken))] p-3">
                         <Field label="Candidate search">
                           <Input value={candidateQuery} onChange={(event) => setCandidateQuery(event.target.value)} placeholder="Merchant, category, account" />
                         </Field>
-                        <Field label="From">
-                          <Input type="date" value={candidateFrom} onChange={(event) => setCandidateFrom(event.target.value)} />
-                        </Field>
-                        <Field label="To">
-                          <Input type="date" value={candidateTo} onChange={(event) => setCandidateTo(event.target.value)} />
-                        </Field>
+                        <div className="text-xs text-dim">Candidates use Ledger AI's amount/date/card/merchant scoring policy.</div>
                       </div>
 
                       <div className="grid gap-2">
-                        {scoredCandidates.map(({ transaction, score }) => (
+                        {scoredCandidates.map((candidate) => (
                           <CandidateRow
-                            key={transaction.id}
-                            transaction={transaction}
-                            score={score}
+                            key={candidate.transaction.id}
+                            candidate={candidate}
                             disabled={busyReceiptId === selectedReceipt.id || savingReceiptId === selectedReceipt.id}
-                            onPair={() => handlePair(selectedReceipt, transaction)}
+                            onPair={() => handlePair(selectedReceipt, candidate.transaction)}
                           />
                         ))}
                       </div>
@@ -509,27 +486,35 @@ function ReceiptEditForm({
 }
 
 function CandidateRow({
-  transaction,
-  score,
+  candidate,
   disabled,
   onPair,
 }: {
-  transaction: Transaction;
-  score: number;
+  candidate: ReceiptMatchCandidate;
   disabled: boolean;
   onPair: () => void;
 }) {
+  const { transaction } = candidate;
   return (
     <div className="grid gap-3 rounded-lg border border-ink2/10 bg-paper p-3 shadow-sm md:grid-cols-[minmax(0,1fr)_150px_auto]">
       <div className="min-w-0">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <div className="truncate font-bold" title={transaction.merchant}>{transaction.merchant}</div>
-          <MatchBadge score={score} />
+          <MatchBadge score={candidate.score} />
+          {candidate.suggested && <Badge variant={candidate.wouldAutoAttach ? 'success' : 'secondary'}>{candidate.wouldAutoAttach ? 'Auto-safe' : 'Best match'}</Badge>}
+          {candidate.ambiguous && <Badge variant="warning">Ambiguous</Badge>}
         </div>
         <div className="mt-1 flex flex-wrap gap-2 text-xs text-dim">
           <span>{transaction.date}</span>
           <span>{transaction.cat}</span>
           <span>{transaction.src}</span>
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {reasonBadges(candidate.reasons).map((reason) => (
+            <span key={reason.label} className="rounded-full bg-cream px-2 py-0.5 text-[10px] font-bold text-dim">
+              {reason.label} {reason.value}
+            </span>
+          ))}
         </div>
       </div>
       <div className="self-center text-left md:text-right">
@@ -577,88 +562,34 @@ function Metric({
 }
 
 function MatchBadge({ score }: { score: number }) {
-  const variant = score >= 82 ? 'success' : score >= 55 ? 'warning' : 'muted';
-  return <Badge variant={variant}>{Math.round(score)}%</Badge>;
+  const variant = score >= 0.82 ? 'success' : score >= 0.55 ? 'warning' : 'muted';
+  return <Badge variant={variant}>{Math.round(score * 100)}%</Badge>;
 }
 
 function receiptLabel(receipt: ReceiptInboxItem): string {
   return receipt.merchant || receipt.fileName || `${receipt.source} receipt`;
 }
 
-function candidateWindow(receipt: ReceiptInboxItem): { from: string; to: string } {
-  if (!receipt.receiptDate) return { from: defaultFrom(), to: today() };
-  const date = new Date(`${receipt.receiptDate}T00:00:00`);
-  const from = new Date(date);
-  from.setDate(from.getDate() - 7);
-  const to = new Date(date);
-  to.setDate(to.getDate() + 7);
-  return { from: isoDate(from), to: isoDate(to) };
+function candidateMatchesQuery(candidate: ReceiptMatchCandidate, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const transaction = candidate.transaction;
+  return [transaction.merchant, transaction.cat, transaction.src, transaction.date]
+    .some((value) => value.toLowerCase().includes(q));
 }
 
-function scoreCandidate(receipt: ReceiptInboxItem, transaction: Transaction): number {
-  const amount = receipt.totalCents == null ? 0.35 : amountScore(receipt.totalCents, transaction.amountCents ?? Math.round(transaction.amount * 100));
-  const date = receipt.receiptDate ? dateScore(receipt.receiptDate, transaction.date) : 0.5;
-  const merchant = merchantScore(receipt.merchant ?? '', transaction.merchant);
-  return Math.round(((amount * 0.5) + (merchant * 0.3) + (date * 0.2)) * 100);
-}
-
-function amountScore(receiptCents: number, transactionCents: number): number {
-  const txn = Math.abs(transactionCents);
-  const delta = Math.abs(Math.abs(receiptCents) - txn);
-  if (delta <= 2) return 1;
-  const tolerance = Math.max(100, txn * 0.02);
-  return Math.max(0, 1 - delta / tolerance);
-}
-
-function dateScore(receiptDate: string, transactionDate: string): number {
-  const deltaDays = Math.abs((Date.parse(receiptDate) - Date.parse(transactionDate)) / 86_400_000);
-  if (deltaDays <= 1) return 1;
-  if (deltaDays > 7) return 0;
-  return Math.max(0, 1 - deltaDays / 7);
-}
-
-function merchantScore(receiptMerchant: string, transactionMerchant: string): number {
-  const a = tokens(receiptMerchant);
-  const b = tokens(transactionMerchant);
-  if (!a.size || !b.size) return 0.5;
-  let jaccard = 0;
-  const overlap = [...a].filter((token) => b.has(token)).length;
-  jaccard = overlap / new Set([...a, ...b]).size;
-  // Condensed match: "Eleven Labs Inc." and "Elevenlabs.io" both reduce to "elevenlabs".
-  const na = condenseMerchant(receiptMerchant);
-  const nb = condenseMerchant(transactionMerchant);
-  let condensed = 0;
-  if (na && nb) {
-    if (na === nb) condensed = 1;
-    else if (na.length >= 4 && nb.length >= 4 && (na.includes(nb) || nb.includes(na))) condensed = 0.9;
-  }
-  return Math.max(jaccard, condensed);
-}
-
-function condenseMerchant(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/\.(io|com|net|org|ai|app|co|inc|gov|biz)\b/g, ' ')
-    .replace(/\b(inc|llc|ltd|co|corp|corporation|company|the|payment|payments|pymt|bill|subscription)\b/g, ' ')
-    .replace(/[^a-z0-9]+/g, '');
-}
-
-function tokens(value: string): Set<string> {
-  return new Set(value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter((token) => token.length > 1));
-}
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function defaultFrom(): string {
-  const start = new Date();
-  start.setMonth(start.getMonth() - 3);
-  return start.toISOString().slice(0, 10);
-}
-
-function isoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+function reasonBadges(reasons: Record<string, number | string>) {
+  return [
+    { key: 'amountScore', label: 'Amount' },
+    { key: 'dateScore', label: 'Date' },
+    { key: 'merchantScore', label: 'Merchant' },
+    { key: 'cardScore', label: 'Card' },
+    { key: 'businessScore', label: 'Business' },
+  ].flatMap((item) => {
+    const raw = reasons[item.key];
+    if (typeof raw !== 'number') return [];
+    return [{ label: item.label, value: `${Math.round(raw * 100)}%` }];
+  });
 }
 
 function formatCentsInput(cents?: number | null): string {

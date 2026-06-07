@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Camera, CheckCircle2, ClipboardPaste, FileUp, LogOut, ReceiptText, RotateCcw, ShieldCheck, Upload, XCircle } from 'lucide-react';
+import { Camera, CheckCircle2, ClipboardPaste, FileUp, LogOut, RotateCcw, ShieldCheck, Upload, XCircle } from 'lucide-react';
 import {
   getReceiptUploaderSession,
   loginReceiptUploader,
@@ -12,6 +12,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { LogoMark } from '@/components/LogoMark';
 import { cn } from '@/lib/cn';
 
 const acceptedReceiptTypes = 'image/*,application/pdf,text/plain,text/html,.txt,.html,.htm';
@@ -81,9 +82,7 @@ export function EmployeeReceiptUploadPage() {
       <div className="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 py-5 sm:justify-center">
         <div className="mb-5 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-inverse text-inverse-foreground">
-              <ReceiptText className="h-5 w-5" />
-            </span>
+            <LogoMark className="h-11 w-11 rounded-xl" />
             <div>
               <h1 className="font-display text-2xl font-bold leading-tight">Receipt Upload</h1>
               <p className="text-sm text-dim">Ledger AI</p>

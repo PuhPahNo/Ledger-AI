@@ -9,25 +9,30 @@ import {
   ChevronRight,
   ChevronUp,
   Download,
+  ExternalLink,
   Receipt as ReceiptIcon,
   Sparkles,
   TriangleAlert,
 } from 'lucide-react';
 import {
   getCashFlow,
+  getCloseReadiness,
   getOwnerInsights,
   listBusinesses,
   listCategories,
+  signOffClosePeriod,
   uploadReceipt,
 } from '@/api';
 import type {
   Business,
   CashFlowSummary,
   Category,
+  CloseReadiness,
+  CloseReadinessItem,
   CurrentUser,
   OwnerInsightsSummary,
 } from '@/types/domain';
-import type { AppView } from '@/types/navigation';
+import type { AppView, TransactionViewFilters } from '@/types/navigation';
 import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
 import { useResolvedColor, useTheme } from '@/hooks/useTheme';
@@ -39,6 +44,7 @@ import { cn } from '@/lib/cn';
 interface Props {
   user?: CurrentUser;
   onViewChange?: (view: AppView) => void;
+  onOpenTransactions?: (filters: TransactionViewFilters) => void;
   onLogout?: () => void;
 }
 
@@ -73,11 +79,22 @@ const emptyCashFlow: CashFlowSummary = {
   periods: [],
 };
 
-export function OwnerInsightsPage({ user, onViewChange, onLogout }: Props) {
+const emptyCloseReadiness: CloseReadiness = {
+  from: '',
+  to: '',
+  biz: 'all',
+  signedOff: false,
+  signedOffAt: null,
+  canSignOff: false,
+  items: [],
+};
+
+export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLogout }: Props) {
   const { toast } = useToast();
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [summary, setSummary] = useState<OwnerInsightsSummary>(emptyInsights);
   const [cashFlow, setCashFlow] = useState<CashFlowSummary>(emptyCashFlow);
+  const [closeReadiness, setCloseReadiness] = useState<CloseReadiness>(emptyCloseReadiness);
   const [categories, setCategories] = useState<Category[]>([]);
   const [business, setBusiness] = useState('all');
   const [from, setFrom] = useState(startOfMonth());
@@ -104,11 +121,13 @@ export function OwnerInsightsPage({ user, onViewChange, onLogout }: Props) {
         biz: business,
       }),
       listCategories({ from, to, biz: business }),
+      getCloseReadiness({ from, to, biz: business }),
     ])
-      .then(([insightsResult, cashFlowResult, categoryRows]) => {
+      .then(([insightsResult, cashFlowResult, categoryRows, closeResult]) => {
         setSummary(insightsResult);
         setCashFlow(cashFlowResult);
         setCategories(categoryRows);
+        setCloseReadiness(closeResult);
       })
       .catch((loadError: Error) => setError(loadError.message))
       .finally(() => setLoading(false));
@@ -126,6 +145,35 @@ export function OwnerInsightsPage({ user, onViewChange, onLogout }: Props) {
         variant: 'destructive',
         title: 'Upload failed',
         description: uploadError instanceof Error ? uploadError.message : 'Try again.',
+      });
+    }
+  };
+
+  const handleCloseItem = (item: CloseReadinessItem) => {
+    if (item.actionView === 'transactions') {
+      onOpenTransactions?.({
+        business,
+        from,
+        to,
+        direction: typeof item.filters?.direction === 'string' ? item.filters.direction as TransactionViewFilters['direction'] : undefined,
+        receipts: Array.isArray(item.filters?.receipts) ? item.filters.receipts as TransactionViewFilters['receipts'] : undefined,
+        categories: Array.isArray(item.filters?.categories) ? item.filters.categories as string[] : undefined,
+      });
+      return;
+    }
+    onViewChange?.(item.actionView);
+  };
+
+  const handleSignOff = async () => {
+    try {
+      const result = await signOffClosePeriod({ from, to, biz: business });
+      setCloseReadiness(result);
+      toast({ variant: 'success', title: 'Period signed off', description: `${from} to ${to}` });
+    } catch (signOffError) {
+      toast({
+        variant: 'destructive',
+        title: 'Close sign-off blocked',
+        description: signOffError instanceof Error ? signOffError.message : 'Clear close blockers first.',
       });
     }
   };
@@ -365,37 +413,54 @@ export function OwnerInsightsPage({ user, onViewChange, onLogout }: Props) {
                 <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">
                   Close queue
                 </div>
-                <h3 className="font-display text-lg font-bold text-ink">{briefing.closeItems.length} items left</h3>
+                <h3 className="font-display text-lg font-bold text-ink">
+                  {closeReadiness.signedOff ? 'Signed off' : `${closeReadiness.items.length} item${closeReadiness.items.length === 1 ? '' : 's'} left`}
+                </h3>
+                {closeReadiness.signedOffAt && (
+                  <div className="text-xs text-dim">Signed {new Date(closeReadiness.signedOffAt).toLocaleString()}</div>
+                )}
               </div>
-              {briefing.closeItems.length > 0 && (
-                <Button size="sm" onClick={() => onViewChange?.('transactions')}>
+              {closeReadiness.canSignOff ? (
+                <Button size="sm" onClick={handleSignOff}>
+                  <CheckCircle className="h-3.5 w-3.5" />
+                  Sign off
+                </Button>
+              ) : closeReadiness.items.length > 0 && (
+                <Button size="sm" onClick={() => handleCloseItem(closeReadiness.items[0])}>
                   Start close
                 </Button>
               )}
             </div>
-            {briefing.closeItems.length === 0 ? (
+            {closeReadiness.signedOff ? (
+              <div className="rounded-lg bg-sage/15 p-4 text-sm font-bold text-sage-ink">
+                <CheckCircle className="mb-2 inline h-4 w-4" /> This period has been signed off.
+              </div>
+            ) : closeReadiness.items.length === 0 ? (
               <div className="rounded-lg bg-sage/15 p-4 text-sm font-bold text-sage-ink">
                 <CheckCircle className="mb-2 inline h-4 w-4" /> Everything is clean for this period.
               </div>
             ) : (
               <div className="flex flex-col gap-1.5">
-                {briefing.closeItems.map((item, index) => (
+                {closeReadiness.items.map((item) => (
                   <button
-                    key={index}
+                    key={item.id}
                     type="button"
-                    onClick={item.onClick}
+                    onClick={() => item.id === 'sign-off' ? void handleSignOff() : handleCloseItem(item)}
                     className="group flex items-center gap-3 rounded-lg bg-[hsl(var(--color-sunken))] px-3 py-2 text-left transition-colors hover:bg-cream"
                   >
                     <span
                       className={cn(
                         'flex h-7 w-7 items-center justify-center rounded-lg',
-                        item.tone === 'warn' ? 'bg-coral/20 text-coral-ink' : 'bg-inverse text-inverse-foreground',
+                        item.severity === 'blocker' ? 'bg-coral/20 text-coral-ink' : item.severity === 'review' ? 'bg-lemon/40 text-lemon-ink' : 'bg-inverse text-inverse-foreground',
                       )}
                     >
-                      {item.icon}
+                      {iconForCloseItem(item)}
                     </span>
-                    <span className="flex-1 text-sm font-bold text-ink">{item.label}</span>
-                    <ChevronRight className="h-3.5 w-3.5 text-dim group-hover:text-ink" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-bold text-ink">{item.label}</span>
+                      <span className="block truncate text-xs text-dim">{item.detail}</span>
+                    </span>
+                    <ExternalLink className="h-3.5 w-3.5 text-dim group-hover:text-ink" />
                   </button>
                 ))}
               </div>
@@ -440,6 +505,14 @@ interface CloseItem {
   icon: ReactNode;
   tone: 'warn' | 'final';
   onClick?: () => void;
+}
+
+function iconForCloseItem(item: CloseReadinessItem): ReactNode {
+  if (item.id.includes('receipt')) return <ReceiptIcon className="h-3.5 w-3.5" />;
+  if (item.id.includes('categor') || item.id.includes('rule')) return <Boxes className="h-3.5 w-3.5" />;
+  if (item.id.includes('transfer') || item.id.includes('sync')) return <TriangleAlert className="h-3.5 w-3.5" />;
+  if (item.id.includes('export')) return <Download className="h-3.5 w-3.5" />;
+  return <CheckCircle className="h-3.5 w-3.5" />;
 }
 
 function buildBriefing(

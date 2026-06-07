@@ -108,6 +108,8 @@ async function mockAssistantMessage(
         type: 'metric_grid',
         id: 'mock-metrics',
         title: 'Mock finance snapshot',
+        sources: [{ type: 'cash_flow', filters: { business: 'Draft Sharks', period: 'May mock data' } }],
+        actions: [{ label: 'Open cash flow', view: 'cash-flow' }],
         metrics: [
           { label: 'Inflow', value: '$96,000', detail: 'May mock data', tone: 'positive' },
           { label: 'Operating outflow', value: '$82,000', detail: 'Transfers excluded', tone: 'default' },
@@ -120,6 +122,8 @@ async function mockAssistantMessage(
         title: 'Mock cash flow',
         chartType: 'bar',
         valueType: 'currency_cents',
+        sources: [{ type: 'cash_flow', filters: { business: 'Draft Sharks', months: ['Jan', 'Feb', 'Mar', 'Apr', 'May'] } }],
+        actions: [{ label: 'Open transactions', view: 'transactions' }],
         labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May'],
         series: [
           { name: 'Inflow', color: '#1F8A5B', values: [8400000, 8900000, 138811900, 8200000, 9600000] },

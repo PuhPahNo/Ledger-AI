@@ -35,7 +35,18 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
 
     if (body.webhook_type === 'TRANSACTIONS' && body.item_id) {
       const connection = await db.query.connections.findFirst({ where: eq(connections.providerItemId, body.item_id) });
-      if (connection) await enqueue('plaid.sync', { connectionId: connection.id });
+      if (connection) {
+        await db.update(connections).set({
+          metadata: {
+            ...connection.metadata,
+            lastWebhookAt: new Date().toISOString(),
+            lastWebhookType: body.webhook_type,
+            lastWebhookCode: body.webhook_code,
+          },
+          updatedAt: new Date(),
+        }).where(eq(connections.id, connection.id));
+        await enqueue('plaid.sync', { connectionId: connection.id });
+      }
     }
     return { ok: true };
   });
@@ -56,7 +67,19 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     };
     if (decoded.emailAddress) {
       const connection = await db.query.connections.findFirst({ where: eq(connections.gmailEmail, decoded.emailAddress) });
-      if (connection) await enqueue('gmail.sync', { connectionId: connection.id, historyId: decoded.historyId });
+      if (connection) {
+        await db.update(connections).set({
+          metadata: {
+            ...connection.metadata,
+            lastWebhookAt: new Date().toISOString(),
+            lastPubSubAt: new Date().toISOString(),
+            lastPubSubHistoryId: decoded.historyId ?? null,
+            lastPubSubMessageId: body.message.messageId ?? null,
+          },
+          updatedAt: new Date(),
+        }).where(eq(connections.id, connection.id));
+        await enqueue('gmail.sync', { connectionId: connection.id, historyId: decoded.historyId });
+      }
     }
     return { ok: true };
   });
