@@ -100,30 +100,57 @@ export async function syncGmailConnection(connectionId: string, historyId?: stri
   const startHistoryId = connection.gmailHistoryId ?? historyId;
   if (!startHistoryId) return backfillGmail(connectionId, gmailBackfillQuery());
 
-  const history = await gmail.users.history.list({
-    userId: 'me',
-    startHistoryId,
-    historyTypes: ['messageAdded'],
-  });
-
   const messageIds = new Set<string>();
-  for (const item of history.data.history ?? []) {
-    for (const added of item.messagesAdded ?? []) {
-      if (added.message?.id) messageIds.add(added.message.id);
-    }
+  let latestHistoryId: string | null = null;
+  let pageToken: string | undefined;
+  try {
+    do {
+      const history = await gmail.users.history.list({
+        userId: 'me',
+        startHistoryId,
+        historyTypes: ['messageAdded'],
+        pageToken,
+      });
+      if (history.data.historyId) latestHistoryId = String(history.data.historyId);
+      for (const item of history.data.history ?? []) {
+        for (const added of item.messagesAdded ?? []) {
+          if (added.message?.id) messageIds.add(added.message.id);
+        }
+      }
+      pageToken = history.data.nextPageToken ?? undefined;
+    } while (pageToken);
+  } catch (error) {
+    if (!isGmailNotFoundError(error)) throw error;
+    // Gmail returns 404 when the stored history cursor is too old. Reconcile
+    // with a receipt search, then reset the cursor to the mailbox's current id.
+    return backfillGmail(connectionId, gmailBackfillQuery());
   }
 
-  let count = 0;
-  for (const messageId of messageIds) {
-    count += await ingestGmailMessage(connectionId, messageId);
-  }
+  const result = await ingestAvailableGmailMessages(messageIds, (messageId) => ingestGmailMessage(connectionId, messageId));
 
   await db.update(connections).set({
-    gmailHistoryId: history.data.historyId ? String(history.data.historyId) : historyId ?? connection.gmailHistoryId,
+    gmailHistoryId: latestHistoryId ?? historyId ?? connection.gmailHistoryId,
     lastSyncAt: new Date(),
     updatedAt: new Date(),
   }).where(eq(connections.id, connectionId));
-  return count;
+  return result.count;
+}
+
+export async function ingestAvailableGmailMessages(
+  messageIds: Iterable<string>,
+  ingest: (messageId: string) => Promise<number>,
+): Promise<{ count: number; skippedMissing: number }> {
+  let count = 0;
+  let skippedMissing = 0;
+  for (const messageId of messageIds) {
+    try {
+      count += await ingest(messageId);
+    } catch (error) {
+      if (!isGmailNotFoundError(error)) throw error;
+      skippedMissing += 1;
+    }
+  }
+  return { count, skippedMissing };
 }
 
 export async function backfillGmail(connectionId: string, query: string): Promise<number> {
@@ -132,16 +159,47 @@ export async function backfillGmail(connectionId: string, query: string): Promis
   let pageToken: string | undefined;
   do {
     const list = await gmail.users.messages.list({ userId: 'me', q: query, maxResults: 100, pageToken });
-    for (const message of list.data.messages ?? []) {
-      if (message.id) count += await ingestGmailMessage(connectionId, message.id);
-    }
+    const result = await ingestAvailableGmailMessages(
+      (list.data.messages ?? []).flatMap((message) => message.id ? [message.id] : []),
+      (messageId) => ingestGmailMessage(connectionId, messageId),
+    );
+    count += result.count;
     pageToken = list.data.nextPageToken ?? undefined;
   } while (pageToken);
+  const profile = await gmail.users.getProfile({ userId: 'me' });
   await db.update(connections).set({
+    gmailHistoryId: profile.data.historyId ? String(profile.data.historyId) : undefined,
     lastSyncAt: new Date(),
     updatedAt: new Date(),
   }).where(eq(connections.id, connectionId));
   return count;
+}
+
+export function isGmailNotFoundError(error: unknown): boolean {
+  const candidate = error as {
+    code?: unknown;
+    status?: unknown;
+    message?: unknown;
+    response?: {
+      status?: unknown;
+      data?: {
+        error?: {
+          code?: unknown;
+          status?: unknown;
+          message?: unknown;
+        };
+      };
+    };
+  };
+  const statusCodes = [
+    candidate.code,
+    candidate.status,
+    candidate.response?.status,
+    candidate.response?.data?.error?.code,
+  ];
+  if (statusCodes.some((value) => Number(value) === 404)) return true;
+  if (candidate.response?.data?.error?.status === 'NOT_FOUND') return true;
+  return candidate.message === 'Requested entity was not found.';
 }
 
 async function ingestGmailMessage(connectionId: string, messageId: string): Promise<number> {
