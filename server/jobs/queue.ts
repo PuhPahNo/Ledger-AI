@@ -46,7 +46,7 @@ export async function claimNextJob() {
 }
 
 export async function markJobSucceeded(jobId: string): Promise<void> {
-  await db.update(jobs).set({ status: 'succeeded', updatedAt: new Date() }).where(eq(jobs.id, jobId));
+  await db.update(jobs).set({ status: 'succeeded', lastError: null, updatedAt: new Date() }).where(eq(jobs.id, jobId));
 }
 
 export async function markJobFailed(jobId: string, error: unknown): Promise<void> {
