@@ -4,6 +4,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { accountLabel } from '@/lib/account';
+import { categorySourceTag } from '@/lib/categorySource';
 import { cn } from '@/lib/cn';
 import { fmt$ } from '@/lib/format';
 import { AccountTypeIcon, ReceiptPill } from './TransactionPageParts';
@@ -101,7 +102,14 @@ export function TransactionsTable({
                           <span className="text-xs">{transaction.src}</span>
                         )}
                       </TableCell>
-                      <TableCell className="truncate text-xs">{transaction.cat}</TableCell>
+                      <TableCell className="truncate text-xs">
+                        {transaction.cat}
+                        {categorySourceTag(transaction.categorySource, transaction.categoryConfidence) && (
+                          <span className="ml-1.5 rounded-full bg-cream px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-dim">
+                            {categorySourceTag(transaction.categorySource, transaction.categoryConfidence)}
+                          </span>
+                        )}
+                      </TableCell>
                       <TableCell
                         className={cn(
                           'text-right font-display font-bold tabular-nums',

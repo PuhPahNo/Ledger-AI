@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import {
   Bell,
   LayoutDashboard,
+  ListChecks,
   Receipt,
   Search,
   Settings,
@@ -35,6 +36,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'cash-flow', label: 'Cash Flow', icon: TrendingUp },
   { id: 'insights', label: 'Insights', icon: Sparkles },
   { id: 'receipts', label: 'Receipts', icon: Receipt },
+  { id: 'rules', label: 'Rules', icon: ListChecks },
   { id: 'balances', label: 'Balances', icon: Wallet },
   { id: 'assistant', label: 'Assistant', icon: Sparkles },
 ];

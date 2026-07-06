@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Save } from 'lucide-react';
 import { updateTransaction } from '@/api';
+import { categorySourceLabel, isGuessedCategorySource } from '@/lib/categorySource';
 import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
 import type { Business, Category, Transaction } from '@/types/domain';
@@ -130,6 +131,20 @@ export function TransactionDrawer({ transaction, businesses, categories, onClose
             </div>
 
             <div className="grid gap-1.5 rounded-md bg-[hsl(var(--color-sunken))] p-3 text-xs">
+              {categorySourceLabel(transaction.categorySource) && (
+                <div className="flex justify-between">
+                  <span className="text-dim">Categorized by</span>
+                  <span className="font-bold">
+                    {categorySourceLabel(transaction.categorySource)}
+                    {transaction.categoryConfidence != null
+                      && isGuessedCategorySource(transaction.categorySource)
+                      && ` · ${Math.round(transaction.categoryConfidence * 100)}%`}
+                  </span>
+                </div>
+              )}
+              {categoryReason(transaction) && (
+                <div className="text-[11px] leading-snug text-dim">{categoryReason(transaction)}</div>
+              )}
               <div className="flex justify-between">
                 <span className="text-dim">Receipt status</span>
                 <span className="font-bold">{transaction.receipt}</span>
@@ -154,6 +169,16 @@ export function TransactionDrawer({ transaction, businesses, categories, onClose
       </SheetContent>
     </Sheet>
   );
+}
+
+/** Pull a human-readable "why" out of the categorization evidence, when one exists. */
+function categoryReason(transaction: Transaction): string | null {
+  const evidence = transaction.categoryEvidence;
+  if (!evidence) return null;
+  const reason = evidence.reason;
+  if (typeof reason === 'string' && reason.length > 0 && !reason.includes('_')) return reason;
+  if (typeof evidence.pattern === 'string') return `Matched rule pattern "${evidence.pattern}"`;
+  return null;
 }
 
 function receiptVariant(status: Transaction['receipt']): 'success' | 'warning' | 'danger' | 'muted' {
