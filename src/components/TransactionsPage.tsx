@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowDownRight, ArrowUpRight, Download } from 'lucide-react';
 import {
+  bulkCategorizeTransactions,
   getTransactionRollup,
   listAccounts,
   listBusinesses,
@@ -39,6 +40,7 @@ import {
 import { TransactionsFilterRail } from './transactions/TransactionsFilterRail';
 import { TransactionsTable } from './transactions/TransactionsTable';
 import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/cn';
 
 interface Props {
@@ -94,6 +96,9 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
   const [missingOutflowCount, setMissingOutflowCount] = useState(0);
   const [waiveBefore, setWaiveBefore] = useState(ninetyDaysAgo());
   const [waiving, setWaiving] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkCategoryId, setBulkCategoryId] = useState('');
+  const [bulkApplying, setBulkApplying] = useState(false);
 
   useEffect(() => {
     setBusiness(initialFilters?.business ?? 'all');
@@ -151,6 +156,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
       .then(([transactionRows, summary]) => {
         setRows(transactionRows);
         setRollup(summary);
+        setSelectedIds(new Set());
       })
       .catch((loadError: Error) => setError(loadError.message))
       .finally(() => setLoading(false));
@@ -247,6 +253,52 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
     link.download = `transactions-${from}-to-${to}.csv`;
     link.click();
     URL.revokeObjectURL(link.href);
+  };
+
+  const toggleSelect = (transactionId: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(transactionId)) next.delete(transactionId);
+      else next.add(transactionId);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedIds((current) => (
+      rows.length > 0 && rows.every((row) => current.has(row.id))
+        ? new Set()
+        : new Set(rows.map((row) => row.id))
+    ));
+  };
+
+  const bulkCategoryOptions = useMemo(
+    () => categories.filter((category) => category.id),
+    [categories],
+  );
+
+  const handleBulkCategorize = async () => {
+    if (!bulkCategoryId || selectedIds.size === 0) return;
+    setBulkApplying(true);
+    try {
+      const result = await bulkCategorizeTransactions([...selectedIds], bulkCategoryId);
+      toast({
+        variant: 'success',
+        title: `Categorized ${result.updated} transaction${result.updated === 1 ? '' : 's'}`,
+        description: result.skipped > 0 ? `${result.skipped} skipped (already set or wrong direction).` : undefined,
+      });
+      setSelectedIds(new Set());
+      setBulkCategoryId('');
+      setRefreshKey((key) => key + 1);
+    } catch (bulkError) {
+      toast({
+        variant: 'destructive',
+        title: 'Bulk categorize failed',
+        description: bulkError instanceof Error ? bulkError.message : 'Try again.',
+      });
+    } finally {
+      setBulkApplying(false);
+    }
   };
 
   const resetToFirstPage = () => setOffset(0);
@@ -384,6 +436,28 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
               />
             </div>
 
+            {selectedIds.size > 0 && (
+              <div className="mb-3 flex flex-wrap items-center gap-3 rounded-xl border border-ink2/10 bg-paper px-3 py-2 shadow-sm">
+                <span className="text-xs font-bold">{selectedIds.size} selected</span>
+                <Select value={bulkCategoryId || undefined} onValueChange={setBulkCategoryId}>
+                  <SelectTrigger className="h-8 w-56 text-xs">
+                    <SelectValue placeholder="Set category to…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {bulkCategoryOptions.map((category) => (
+                      <SelectItem key={category.id} value={category.id!}>{category.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button size="sm" disabled={!bulkCategoryId || bulkApplying} onClick={handleBulkCategorize}>
+                  {bulkApplying ? 'Applying…' : 'Apply category'}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
+                  Clear
+                </Button>
+              </div>
+            )}
+
             <TransactionsTable
               rows={rows}
               rollup={rollup}
@@ -395,6 +469,9 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
               accountById={accountById}
               onSelectTransaction={setSelectedTransaction}
               onPageChange={setOffset}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelect}
+              onToggleSelectAll={toggleSelectAll}
             />
           </div>
         </div>

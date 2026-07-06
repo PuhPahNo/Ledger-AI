@@ -12,16 +12,21 @@ export function ReceiptRow({
   receipt,
   active,
   busy,
+  checked,
   onSelect,
   onDismiss,
   onOpenFile,
+  onToggleChecked,
 }: {
   receipt: ReceiptInboxItem;
   active: boolean;
   busy: boolean;
+  /** Multi-select for bulk dismiss; omit onToggleChecked to hide the checkbox. */
+  checked?: boolean;
   onSelect: () => void;
   onDismiss: () => void;
   onOpenFile: () => void;
+  onToggleChecked?: () => void;
 }) {
   return (
     <div
@@ -37,6 +42,16 @@ export function ReceiptRow({
       )}
     >
       <div className="flex min-w-0 items-start gap-3">
+        {onToggleChecked && (
+          <input
+            type="checkbox"
+            aria-label={`Select ${receiptLabel(receipt)}`}
+            checked={Boolean(checked)}
+            onClick={(event) => event.stopPropagation()}
+            onChange={onToggleChecked}
+            className="mt-3 h-3.5 w-3.5 shrink-0 accent-ink"
+          />
+        )}
         <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-cream">
           <FileText className="h-4 w-4" />
         </div>

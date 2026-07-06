@@ -6,7 +6,7 @@ import { db } from '../../db/client.js';
 import { accounts, businesses, categories, transactions } from '../../db/schema.js';
 import { notFound } from '../../lib/errors.js';
 import { audit } from '../../services/audit.js';
-import { isIncomeCategory } from '../../services/categorization.js';
+import { categoryMatchesTransactionDirection, isIncomeCategory } from '../../services/categorization.js';
 import { createManualCategorizationFeedback } from '../../services/categorizationFeedback.js';
 import { attachReceipt } from '../../services/matching.js';
 import { getReceiptTrackingSince, setReceiptTrackingSince } from '../../services/appSettings.js';
@@ -218,6 +218,70 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     const row = await transactionById(params.id);
     if (!row) notFound('Transaction not found');
     return toApiTransaction(row as any);
+  });
+
+  // Bulk manual categorization — the drawer's one-at-a-time flow made cleaning up a
+  // merchant's history painful. Learning feedback fires once per distinct merchant.
+  app.post('/transactions/bulk-category', async (request) => {
+    const user = await requireUser(request);
+    const body = z.object({
+      transactionIds: z.array(z.string().uuid()).min(1).max(200),
+      categoryId: z.string().uuid(),
+    }).parse(request.body);
+
+    const selectedCategory = await db.query.categories.findFirst({ where: eq(categories.id, body.categoryId) });
+    if (!selectedCategory) notFound('Category not found');
+
+    const rows = await db.select().from(transactions).where(inArray(transactions.id, body.transactionIds));
+    const seenMerchants = new Set<string>();
+    let updated = 0;
+    let skipped = 0;
+    for (const transaction of rows) {
+      // Direction guard: don't file spend under Income (or vice versa) in bulk.
+      if (!categoryMatchesTransactionDirection(selectedCategory, transaction.amountCents)) {
+        skipped += 1;
+        continue;
+      }
+      if (transaction.categoryId === body.categoryId) {
+        skipped += 1;
+        continue;
+      }
+      const previousCategoryId = transaction.categoryId;
+      await db
+        .update(transactions)
+        .set({
+          categoryId: body.categoryId,
+          categorySource: 'manual',
+          categoryConfidence: '1.0000',
+          categoryEvidence: { source: 'bulk_categorize' },
+          updatedAt: new Date(),
+        })
+        .where(eq(transactions.id, transaction.id));
+      updated += 1;
+
+      const merchantKey = `${transaction.businessId}:${transaction.merchant.toLowerCase()}`;
+      if (
+        transaction.amountCents < 0
+        && !isIncomeCategory(selectedCategory)
+        && !seenMerchants.has(merchantKey)
+      ) {
+        seenMerchants.add(merchantKey);
+        await createManualCategorizationFeedback({
+          transaction: { ...transaction, categoryId: body.categoryId },
+          previousCategoryId,
+          newCategoryId: body.categoryId,
+          userId: user.id,
+        });
+      }
+    }
+
+    await audit(request, user, 'bulk_categorize_transactions', 'transaction', undefined, {
+      categoryId: body.categoryId,
+      requested: body.transactionIds.length,
+      updated,
+      skipped,
+    });
+    return { updated, skipped };
   });
 
   app.post('/transactions/:id/receipt', async (request) => {

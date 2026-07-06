@@ -92,6 +92,21 @@ export function attachReceipt(transactionId: string, receiptId: string): Promise
   }).then(mapTransaction);
 }
 
+/**
+ * POST /api/transactions/bulk-category — manually categorize many transactions at once.
+ * Direction-mismatched rows are skipped server-side; learning fires once per merchant.
+ */
+export function bulkCategorizeTransactions(
+  transactionIds: string[],
+  categoryId: string,
+): Promise<{ updated: number; skipped: number }> {
+  if (useMockApi) return Promise.resolve({ updated: transactionIds.length, skipped: 0 });
+  return http<{ updated: number; skipped: number }>('/transactions/bulk-category', {
+    method: 'POST',
+    body: JSON.stringify({ transactionIds, categoryId }),
+  });
+}
+
 export function updateTransaction(
   transactionId: string,
   body: { businessId?: string; categoryId?: string | null; note?: string | null },

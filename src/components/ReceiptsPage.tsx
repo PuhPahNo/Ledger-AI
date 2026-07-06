@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FileText, Link2, Search, XCircle } from 'lucide-react';
 import {
   attachReceipt,
+  bulkDismissReceipts,
   dismissReceipt,
   listBusinesses,
   listReceiptCandidates,
@@ -58,6 +59,8 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
   const [receiptDraft, setReceiptDraft] = useState({ merchant: '', total: '', receiptDate: '' });
   const [error, setError] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [bulkDismissing, setBulkDismissing] = useState(false);
   const detailRef = useRef<HTMLDivElement>(null);
 
   const selectedReceipt = receipts.find((receipt) => receipt.id === selectedReceiptId) ?? receipts[0] ?? null;
@@ -96,6 +99,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
     })
       .then((rows) => {
         setReceipts(rows);
+        setCheckedIds(new Set());
         setSelectedReceiptId((current) => (current && rows.some((row) => row.id === current) ? current : rows[0]?.id ?? null));
       })
       .catch((loadError: Error) => setError(loadError.message))
@@ -230,6 +234,35 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
     }
   };
 
+  const toggleChecked = (receiptId: string) => {
+    setCheckedIds((current) => {
+      const next = new Set(current);
+      if (next.has(receiptId)) next.delete(receiptId);
+      else next.add(receiptId);
+      return next;
+    });
+  };
+
+  const handleBulkDismiss = async () => {
+    if (checkedIds.size === 0) return;
+    setBulkDismissing(true);
+    try {
+      const result = await bulkDismissReceipts([...checkedIds]);
+      toast({ variant: 'success', title: `Dismissed ${result.dismissed} receipt${result.dismissed === 1 ? '' : 's'}` });
+      setCheckedIds(new Set());
+      setSelectedReceiptId(null);
+      refresh();
+    } catch (dismissError) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not dismiss receipts',
+        description: dismissError instanceof Error ? dismissError.message : 'Try again.',
+      });
+    } finally {
+      setBulkDismissing(false);
+    }
+  };
+
   const handleDismiss = async (receipt: ReceiptInboxItem) => {
     setBusyReceiptId(receipt.id);
     try {
@@ -317,8 +350,14 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
         ) : (
           <div className="grid gap-3 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)]">
             <div className="overflow-hidden rounded-xl border border-ink2/10 bg-paper shadow-sm">
-              <div className="border-b border-ink2/10 px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ink2/10 px-4 py-3">
                 <h2 className="font-display text-xl font-bold">Unmatched receipts</h2>
+                {checkedIds.size > 0 && (
+                  <Button variant="outline" size="sm" disabled={bulkDismissing} onClick={handleBulkDismiss}>
+                    <XCircle className="h-3.5 w-3.5" />
+                    Dismiss {checkedIds.size} selected
+                  </Button>
+                )}
               </div>
               <div className="divide-y divide-ink2/10">
                 {receipts.map((receipt) => (
@@ -327,9 +366,11 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                     receipt={receipt}
                     active={receipt.id === selectedReceipt?.id}
                     busy={busyReceiptId === receipt.id}
+                    checked={checkedIds.has(receipt.id)}
                     onSelect={() => setSelectedReceiptId(receipt.id)}
                     onDismiss={() => handleDismiss(receipt)}
                     onOpenFile={() => previewFile(receipt)}
+                    onToggleChecked={() => toggleChecked(receipt.id)}
                   />
                 ))}
               </div>

@@ -20,6 +20,10 @@ interface TransactionsTableProps {
   accountById: Map<string, Account>;
   onSelectTransaction: (transaction: Transaction) => void;
   onPageChange: (offset: number) => void;
+  /** Multi-select for bulk actions; omit to hide the checkbox column. */
+  selectedIds?: Set<string>;
+  onToggleSelect?: (transactionId: string) => void;
+  onToggleSelectAll?: () => void;
 }
 
 export function TransactionsTable({
@@ -33,7 +37,12 @@ export function TransactionsTable({
   accountById,
   onSelectTransaction,
   onPageChange,
+  selectedIds,
+  onToggleSelect,
+  onToggleSelectAll,
 }: TransactionsTableProps) {
+  const selectable = Boolean(selectedIds && onToggleSelect);
+  const allSelected = selectable && rows.length > 0 && rows.every((row) => selectedIds!.has(row.id));
   return (
     <>
       <div className="overflow-x-auto rounded-xl border border-ink2/10 bg-paper shadow-sm">
@@ -46,6 +55,17 @@ export function TransactionsTable({
             <Table className="min-w-[1060px] table-fixed">
               <TableHeader>
                 <TableRow>
+                  {selectable && (
+                    <TableHead className="w-10">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all visible transactions"
+                        checked={allSelected}
+                        onChange={() => onToggleSelectAll?.()}
+                        className="h-3.5 w-3.5 accent-ink"
+                      />
+                    </TableHead>
+                  )}
                   <TableHead className="w-28">Date</TableHead>
                   <TableHead>Merchant</TableHead>
                   <TableHead className="w-44">Business</TableHead>
@@ -65,6 +85,17 @@ export function TransactionsTable({
                       onClick={() => onSelectTransaction(transaction)}
                       className="cursor-pointer"
                     >
+                      {selectable && (
+                        <TableCell onClick={(event) => event.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${transaction.merchant}`}
+                            checked={selectedIds!.has(transaction.id)}
+                            onChange={() => onToggleSelect!(transaction.id)}
+                            className="h-3.5 w-3.5 accent-ink"
+                          />
+                        </TableCell>
+                      )}
                       <TableCell className="whitespace-nowrap text-dim">
                         <div className="font-mono text-[11px]">{transaction.date}</div>
                       </TableCell>

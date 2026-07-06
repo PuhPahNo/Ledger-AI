@@ -125,6 +125,13 @@ export function InboxPage({ user, onViewChange, onOpenTransactions, onLogout }: 
     }
   };
 
+  const dismissVisible = async () => {
+    for (const item of filteredReviewItems) {
+      // eslint-disable-next-line no-await-in-loop
+      await resolve(item, 'dismiss');
+    }
+  };
+
   const allClear = !loading
     && receipts.length === 0
     && reviewItems.length === 0
@@ -257,12 +264,19 @@ export function InboxPage({ user, onViewChange, onOpenTransactions, onLogout }: 
                   </div>
                 )}
               </div>
-              {aiSuggestions.length > 1 && (
-                <Button size="sm" variant="secondary" onClick={acceptAiSuggestions} disabled={Boolean(resolving)}>
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Accept all AI ({aiSuggestions.length})
-                </Button>
-              )}
+              <div className="flex gap-2">
+                {aiSuggestions.length > 1 && (
+                  <Button size="sm" variant="secondary" onClick={acceptAiSuggestions} disabled={Boolean(resolving)}>
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Accept all AI ({aiSuggestions.length})
+                  </Button>
+                )}
+                {filteredReviewItems.length > 1 && (
+                  <Button size="sm" variant="ghost" onClick={dismissVisible} disabled={Boolean(resolving)}>
+                    Dismiss all shown
+                  </Button>
+                )}
+              </div>
             </div>
             <div className="grid gap-3 p-4">
               {filteredReviewItems.map((item) => (

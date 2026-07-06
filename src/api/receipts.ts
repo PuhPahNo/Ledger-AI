@@ -162,6 +162,15 @@ export function dismissReceipt(receiptId: string): Promise<{ ok: true }> {
   return http<{ ok: true }>(`/receipts/${receiptId}/dismiss`, { method: 'POST' });
 }
 
+/** POST /api/receipts/bulk-dismiss — mark many receipts not-applicable at once. */
+export function bulkDismissReceipts(receiptIds: string[]): Promise<{ dismissed: number }> {
+  if (useMockApi) return Promise.resolve({ dismissed: receiptIds.length });
+  return http<{ dismissed: number }>('/receipts/bulk-dismiss', {
+    method: 'POST',
+    body: JSON.stringify({ receiptIds }),
+  });
+}
+
 export interface RematchReceiptResult {
   matched: {
     attached: boolean;

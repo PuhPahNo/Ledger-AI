@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import path from 'node:path';
-import { and, desc, eq, getTableColumns, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, getTableColumns, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
@@ -194,6 +194,26 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
       .where(eq(receiptMatches.receiptId, params.id));
     await audit(request, user, 'dismiss_receipt', 'receipt', params.id);
     return { ok: true };
+  });
+
+  // Bulk dismiss — Gmail intake can sweep in a batch of non-receipts at once.
+  app.post('/receipts/bulk-dismiss', async (request) => {
+    const user = await requireUser(request);
+    const body = z.object({ receiptIds: z.array(z.string().uuid()).min(1).max(200) }).parse(request.body);
+    const dismissed = await db
+      .update(receipts)
+      .set({ status: 'n/a', updatedAt: new Date() })
+      .where(inArray(receipts.id, body.receiptIds))
+      .returning({ id: receipts.id });
+    await db
+      .update(receiptMatches)
+      .set({ status: 'rejected', decidedAt: new Date() })
+      .where(inArray(receiptMatches.receiptId, dismissed.map((row) => row.id)));
+    await audit(request, user, 'bulk_dismiss_receipts', 'receipt', undefined, {
+      requested: body.receiptIds.length,
+      dismissed: dismissed.length,
+    });
+    return { dismissed: dismissed.length };
   });
 }
 
