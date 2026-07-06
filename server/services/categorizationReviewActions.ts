@@ -12,6 +12,14 @@ import {
   type CategorizationReviewType,
   type Transaction,
 } from '../db/schema.js';
+import { normalize } from './categorization.js';
+
+/** Sources that represent explicit human judgment — never silently overwritten. */
+export const PROTECTED_CATEGORY_SOURCES: ReadonlySet<string> = new Set([
+  'manual',
+  'user_confirmed_rule',
+  'receipt_evidence',
+]);
 
 export async function acceptLearningRule(item: CategorizationReviewItem, userId?: string): Promise<{
   appliedCount: number;
@@ -31,13 +39,21 @@ export async function acceptLearningRule(item: CategorizationReviewItem, userId?
   const uncategorizedIds = matches
     .filter((match) => !match.categoryId || match.categoryName === 'Uncategorized')
     .map((match) => match.id);
-  const conflictIds = matches
-    .filter((match) => match.categoryId && match.categoryId !== payload.proposedCategoryId && match.categoryName !== 'Uncategorized')
+  const mismatched = matches
+    .filter((match) => match.categoryId && match.categoryId !== payload.proposedCategoryId && match.categoryName !== 'Uncategorized');
+  // The user just declared the truth for this merchant — fix machine-guessed history
+  // immediately; only human-set categories are held back for explicit review.
+  const autoFixableIds = mismatched
+    .filter((match) => !PROTECTED_CATEGORY_SOURCES.has(match.categorySource))
+    .map((match) => match.id);
+  const conflictIds = mismatched
+    .filter((match) => PROTECTED_CATEGORY_SOURCES.has(match.categorySource))
     .map((match) => match.id);
 
   let appliedCount = 0;
-  if (uncategorizedIds.length) {
-    const affected = await db.select().from(transactions).where(inArray(transactions.id, uncategorizedIds));
+  const applyIds = [...uncategorizedIds, ...autoFixableIds];
+  if (applyIds.length) {
+    const affected = await db.select().from(transactions).where(inArray(transactions.id, applyIds));
     for (const transaction of affected) {
       await updateTransactionCategory({
         transaction,
@@ -254,19 +270,26 @@ async function matchingTransactions(businessId: string, normalizedMerchant: stri
   id: string;
   categoryId: string | null;
   categoryName: string | null;
+  categorySource: string;
 }>> {
-  return db
+  // Merchant normalization (processor prefixes, store numbers) lives in normalize() and is
+  // too fiddly to mirror in SQL — pull the business's spend and filter in JS instead.
+  const rows = await db
     .select({
       id: transactions.id,
+      merchant: transactions.merchant,
       categoryId: transactions.categoryId,
       categoryName: categories.name,
+      categorySource: transactions.categorySource,
     })
     .from(transactions)
     .leftJoin(categories, eq(transactions.categoryId, categories.id))
     .where(and(
       eq(transactions.businessId, businessId),
       sql`${transactions.amountCents} < 0`,
-      sql`trim(regexp_replace(lower(${transactions.merchant}), '[^a-z0-9]+', ' ', 'g')) = ${normalizedMerchant}`,
     ))
     .orderBy(desc(transactions.date), asc(transactions.id));
+  return rows
+    .filter((row) => normalize(row.merchant) === normalizedMerchant)
+    .map(({ merchant: _merchant, ...row }) => row);
 }

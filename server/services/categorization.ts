@@ -215,8 +215,21 @@ export async function learnMerchantCategoryRule(input: {
   });
 }
 
+/**
+ * Payment-processor prefixes that bank descriptors prepend to the real merchant
+ * ("SQ *BOBA GUYS", "TST* MCDONALDS", "PAYPAL *SPOTIFY"). Dropped during normalization
+ * so rules learned from one descriptor style match the others.
+ */
+const PROCESSOR_PREFIXES = new Set(['sq', 'tst', 'py', 'pp', 'paypal', 'pos', 'ach', 'sp', 'gpay', 'aplpay', 'intuit']);
+
 export function normalize(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const base = value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  let tokens = base.split(' ').filter(Boolean);
+  while (tokens.length > 1 && PROCESSOR_PREFIXES.has(tokens[0])) tokens = tokens.slice(1);
+  // Store numbers and phone fragments vary per location ("STARBUCKS 800 4467"); drop
+  // pure-digit runs of 3+ except in leading position ("76", "7 eleven" keep their digits).
+  const cleaned = tokens.filter((token, index) => index === 0 || token.length < 3 || !/^\d+$/.test(token));
+  return (cleaned.length > 0 ? cleaned : tokens).join(' ');
 }
 
 export function isIncomeCategory(category: CategoryCandidate): boolean {

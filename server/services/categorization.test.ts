@@ -3,6 +3,7 @@ import {
   categoryNameForKnownSignals,
   categoryMatchesTransactionDirection,
   isExcludedFromSpendCategory,
+  normalize,
   preferredIncomeCategory,
   ruleMatches,
 } from './categorization.js';
@@ -116,5 +117,31 @@ describe('isExcludedFromSpendCategory', () => {
   it('identifies transfer categories that should not count as spend', () => {
     expect(isExcludedFromSpendCategory({ name: 'Transfers', taxCode: 'exclude_transfer' })).toBe(true);
     expect(isExcludedFromSpendCategory({ name: 'Software', taxCode: 'other_expense_software' })).toBe(false);
+  });
+});
+
+describe('normalize', () => {
+  it('lowercases and collapses punctuation', () => {
+    expect(normalize('Eleven-Labs, Inc.')).toBe('eleven labs inc');
+  });
+
+  it('strips payment-processor prefixes from bank descriptors', () => {
+    expect(normalize('SQ *BOBA GUYS SF')).toBe('boba guys sf');
+    expect(normalize('TST* MCDONALDS')).toBe('mcdonalds');
+    expect(normalize('PAYPAL *SPOTIFY')).toBe('spotify');
+  });
+
+  it('drops per-location store numbers but keeps meaningful digits', () => {
+    expect(normalize('STARBUCKS 800 4467')).toBe('starbucks');
+    expect(normalize('7-Eleven')).toBe('7 eleven');
+    expect(normalize('76 Fuel')).toBe('76 fuel');
+  });
+
+  it('never normalizes a merchant down to nothing', () => {
+    expect(normalize('411')).toBe('411');
+  });
+
+  it('matches the same merchant across descriptor styles', () => {
+    expect(normalize('SQ *BLUE BOTTLE 402')).toBe(normalize('Blue Bottle'));
   });
 });

@@ -1,4 +1,4 @@
-import { and, eq, gte, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, eq, gte, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { accounts, businesses, categories, receiptMatches, receipts, transactions, type Receipt, type Transaction } from '../db/schema.js';
 import { reviewReceiptCategoryEvidence } from './categorizationFeedback.js';
@@ -41,7 +41,11 @@ export async function matchReceipt(receiptId: string): Promise<ReceiptMatchOutco
   if (receipt.transactionId) return null;
 
   const candidates = await candidateTransactions(receipt);
+  // Don't re-suggest pairs the user already rejected (dismissed, or paired elsewhere) —
+  // that's the feedback signal that keeps the matcher from repeating its mistakes.
+  const rejectedTransactionIds = await rejectedTransactionIdsForReceipt(receiptId);
   const scored = candidates
+    .filter(({ transaction }) => !rejectedTransactionIds.has(transaction.id))
     .map(({ transaction, accountMask }) => {
       const result = scoreMatch(receipt, transaction, accountMask);
       return { ...result, exactAmount: isExactAmount(receipt.totalCents, transaction.amountCents) };
@@ -76,13 +80,32 @@ export async function receiptMatchCandidates(receiptId: string): Promise<Receipt
   const receipt = await db.query.receipts.findFirst({ where: eq(receipts.id, receiptId) });
   if (!receipt || !receipt.totalCents || !receipt.receiptDate) return [];
   const candidates = await candidateTransactionRows(receipt);
+  // Rejected pairs stay listed (the user may still pair manually) but are excluded from
+  // suggestion/auto-attach annotations, matching matchReceipt's decision policy.
+  const rejectedTransactionIds = await rejectedTransactionIdsForReceipt(receiptId);
   const scored = candidates
     .map(({ transaction, accountMask }) => {
       const result = scoreMatch(receipt, transaction, accountMask);
       return { ...result, exactAmount: isExactAmount(receipt.totalCents, transaction.amountCents) };
     })
     .sort((a, b) => b.score - a.score);
-  return annotateCandidates(scored);
+  const eligible = scored.filter(({ transaction }) => !rejectedTransactionIds.has(transaction.id));
+  const annotated = annotateCandidates(eligible);
+  const annotatedById = new Map(annotated.map((candidate) => [candidate.transaction.id, candidate]));
+  return scored.map((candidate) => annotatedById.get(candidate.transaction.id) ?? {
+    ...candidate,
+    ambiguous: false,
+    suggested: false,
+    wouldAutoAttach: false,
+  });
+}
+
+async function rejectedTransactionIdsForReceipt(receiptId: string): Promise<Set<string>> {
+  const rows = await db
+    .select({ transactionId: receiptMatches.transactionId })
+    .from(receiptMatches)
+    .where(and(eq(receiptMatches.receiptId, receiptId), eq(receiptMatches.status, 'rejected')));
+  return new Set(rows.map((row) => row.transactionId));
 }
 
 /**
@@ -118,6 +141,23 @@ export async function attachReceipt(transactionId: string, receiptId: string): P
   const match = await db.query.receiptMatches.findFirst({
     where: and(eq(receiptMatches.receiptId, receiptId), eq(receiptMatches.transactionId, transactionId)),
   });
+  // A manual pair the matcher never proposed still deserves a match record — it's both the
+  // audit trail and a labeled example of what the scorer missed.
+  if (!match) {
+    const receipt = await db.query.receipts.findFirst({ where: eq(receipts.id, receiptId) });
+    const transaction = await db.query.transactions.findFirst({ where: eq(transactions.id, transactionId) });
+    if (receipt && transaction) {
+      const scored = scoreMatch(receipt, transaction);
+      await db.insert(receiptMatches).values({
+        receiptId,
+        transactionId,
+        score: scored.score.toFixed(4),
+        status: 'accepted',
+        reasons: { ...scored.reasons, manualPair: true },
+        decidedAt: new Date(),
+      });
+    }
+  }
   const [updated] = await db
     .update(transactions)
     .set({ receiptId, receiptStatus: 'matched', updatedAt: new Date() })
@@ -133,6 +173,17 @@ export async function attachReceipt(transactionId: string, receiptId: string): P
     .update(receiptMatches)
     .set({ status: 'accepted', decidedAt: new Date() })
     .where(and(eq(receiptMatches.receiptId, receiptId), eq(receiptMatches.transactionId, transactionId)));
+
+  // Pairing elsewhere is an implicit rejection of the other suggestions — record it so
+  // rematch sweeps never surface the same wrong pair again.
+  await db
+    .update(receiptMatches)
+    .set({ status: 'rejected', decidedAt: new Date() })
+    .where(and(
+      eq(receiptMatches.receiptId, receiptId),
+      eq(receiptMatches.status, 'suggested'),
+      ne(receiptMatches.transactionId, transactionId),
+    ));
 
   if (updated) {
     await reviewReceiptCategoryEvidence({
