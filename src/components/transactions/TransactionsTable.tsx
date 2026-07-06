@@ -36,12 +36,14 @@ export function TransactionsTable({
 }: TransactionsTableProps) {
   return (
     <>
-      <div className="overflow-hidden rounded-xl border border-ink2/10 bg-paper shadow-sm">
+      <div className="overflow-x-auto rounded-xl border border-ink2/10 bg-paper shadow-sm">
         {error ? (
           <div className="p-4 text-sm font-bold text-coral-ink">{error}</div>
         ) : (
           <>
-            <Table className="table-fixed">
+            {/* min-w keeps the flexible Merchant column from collapsing to 0px when the
+                fixed columns alone exceed the container; the wrapper scrolls instead. */}
+            <Table className="min-w-[1060px] table-fixed">
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-28">Date</TableHead>

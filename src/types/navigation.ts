@@ -1,6 +1,6 @@
 import type { ReceiptStatus, TransactionDirection } from './domain';
 
-export type AppView = 'dashboard' | 'transactions' | 'receipts' | 'rules' | 'cash-flow' | 'balances' | 'insights' | 'assistant' | 'admin';
+export type AppView = 'dashboard' | 'inbox' | 'transactions' | 'receipts' | 'rules' | 'cash-flow' | 'balances' | 'insights' | 'assistant' | 'admin';
 
 export interface TransactionViewFilters {
   business?: string;
