@@ -28,6 +28,9 @@ const envSchema = z.object({
   PLAID_CLIENT_ID: z.string().optional().default(''),
   PLAID_SECRET: z.string().optional().default(''),
   PLAID_WEBHOOK_URL: z.string().optional().default(''),
+  // When set, /webhooks/plaid requires ?secret=<value> — configure the same value in
+  // PLAID_WEBHOOK_URL. Empty (default) keeps the endpoint open for existing setups.
+  PLAID_WEBHOOK_SECRET: z.string().optional().default(''),
   GOOGLE_CLIENT_ID: z.string().optional().default(''),
   GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
   GOOGLE_REDIRECT_URI: z.string().optional().default(''),

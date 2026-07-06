@@ -1,10 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import { desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { hashPassword } from '../auth/password.js';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
-import { accounts, auditLogs, businesses, categories, categoryRules, exportJobs, receiptUploaders, users } from '../db/schema.js';
+import { accounts, auditLogs, businesses, categories, categoryRules, exportJobs, jobs, receiptUploaders, users } from '../db/schema.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { canSetAdminActive } from '../services/adminGuards.js';
 import { audit } from '../services/audit.js';
@@ -302,6 +302,40 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   app.get('/admin/audit-log', async (request) => {
     await requireUser(request);
     return db.select().from(auditLogs).orderBy(desc(auditLogs.createdAt)).limit(100);
+  });
+
+  // Dead letter queue: jobs that burned every retry were previously invisible outside the DB.
+  app.get('/admin/jobs/dead-letter', async (request) => {
+    await requireUser(request);
+    const rows = await db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.status, 'failed'), sql`${jobs.attempts} >= ${jobs.maxAttempts}`))
+      .orderBy(desc(jobs.updatedAt))
+      .limit(100);
+    return rows.map((job) => ({
+      id: job.id,
+      type: job.type,
+      payload: job.payload,
+      attempts: job.attempts,
+      maxAttempts: job.maxAttempts,
+      lastError: job.lastError,
+      createdAt: job.createdAt.toISOString(),
+      updatedAt: job.updatedAt.toISOString(),
+    }));
+  });
+
+  app.post('/admin/jobs/:id/retry', async (request) => {
+    const actor = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const [row] = await db
+      .update(jobs)
+      .set({ status: 'queued', attempts: 0, lastError: null, runAfter: new Date(), updatedAt: new Date() })
+      .where(eq(jobs.id, params.id))
+      .returning();
+    if (!row) notFound('Job not found');
+    await audit(request, actor, 'retry_job', 'job', params.id, { type: row.type });
+    return { ok: true };
   });
 }
 

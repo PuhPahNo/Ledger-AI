@@ -4,6 +4,11 @@ import { alerts, businesses, categories, receipts, transactions } from '../db/sc
 
 export async function regenerateInsights(): Promise<void> {
   await db.delete(alerts).where(eq(alerts.status, 'open'));
+  // Dismissed alerts otherwise accumulate forever; 90 days is plenty of paper trail.
+  await db.delete(alerts).where(and(
+    eq(alerts.status, 'dismissed'),
+    lt(alerts.dismissedAt, sql`now() - interval '90 days'`),
+  ));
   await generateMissingReceiptAlerts();
   await generateOrphanReceiptAlerts();
   await generateDuplicateSubscriptionAlerts();

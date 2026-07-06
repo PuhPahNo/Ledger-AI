@@ -54,7 +54,9 @@ export async function markJobFailed(jobId: string, error: unknown): Promise<void
   await db.update(jobs).set({
     status: 'failed',
     lastError: message,
-    runAfter: new Date(Date.now() + 60_000),
+    // Exponential backoff with jitter (60s, 2m, 4m, 8m… capped at 1h) — the previous
+    // fixed 60s retry burned all attempts within minutes while a provider was down.
+    runAfter: sql`now() + (least(3600, 60 * power(2, greatest(${jobs.attempts} - 1, 0))) + floor(random() * 30)) * interval '1 second'`,
     updatedAt: new Date(),
   }).where(eq(jobs.id, jobId));
 }

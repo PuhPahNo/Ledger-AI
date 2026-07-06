@@ -115,13 +115,23 @@ export async function syncPlaidConnection(
   const receiptTrackingSince = await getReceiptTrackingSince();
 
   while (hasMore) {
-    const res = await client.transactionsSync({
-      access_token: accessToken,
-      cursor,
-      count: 500,
-      options: options.daysRequested ? { days_requested: options.daysRequested } : undefined,
-    });
-    const data = res.data;
+    let data;
+    try {
+      const res = await client.transactionsSync({
+        access_token: accessToken,
+        cursor,
+        count: 500,
+        options: options.daysRequested ? { days_requested: options.daysRequested } : undefined,
+      });
+      data = res.data;
+    } catch (error) {
+      // Expired bank credentials would otherwise fail silently forever: flag the
+      // connection so the scheduler skips it and the UI can prompt a re-link.
+      if (isPlaidReauthError(error)) {
+        await db.update(connections).set({ status: 'reauth', updatedAt: new Date() }).where(eq(connections.id, connectionId));
+      }
+      throw error;
+    }
     await upsertAccounts(connectionId, connection.businessId ?? undefined, data.accounts ?? []);
     for (const txn of data.added ?? []) {
       const inserted = await upsertTransaction(connectionId, connection.businessId ?? undefined, txn, {
@@ -153,6 +163,18 @@ export async function syncPlaidConnection(
   }).where(eq(connections.id, connectionId));
 
   return { added: addedCount, changed: changedCount };
+}
+
+const PLAID_REAUTH_ERROR_CODES = new Set([
+  'ITEM_LOGIN_REQUIRED',
+  'ITEM_LOCKED',
+  'USER_PERMISSION_REVOKED',
+  'ACCESS_NOT_GRANTED',
+]);
+
+function isPlaidReauthError(error: unknown): boolean {
+  const data = (error as { response?: { data?: { error_code?: unknown } } })?.response?.data;
+  return typeof data?.error_code === 'string' && PLAID_REAUTH_ERROR_CODES.has(data.error_code);
 }
 
 /**

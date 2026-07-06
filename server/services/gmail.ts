@@ -78,6 +78,10 @@ export async function connectGmail(code: string, businessId?: string): Promise<s
 }
 
 export async function renewGmailWatch(connectionId: string): Promise<void> {
+  return withGmailAuthGuard(connectionId, () => renewGmailWatchInner(connectionId));
+}
+
+async function renewGmailWatchInner(connectionId: string): Promise<void> {
   const env = getEnv();
   if (!env.GOOGLE_PUBSUB_TOPIC) return;
   const { gmail } = await gmailClientForConnection(connectionId);
@@ -96,6 +100,10 @@ export async function renewGmailWatch(connectionId: string): Promise<void> {
 }
 
 export async function syncGmailConnection(connectionId: string, historyId?: string): Promise<number> {
+  return withGmailAuthGuard(connectionId, () => syncGmailConnectionInner(connectionId, historyId));
+}
+
+async function syncGmailConnectionInner(connectionId: string, historyId?: string): Promise<number> {
   const { gmail, connection } = await gmailClientForConnection(connectionId);
   const startHistoryId = connection.gmailHistoryId ?? historyId;
   if (!startHistoryId) return backfillGmail(connectionId, gmailBackfillQuery());
@@ -154,6 +162,10 @@ export async function ingestAvailableGmailMessages(
 }
 
 export async function backfillGmail(connectionId: string, query: string): Promise<number> {
+  return withGmailAuthGuard(connectionId, () => backfillGmailInner(connectionId, query));
+}
+
+async function backfillGmailInner(connectionId: string, query: string): Promise<number> {
   const { gmail } = await gmailClientForConnection(connectionId);
   let count = 0;
   let pageToken: string | undefined;
@@ -173,6 +185,39 @@ export async function backfillGmail(connectionId: string, query: string): Promis
     updatedAt: new Date(),
   }).where(eq(connections.id, connectionId));
   return count;
+}
+
+/** Detect revoked/expired Google credentials — a 401 or an invalid_grant token error. */
+export function isGmailAuthError(error: unknown): boolean {
+  const candidate = error as {
+    code?: unknown;
+    message?: unknown;
+    response?: { status?: unknown; data?: unknown };
+  };
+  if ([candidate.code, candidate.response?.status].some((value) => Number(value) === 401)) return true;
+  const text = [
+    typeof candidate.message === 'string' ? candidate.message : '',
+    (() => { try { return JSON.stringify(candidate.response?.data ?? ''); } catch { return ''; } })(),
+  ].join(' ');
+  return /invalid_grant|invalid_credentials|token has been expired or revoked/i.test(text);
+}
+
+/**
+ * A revoked refresh token previously kept failing jobs on a loop with the same stale
+ * token while the connection stayed 'live'. Flag reauth so the scheduler stops retrying
+ * and the UI can prompt a re-connect.
+ */
+async function withGmailAuthGuard<T>(connectionId: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (isGmailAuthError(error)) {
+      await db.update(connections)
+        .set({ status: 'reauth', updatedAt: new Date() })
+        .where(eq(connections.id, connectionId));
+    }
+    throw error;
+  }
 }
 
 export function isGmailNotFoundError(error: unknown): boolean {
