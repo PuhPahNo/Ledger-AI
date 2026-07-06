@@ -162,6 +162,30 @@ export function dismissReceipt(receiptId: string): Promise<{ ok: true }> {
   return http<{ ok: true }>(`/receipts/${receiptId}/dismiss`, { method: 'POST' });
 }
 
+export interface RematchReceiptResult {
+  matched: {
+    attached: boolean;
+    score: number;
+    transaction: Transaction;
+  } | null;
+}
+
+/**
+ * POST /api/receipts/:id/match — re-run matching for one receipt, e.g. after the user
+ * corrects OCR'd details. Auto-attaches when the match clears the confidence bar.
+ */
+export function rematchReceipt(receiptId: string): Promise<RematchReceiptResult> {
+  if (useMockApi) return Promise.resolve({ matched: null });
+  return http<{ matched: { attached: boolean; score: number; transaction: ApiTransaction } | null }>(
+    `/receipts/${receiptId}/match`,
+    { method: 'POST' },
+  ).then((result) => ({
+    matched: result.matched
+      ? { ...result.matched, transaction: mapTransaction(result.matched.transaction) }
+      : null,
+  }));
+}
+
 const TRANSACTION_CANDIDATE_FIXTURES: ApiTransaction[] = [
   {
     id: 'mock-candidate-1',

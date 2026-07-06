@@ -91,8 +91,15 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
       .update(receipts)
       .set({ ...body, updatedAt: new Date() })
       .where(eq(receipts.id, params.id))
-      .returning({ id: receipts.id });
+      .returning();
     if (!updated) notFound('Receipt not found');
+    // Manual details unblock matching — the extraction complaint no longer applies.
+    if (updated.extractionError && updated.totalCents != null && updated.receiptDate != null) {
+      await db
+        .update(receipts)
+        .set({ extractionError: null, updatedAt: new Date() })
+        .where(eq(receipts.id, params.id));
+    }
 
     await audit(request, user, 'update_receipt', 'receipt', params.id, body);
     const receipt = await receiptWithPresentation(params.id);
@@ -161,7 +168,15 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
     await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const result = await matchReceipt(params.id);
-    return { matched: result };
+    return {
+      matched: result
+        ? {
+          attached: result.attached,
+          score: result.score,
+          transaction: toApiTransaction(result.transaction as any),
+        }
+        : null,
+    };
   });
 
   app.post('/receipts/:id/dismiss', async (request) => {

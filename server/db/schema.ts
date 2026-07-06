@@ -213,6 +213,9 @@ export const receipts = pgTable('receipts', {
   transactionId: uuid('transaction_id'),
   confidence: numeric('confidence', { precision: 5, scale: 4 }),
   ocrJson: jsonb('ocr_json').$type<Record<string, unknown>>().notNull().default({}),
+  // Why this receipt can't match yet (extraction failed or total/date unreadable); cleared
+  // once extraction succeeds or the user fills the missing fields.
+  extractionError: text('extraction_error'),
   ...timestamps,
 }, (table) => ({
   businessIdx: index('receipts_business_idx').on(table.businessId),

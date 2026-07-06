@@ -108,6 +108,7 @@ export function toApiReceipt(row: Receipt & {
     uploadedByUploaderId: row.uploadedByUploaderId,
     uploadedBy: row.uploadedByUploaderName ?? row.uploadedByUserName ?? null,
     confidence: row.confidence == null ? null : Number(row.confidence),
+    extractionError: row.extractionError ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

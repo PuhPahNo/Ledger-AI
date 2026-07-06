@@ -6,6 +6,7 @@ import {
   listBusinesses,
   listReceiptCandidates,
   listReceipts,
+  rematchReceipt,
   updateReceipt,
   uploadReceipt,
 } from '@/api';
@@ -30,6 +31,7 @@ import {
   formatCentsInput,
   parseDollarInput,
   receiptLabel,
+  receiptNeedsDetails,
 } from './receipts/ReceiptWorkbenchParts';
 
 interface Props {
@@ -105,7 +107,8 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
       setCandidates([]);
       return;
     }
-    setDetailMode('receipt');
+    // Receipts missing matchable details go straight to the pair tab, where the edit form is.
+    setDetailMode(receiptNeedsDetails(selectedReceipt) ? 'pair' : 'receipt');
     setReceiptDraft({
       merchant: selectedReceipt.merchant ?? '',
       total: formatCentsInput(selectedReceipt.totalCents),
@@ -152,6 +155,44 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
       return updated;
     } finally {
       setSavingReceiptId(null);
+    }
+  };
+
+  // Save edits, then re-run matching — corrected details often unlock an auto-match, and
+  // when they don't, refreshed candidates reflect the new total/date immediately.
+  const handleSaveAndMatch = async (receipt: ReceiptInboxItem) => {
+    try {
+      const updated = await saveReceiptEdits(receipt, { silent: true });
+      if (receiptNeedsDetails(updated)) {
+        toast({ title: 'Details saved', description: 'Add a total and date to run matching.' });
+        return;
+      }
+      const { matched } = await rematchReceipt(updated.id);
+      if (matched?.attached) {
+        toast({
+          variant: 'success',
+          title: 'Receipt matched',
+          description: `${receiptLabel(updated)} paired with ${matched.transaction.merchant}.`,
+        });
+        setSelectedReceiptId(null);
+        refresh();
+        return;
+      }
+      toast({
+        variant: 'success',
+        title: 'Details saved',
+        description: matched
+          ? 'Best match suggested below — confirm to pair.'
+          : 'No confident match yet — pick from the candidates below.',
+      });
+      const rows = await listReceiptCandidates(updated.id);
+      setCandidates(rows);
+    } catch (saveError) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not save receipt',
+        description: saveError instanceof Error ? saveError.message : 'Try again.',
+      });
     }
   };
 
@@ -326,6 +367,13 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                     </Button>
                   </div>
 
+                  {(selectedReceipt.extractionError || receiptNeedsDetails(selectedReceipt)) && (
+                    <div className="border-b border-coral/30 bg-coral/10 px-4 py-2 text-xs font-bold text-coral-ink">
+                      {selectedReceipt.extractionError
+                        ?? 'Missing a total or date — fill them in under Pair, then Save & find matches.'}
+                    </div>
+                  )}
+
                   <div className="flex flex-wrap items-center gap-2 border-b border-ink2/10 bg-[hsl(var(--color-sunken))] px-4 py-2">
                     <TabsList>
                       <TabsTrigger value="receipt">Receipt</TabsTrigger>
@@ -346,9 +394,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                         draft={receiptDraft}
                         saving={savingReceiptId === selectedReceipt.id}
                         onDraftChange={setReceiptDraft}
-                        onSave={() => saveReceiptEdits(selectedReceipt).catch((saveError: Error) => {
-                          toast({ variant: 'destructive', title: 'Could not save receipt', description: saveError.message });
-                        })}
+                        onSave={() => handleSaveAndMatch(selectedReceipt)}
                       />
 
                       <div className="grid gap-3 rounded-lg border border-ink2/10 bg-[hsl(var(--color-sunken))] p-3">

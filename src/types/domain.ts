@@ -55,6 +55,8 @@ export interface ReceiptInboxItem {
   uploadedByUploaderId?: string | null;
   uploadedBy?: string | null;
   confidence?: number | null;
+  /** Why extraction couldn't produce matchable details; null once resolved. */
+  extractionError?: string | null;
   createdAt: string;
   updatedAt: string;
   downloadUrl?: string | null;

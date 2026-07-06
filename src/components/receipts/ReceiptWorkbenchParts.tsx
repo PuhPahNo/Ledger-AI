@@ -44,9 +44,14 @@ export function ReceiptRow({
           <div className="truncate font-bold">{receiptLabel(receipt)}</div>
           <div className="truncate text-xs text-dim">{receipt.fileName ?? receipt.source}</div>
         </div>
-        <Badge variant={receipt.source === 'gmail' ? 'secondary' : 'muted'} className="shrink-0 whitespace-nowrap">
-          {receipt.source}
-        </Badge>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <Badge variant={receipt.source === 'gmail' ? 'secondary' : 'muted'} className="whitespace-nowrap">
+            {receipt.source}
+          </Badge>
+          {receiptNeedsDetails(receipt) && (
+            <Badge variant="warning" className="whitespace-nowrap">Needs details</Badge>
+          )}
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-2 text-xs text-dim">
         {receipt.businessName && <span>{receipt.businessName}</span>}
@@ -105,7 +110,7 @@ export function ReceiptEditForm({
       </Field>
       <div className="flex items-end">
         <Button variant="outline" className="w-full" disabled={saving} onClick={onSave}>
-          Save edits
+          Save & find matches
         </Button>
       </div>
     </div>
@@ -199,6 +204,11 @@ function MatchBadge({ score }: { score: number }) {
 
 export function receiptLabel(receipt: ReceiptInboxItem): string {
   return receipt.merchant || receipt.fileName || `${receipt.source} receipt`;
+}
+
+/** Matching needs both a total and a date — without them this receipt is stuck. */
+export function receiptNeedsDetails(receipt: ReceiptInboxItem): boolean {
+  return receipt.totalCents == null || !receipt.receiptDate;
 }
 
 export function candidateMatchesQuery(candidate: ReceiptMatchCandidate, query: string): boolean {

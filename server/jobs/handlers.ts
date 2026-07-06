@@ -87,22 +87,42 @@ export async function handleJob(type: string, payload: Record<string, unknown>):
 async function extractAndMatchReceipt(receiptId: string): Promise<void> {
   const receipt = await db.query.receipts.findFirst({ where: eq(receipts.id, receiptId) });
   if (!receipt?.fileKey || !receipt.mimeType || !receipt.fileName) return;
-  const chunks: Buffer[] = [];
-  const stream = await storage().getStream(receipt.fileKey);
-  for await (const chunk of stream) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+
+  let extraction;
+  try {
+    const chunks: Buffer[] = [];
+    const stream = await storage().getStream(receipt.fileKey);
+    for await (const chunk of stream) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    extraction = await extractReceipt({
+      buffer: Buffer.concat(chunks),
+      mimeType: receipt.mimeType,
+      fileName: receipt.fileName,
+    });
+  } catch (error) {
+    // A receipt with no total/date can never match, and the failed job isn't anywhere the
+    // user looks — leave the reason on the receipt so the workbench can ask for manual entry.
+    await db.update(receipts).set({
+      extractionError: error instanceof Error ? error.message : String(error),
+      updatedAt: new Date(),
+    }).where(eq(receipts.id, receiptId));
+    throw error;
   }
-  const extraction = await extractReceipt({
-    buffer: Buffer.concat(chunks),
-    mimeType: receipt.mimeType,
-    fileName: receipt.fileName,
-  });
+
+  const missing = [
+    extraction.totalCents == null ? 'total' : null,
+    extraction.receiptDate == null ? 'date' : null,
+  ].filter((field): field is string => field !== null);
   await db.update(receipts).set({
     merchant: extraction.merchant,
     totalCents: extraction.totalCents,
     receiptDate: extraction.receiptDate,
     confidence: String(extraction.confidence),
     ocrJson: extraction,
+    extractionError: missing.length > 0
+      ? `Could not read the receipt ${missing.join(' or ')} — add ${missing.length > 1 ? 'them' : 'it'} manually to enable matching.`
+      : null,
     updatedAt: new Date(),
   }).where(eq(receipts.id, receiptId));
   await matchReceipt(receiptId);
