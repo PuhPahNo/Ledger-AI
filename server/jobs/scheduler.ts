@@ -73,7 +73,9 @@ export async function enqueueDueGmailWatchRenewals(now = new Date()): Promise<nu
 
 export async function enqueueDueCategorizationScan(now = new Date()): Promise<number> {
   if (await hasRecentCategorizationScan(now)) return 0;
-  await enqueue('categorization.scan-uncategorized', { limit: 100 }, now);
+  // Rules and signals are cheap and AI calls self-limit via the daily budget, so the
+  // scan can chew through a real backlog instead of 100 rows per day.
+  await enqueue('categorization.scan-uncategorized', { limit: 500 }, now);
   return 1;
 }
 

@@ -250,6 +250,8 @@ export const transactions = pgTable('transactions', {
   plaidTxnIdx: uniqueIndex('transactions_plaid_txn_idx').on(table.plaidTransactionId),
   businessDateIdx: index('transactions_business_date_idx').on(table.businessId, table.date),
   receiptStatusIdx: index('transactions_receipt_status_idx').on(table.receiptStatus),
+  categoryIdx: index('transactions_category_idx').on(table.categoryId),
+  receiptIdx: index('transactions_receipt_idx').on(table.receiptId),
 }));
 
 export const categorizationFeedback = pgTable('categorization_feedback', {

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { requireUser } from '../../auth/session.js';
 import { db } from '../../db/client.js';
 import { accounts, businesses, categories, transactions } from '../../db/schema.js';
-import { notFound } from '../../lib/errors.js';
+import { badRequest, notFound } from '../../lib/errors.js';
 import { audit } from '../../services/audit.js';
 import { categoryMatchesTransactionDirection, isIncomeCategory } from '../../services/categorization.js';
 import { createManualCategorizationFeedback } from '../../services/categorizationFeedback.js';
@@ -177,6 +177,12 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
 
     const previous = await db.query.transactions.findFirst({ where: eq(transactions.id, params.id) });
     if (!previous) notFound('Transaction not found');
+    // Direction guard: spend can't be filed under Income and vice versa (transfers excepted).
+    if (selectedCategory && !categoryMatchesTransactionDirection(selectedCategory, previous.amountCents)) {
+      badRequest(previous.amountCents < 0
+        ? `"${selectedCategory.name}" is an income category — this is an outflow.`
+        : `"${selectedCategory.name}" is a spend category — this is an inflow.`);
+    }
 
     const categoryProvenance = body.categoryId !== undefined
       ? body.categoryId

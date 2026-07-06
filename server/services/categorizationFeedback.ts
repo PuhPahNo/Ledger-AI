@@ -181,7 +181,7 @@ export async function scanUncategorizedTransactions(input: { businessId?: string
         : isNull(transactions.categoryId),
     ))
     .orderBy(desc(transactions.date), desc(transactions.createdAt))
-    .limit(input.limit ?? 50);
+    .limit(input.limit ?? 200);
 
   let touched = 0;
   for (const transaction of rows) {
