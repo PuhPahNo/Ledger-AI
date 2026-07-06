@@ -62,7 +62,7 @@ export function SpendHeroTile({ summary, contextLabel, detailLabel, mode, onMode
     : summary.trailingMonthLabels;
   const up = view.deltaPct >= 0;
   return (
-    <Tile tone="cream" pad="lg" colSpan={8} rowSpan={2} className="gap-4">
+    <Tile tone="cream" pad="lg" colSpan={12} rowSpan={2} className="gap-4">
       <div className="flex flex-wrap items-center gap-3">
         <Badge variant="default">{view.badge} · {summary.periodLabel}</Badge>
         <ToggleGroup

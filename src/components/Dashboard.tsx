@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import type { Business, CurrentUser, Transaction } from '@/types/domain';
+import type { CurrentUser, Transaction } from '@/types/domain';
 import type { AppView, TransactionViewFilters } from '@/types/navigation';
-import { countDuplicateSubs, countNeedsReceipt } from '@/lib/calc';
 import { clearDashboardCache, useDashboard } from '@/hooks/useDashboard';
 import { uploadReceipt } from '@/api';
 import { useToast } from '@/hooks/useToast';
@@ -10,29 +9,16 @@ import { Button } from '@/components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Input } from '@/components/ui/input';
 import { AppShell } from './AppShell';
-import { BusinessStrip } from './BusinessStrip';
 import { SpendHeroTile, type DashboardFlowMode } from './tiles/SpendHeroTile';
 import { ReceiptDropTile } from './tiles/ReceiptDropTile';
 import { ActivityTile } from './tiles/ActivityTile';
 import { CategoriesTile } from './tiles/CategoriesTile';
-import { ConnectionsTile } from './tiles/ConnectionsTile';
-import { AlertsTile } from './tiles/AlertsTile';
 import { AccountSpendTile } from './tiles/AccountSpendTile';
 import { AnalysisTile } from './tiles/AnalysisTile';
 import { ConnectionsManager } from './ConnectionsManager';
-import { CategorizationReviewCenter } from './CategorizationReviewCenter';
 import { TransactionDrawer } from './TransactionDrawer';
 
 type TimePreset = 'month' | 'last3' | 'last12' | 'ytd';
-
-function captionFor(biz: Business, txns: Transaction[]): string {
-  const total = txns.filter((t) => t.biz === biz.id).length;
-  const missing = countNeedsReceipt(txns, biz.id);
-  const dup = countDuplicateSubs(txns, biz.id);
-  if (dup > 0) return `${total} txns · ${dup} dup sub`;
-  if (missing > 0) return `${total} txns · ${missing} needs receipt`;
-  return `${total} txns`;
-}
 
 interface DashboardProps {
   onViewChange?: (view: AppView) => void;
@@ -51,7 +37,6 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
   const [dashboardFlowMode, setDashboardFlowMode] = useState<DashboardFlowMode>('outflow');
   const [refreshKey, setRefreshKey] = useState(0);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
-  const [reviewCenterOpen, setReviewCenterOpen] = useState(false);
   const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<{
@@ -92,8 +77,6 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
     categoryComparisons,
     connections,
     accounts,
-    alerts,
-    categorizationReviewItems,
     summary,
   } = data;
   const selectedBusiness = businesses.find((business) => business.id === businessFilter);
@@ -167,18 +150,8 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
       businesses={businesses}
       selectedBusiness={businessFilter}
       onBusinessChange={handleBusinessChange}
-      reviewCount={categorizationReviewItems.length}
-      onOpenReviewCenter={() => setReviewCenterOpen(true)}
     >
       <div className="flex flex-col gap-4">
-        <BusinessStrip
-          businesses={businesses}
-          transactions={transactions}
-          selected={businessFilter}
-          onSelect={handleBusinessChange}
-          captionFor={(business) => captionFor(business, transactions)}
-        />
-
         <TimeframeControls
           month={anchorMonth}
           preset={timePreset}
@@ -198,9 +171,6 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
             mode={dashboardFlowMode}
             onModeChange={setDashboardFlowMode}
           />
-          <AlertsTile alerts={alerts} />
-          <ConnectionsTile connections={connections} onAdd={() => setConnectionsOpen(true)} />
-
           <CategoriesTile
             categories={categories}
             comparisons={categoryComparisons}
@@ -242,13 +212,6 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
         accounts={accounts}
         onClose={() => setConnectionsOpen(false)}
         onRefresh={refreshDashboard}
-      />
-      <CategorizationReviewCenter
-        open={reviewCenterOpen}
-        items={categorizationReviewItems}
-        businesses={businesses}
-        onClose={() => setReviewCenterOpen(false)}
-        onResolved={refreshDashboard}
       />
       <TransactionDrawer
         transaction={selectedTransaction}

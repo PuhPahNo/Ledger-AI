@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import {
-  listAlerts,
   listBusinesses,
   listCategories,
   listConnections,
@@ -8,14 +7,11 @@ import {
   getSummary,
   listAccounts,
   listCategoryComparisons,
-  listCategorizationReviewItems,
 } from '@/api';
 import type {
-  Alert,
   Business,
   Category,
   CategoryComparison,
-  CategorizationReviewItem,
   Connection,
   Account,
   SpendSummary,
@@ -29,8 +25,6 @@ export interface DashboardData {
   categoryComparisons: CategoryComparison[];
   connections: Connection[];
   accounts: Account[];
-  alerts: Alert[];
-  categorizationReviewItems: CategorizationReviewItem[];
   summary: SpendSummary;
 }
 
@@ -158,8 +152,6 @@ async function fetchDashboardData(params: DashboardParams): Promise<DashboardDat
     categoryComparisons,
     connections,
     accounts,
-    alerts,
-    categorizationReviewItems,
     summary,
   ] = await Promise.all([
     listBusinesses(),
@@ -190,8 +182,6 @@ async function fetchDashboardData(params: DashboardParams): Promise<DashboardDat
     }).catch(() => []),
     listConnections({ biz: params.business ?? 'all' }),
     listAccounts({ biz: params.business ?? 'all' }),
-    listAlerts({ biz: params.business ?? 'all' }),
-    listCategorizationReviewItems({ biz: params.business ?? 'all' }),
     getSummary({
       period: params.period,
       from: window.from,
@@ -210,8 +200,6 @@ async function fetchDashboardData(params: DashboardParams): Promise<DashboardDat
     categoryComparisons,
     connections,
     accounts,
-    alerts,
-    categorizationReviewItems,
     summary,
   };
 }

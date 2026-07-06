@@ -50,6 +50,25 @@ export function buildBriefing(
   categories: Category[],
 ): Briefing {
   const netCents = insights.closeSummary.netCents;
+
+  // An empty period gets an honest empty state — not "$0.00 in the green" narration
+  // with spend-spike cards computed off other windows.
+  if (insights.closeSummary.transactionCount === 0 && netCents === 0) {
+    return {
+      headlinePrefix: 'No transactions',
+      headlineAccent: 'in this period yet',
+      headlineAccentTone: 'positive',
+      headlineSuffix: undefined,
+      narrative: 'Nothing has posted in this window. Totals and stories will appear once syncs land — try a wider date range in the meantime.',
+      netYoYDelta: 0,
+      previousNetCents: 0,
+      netSpark: cashFlow.periods.map((period) => period.netCents),
+      inflowDelta: 0,
+      outflowDelta: 0,
+      stories: [],
+      closeItems: [],
+    };
+  }
   // Pull prior-year same-period from cash flow periods (last entry = current month).
   const thisMonth = cashFlow.periods.at(-1);
   const lastMonth = cashFlow.periods.length >= 2 ? cashFlow.periods.at(-2)! : null;
