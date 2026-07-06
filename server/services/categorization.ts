@@ -5,12 +5,14 @@ import { zodTextFormat } from 'openai/helpers/zod';
 import { getEnv } from '../config/env.js';
 import { db } from '../db/client.js';
 import {
+  aiCategorizationCache,
   categories,
   categoryRules,
   categorizationFeedback,
   transactions,
   type CategorySource,
 } from '../db/schema.js';
+import { getSetting, setSetting } from './appSettings.js';
 
 export interface CategorizeInput {
   businessId: string;
@@ -313,12 +315,59 @@ function hasAny(value: string, terms: string[]): boolean {
   return terms.some((term) => value.includes(normalize(term)));
 }
 
+const AI_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const AI_USAGE_SETTING_KEY = 'ai_categorization_usage';
+
+function aiCacheDirection(amountCents: number): string {
+  return amountCents > 0 ? 'in' : 'out';
+}
+
+/** Today's AI call count, tracked in app settings (single worker — races are tolerable). */
+export async function getAiUsage(): Promise<{ date: string; calls: number }> {
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const raw = await getSetting(AI_USAGE_SETTING_KEY);
+    const parsed = raw ? JSON.parse(raw) as { date?: string; calls?: number } : null;
+    if (parsed?.date === today && typeof parsed.calls === 'number') return { date: today, calls: parsed.calls };
+  } catch {
+    // Corrupt value — treat as a fresh day.
+  }
+  return { date: today, calls: 0 };
+}
+
 async function suggestCategoryWithAi(
   input: CategorizeInput,
   availableCategories: CategoryCandidate[],
 ): Promise<CategorizeResult | null> {
   const env = getEnv();
   if (!env.OPENAI_API_KEY || availableCategories.length === 0) return null;
+
+  // Same merchant, same direction, judged recently → reuse the verdict instead of
+  // paying for another call (a null category verdict is a verdict too).
+  const normalizedMerchant = normalize(input.merchant);
+  const direction = aiCacheDirection(input.amountCents);
+  const cached = await db.query.aiCategorizationCache.findFirst({
+    where: and(
+      eq(aiCategorizationCache.businessId, input.businessId),
+      eq(aiCategorizationCache.normalizedMerchant, normalizedMerchant),
+      eq(aiCategorizationCache.direction, direction),
+    ),
+  });
+  if (cached && Date.now() - cached.updatedAt.getTime() < AI_CACHE_TTL_MS) {
+    if (!cached.categoryId) return null;
+    if (!availableCategories.some((category) => category.id === cached.categoryId)) return null;
+    return {
+      categoryId: cached.categoryId,
+      source: 'ai_suggested',
+      confidence: cached.confidence == null ? null : Number(cached.confidence),
+      evidence: { reason: cached.reason, cachedAt: cached.updatedAt.toISOString() },
+    };
+  }
+
+  const usage = await getAiUsage();
+  if (usage.calls >= env.OPENAI_CATEGORIZATION_DAILY_LIMIT) return null;
+  await setSetting(AI_USAGE_SETTING_KEY, JSON.stringify({ date: usage.date, calls: usage.calls + 1 }));
+
   try {
     const feedbackExamples = await loadFeedbackExamples(input);
     const direction = input.amountCents > 0 ? 'inflow/income' : input.amountCents < 0 ? 'outflow/expense' : 'zero amount';
@@ -359,7 +408,27 @@ async function suggestCategoryWithAi(
     const parsed = message?.content.find((item) => item.type === 'output_text')?.parsed;
     const suggestion = categorySuggestionSchema.parse(parsed);
     const categoryExists = availableCategories.some((category) => category.id === suggestion.categoryId);
-    if (!categoryExists || suggestion.confidence < 0.6) return null;
+    const accepted = categoryExists && suggestion.confidence >= 0.6;
+    await db
+      .insert(aiCategorizationCache)
+      .values({
+        businessId: input.businessId,
+        normalizedMerchant,
+        direction,
+        categoryId: accepted ? suggestion.categoryId : null,
+        confidence: suggestion.confidence.toFixed(4),
+        reason: suggestion.reason,
+      })
+      .onConflictDoUpdate({
+        target: [aiCategorizationCache.businessId, aiCategorizationCache.normalizedMerchant, aiCategorizationCache.direction],
+        set: {
+          categoryId: accepted ? suggestion.categoryId : null,
+          confidence: suggestion.confidence.toFixed(4),
+          reason: suggestion.reason,
+          updatedAt: new Date(),
+        },
+      });
+    if (!accepted) return null;
     return {
       categoryId: suggestion.categoryId,
       source: 'ai_suggested',

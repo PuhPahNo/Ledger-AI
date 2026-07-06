@@ -24,6 +24,9 @@ const envSchema = z.object({
   // Let the AI categorizer use OpenAI's hosted web search to identify unfamiliar merchants.
   // Set to 'false' to disable (saves cost/latency on the AI-fallback path).
   OPENAI_CATEGORIZATION_WEB_SEARCH: z.string().optional().default('true').transform((value) => value !== 'false'),
+  // Hard daily ceiling on AI categorization calls; over the cap, transactions stay
+  // uncategorized and are swept up by the nightly scan on a later day.
+  OPENAI_CATEGORIZATION_DAILY_LIMIT: z.coerce.number().int().min(0).optional().default(200),
   PLAID_ENV: z.enum(['sandbox', 'development', 'production']).default('sandbox'),
   PLAID_CLIENT_ID: z.string().optional().default(''),
   PLAID_SECRET: z.string().optional().default(''),

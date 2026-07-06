@@ -390,6 +390,26 @@ export const exportJobs = pgTable('export_jobs', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Cached AI categorization verdicts per (business, merchant, direction). Null categoryId
+// means the model said nothing fits — cached so hopeless merchants stop re-asking.
+export const aiCategorizationCache = pgTable('ai_categorization_cache', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').notNull(),
+  normalizedMerchant: text('normalized_merchant').notNull(),
+  direction: text('direction').notNull().default('out'),
+  categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'cascade' }),
+  confidence: numeric('confidence', { precision: 5, scale: 4 }),
+  reason: text('reason'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  merchantIdx: uniqueIndex('ai_categorization_cache_merchant_idx').on(
+    table.businessId,
+    table.normalizedMerchant,
+    table.direction,
+  ),
+}));
+
 // Simple workspace-wide key/value settings (e.g. receipt_tracking_since).
 export const appSettings = pgTable('app_settings', {
   key: text('key').primaryKey(),

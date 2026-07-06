@@ -5,9 +5,11 @@ import { hashPassword } from '../auth/password.js';
 import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
 import { accounts, auditLogs, businesses, categories, categoryRules, exportJobs, jobs, receiptUploaders, users } from '../db/schema.js';
+import { getEnv } from '../config/env.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { canSetAdminActive } from '../services/adminGuards.js';
 import { audit } from '../services/audit.js';
+import { getAiUsage } from '../services/categorization.js';
 
 const userPublicColumns = {
   id: users.id,
@@ -43,7 +45,17 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       db.select(receiptUploaderPublicColumns).from(receiptUploaders).orderBy(receiptUploaders.username),
       db.select().from(exportJobs).orderBy(desc(exportJobs.createdAt)).limit(10),
     ]);
-    return { businesses: businessRows, categories: categoryRows, rules: ruleRows, accounts: accountRows, users: userRows, receiptUploaders: uploaderRows, exports: exportRows };
+    const aiUsage = await getAiUsage();
+    return {
+      businesses: businessRows,
+      categories: categoryRows,
+      rules: ruleRows,
+      accounts: accountRows,
+      users: userRows,
+      receiptUploaders: uploaderRows,
+      exports: exportRows,
+      aiUsage: { ...aiUsage, dailyLimit: getEnv().OPENAI_CATEGORIZATION_DAILY_LIMIT },
+    };
   });
 
   app.get('/admin/users', async (request) => {
