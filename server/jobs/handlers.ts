@@ -17,13 +17,14 @@ import { buildExport } from '../services/exporter.js';
 
 export async function handleJob(type: string, payload: Record<string, unknown>): Promise<void> {
   if (type === 'plaid.sync') {
-    const added = await syncPlaidConnection(String(payload.connectionId), {
+    const result = await syncPlaidConnection(String(payload.connectionId), {
       resetCursor: Boolean(payload.resetCursor),
       daysRequested: typeof payload.daysRequested === 'number' ? payload.daysRequested : undefined,
       allowAiCategorization: payload.resetCursor ? false : undefined,
     });
-    // New transactions may match receipts that were ingested before the charge posted.
-    if (added > 0) await enqueue('receipt.rematch', {});
+    // New transactions may match receipts that arrived before the charge posted, and
+    // modified/removed ones (pending→posted swaps, amount corrections) can free receipts up.
+    if (result.added > 0 || result.changed > 0) await enqueue('receipt.rematch', {});
     return;
   }
   if (type === 'gmail.sync') {

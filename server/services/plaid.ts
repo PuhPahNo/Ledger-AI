@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import {
   Configuration,
   CountryCode,
@@ -8,7 +8,16 @@ import {
 } from 'plaid';
 import { getEnv } from '../config/env.js';
 import { db } from '../db/client.js';
-import { accounts, categories, connections, transactions } from '../db/schema.js';
+import {
+  accounts,
+  archivedTransactions,
+  categories,
+  connections,
+  receiptMatches,
+  receipts,
+  transactions,
+  type Transaction,
+} from '../db/schema.js';
 import { decryptText, encryptText } from '../lib/crypto.js';
 import { serviceUnavailable } from '../lib/errors.js';
 import { resolveTransactionBusinessId } from './accountAssignment.js';
@@ -76,6 +85,14 @@ export async function exchangePlaidPublicToken(input: {
   return connection.id;
 }
 
+export interface PlaidSyncResult {
+  /** Transactions newly inserted this run. */
+  added: number;
+  /** Existing transactions Plaid modified or removed this run — amounts, dates, and receipt
+   * links may have shifted, so unmatched receipts deserve another pass. */
+  changed: number;
+}
+
 export async function syncPlaidConnection(
   connectionId: string,
   options: {
@@ -83,15 +100,16 @@ export async function syncPlaidConnection(
     daysRequested?: number;
     allowAiCategorization?: boolean;
   } = {},
-): Promise<number> {
+): Promise<PlaidSyncResult> {
   const client = plaidClient();
-  if (!client) return 0;
+  if (!client) return { added: 0, changed: 0 };
   const connection = await db.query.connections.findFirst({ where: eq(connections.id, connectionId) });
-  if (!connection?.encryptedAccessToken) return 0;
+  if (!connection?.encryptedAccessToken) return { added: 0, changed: 0 };
   const accessToken = decryptText(connection.encryptedAccessToken);
 
   let cursor: string | undefined = options.resetCursor ? undefined : connection.plaidCursor ?? undefined;
   let addedCount = 0;
+  let changedCount = 0;
   let hasMore = true;
   // Spend dated before this cutoff isn't expected to have a receipt (imported as 'waived').
   const receiptTrackingSince = await getReceiptTrackingSince();
@@ -117,9 +135,11 @@ export async function syncPlaidConnection(
         allowAiCategorization: options.allowAiCategorization,
         receiptTrackingSince,
       });
+      changedCount += 1;
     }
     for (const removed of data.removed ?? []) {
-      await db.delete(transactions).where(eq(transactions.plaidTransactionId, removed.transaction_id));
+      const archived = await archiveRemovedPlaidTransaction(removed.transaction_id);
+      if (archived) changedCount += 1;
     }
     cursor = data.next_cursor;
     hasMore = data.has_more;
@@ -132,7 +152,38 @@ export async function syncPlaidConnection(
     updatedAt: new Date(),
   }).where(eq(connections.id, connectionId));
 
-  return addedCount;
+  return { added: addedCount, changed: changedCount };
+}
+
+/**
+ * Plaid "removed" isn't only user-visible deletions — it's also how every pending
+ * transaction exits when it posts (the posted copy arrives in `added` with
+ * pending_transaction_id). Snapshot the row instead of losing its history, and free any
+ * receipt still pointing at it so the rematch sweep can re-pair it with the posted copy.
+ */
+async function archiveRemovedPlaidTransaction(plaidTransactionId: string): Promise<boolean> {
+  const existing = await db.query.transactions.findFirst({
+    where: eq(transactions.plaidTransactionId, plaidTransactionId),
+  });
+  if (!existing) return false;
+
+  await db.insert(archivedTransactions).values({
+    originalTransactionId: existing.id,
+    plaidTransactionId,
+    businessId: existing.businessId,
+    reason: 'plaid_removed',
+    snapshot: existing as unknown as Record<string, unknown>,
+  });
+
+  if (existing.receiptId) {
+    await db
+      .update(receipts)
+      .set({ transactionId: null, status: 'pending', updatedAt: new Date() })
+      .where(and(eq(receipts.id, existing.receiptId), eq(receipts.transactionId, existing.id)));
+  }
+
+  await db.delete(transactions).where(eq(transactions.id, existing.id));
+  return true;
 }
 
 async function upsertAccounts(connectionId: string, businessId: string | undefined, plaidAccounts: unknown[]): Promise<void> {
@@ -179,13 +230,31 @@ async function upsertTransaction(
       columns: { id: true },
     })
     : null;
-  const categorization = await categorizeTransactionWithDetails({
-    businessId,
-    merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant',
-    amountCents,
-    plaidCategory: plaidCategoryHints(raw),
-    allowAi: options.allowAiCategorization,
-  });
+  // When a pending transaction posts, Plaid sends a brand-new row referencing the old one.
+  // Inherit protected categorization instead of re-categorizing (and re-spending AI) from scratch.
+  const predecessor = typeof raw.pending_transaction_id === 'string' && raw.pending_transaction_id
+    ? await db.query.transactions.findFirst({
+      where: eq(transactions.plaidTransactionId, raw.pending_transaction_id),
+    })
+    : null;
+  const inherited = predecessor && isProtectedCategorySource(predecessor.categorySource) ? predecessor : null;
+  const categorization = inherited
+    ? {
+      categoryId: inherited.categoryId,
+      source: inherited.categorySource,
+      confidence: inherited.categoryConfidence == null ? null : Number(inherited.categoryConfidence),
+      evidence: {
+        reason: 'inherited_from_pending_transaction',
+        predecessorTransactionId: inherited.id,
+      } as Record<string, unknown>,
+    }
+    : await categorizeTransactionWithDetails({
+      businessId,
+      merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant',
+      amountCents,
+      plaidCategory: plaidCategoryHints(raw),
+      allowAi: options.allowAiCategorization,
+    });
   const shouldReviewAi = categorization.source === 'ai_suggested' && (categorization.confidence ?? 0) < 0.85;
   const uncategorizedCategoryId = shouldReviewAi ? await fallbackUncategorizedCategoryId() : null;
   const appliedCategoryId = shouldReviewAi ? uncategorizedCategoryId : categorization.categoryId;
@@ -261,7 +330,58 @@ async function upsertTransaction(
   if (shouldReviewAi && saved?.categorySource === 'uncategorized') {
     await createAiCategorySuggestionReview(saved, categorization);
   }
+  if (predecessor && saved && predecessor.id !== saved.id) {
+    await adoptPendingPredecessor(predecessor, saved);
+  }
   return !existing;
+}
+
+const PROTECTED_CATEGORY_SOURCES = new Set(['manual', 'user_confirmed_rule', 'receipt_evidence']);
+
+function isProtectedCategorySource(source: string | null | undefined): boolean {
+  return source != null && PROTECTED_CATEGORY_SOURCES.has(source);
+}
+
+/**
+ * Carry the user's work from a pending transaction onto its posted replacement: the matched
+ * receipt (plus its match records), notes, and flags. Protected categorization is inherited
+ * earlier, before the row is written. The pending row loses its receipt pointer here and is
+ * archived when Plaid's `removed` entry for it arrives (usually in the same sync).
+ */
+async function adoptPendingPredecessor(predecessor: Transaction, saved: Transaction): Promise<void> {
+  if (predecessor.receiptId && !saved.receiptId) {
+    const receipt = await db.query.receipts.findFirst({
+      where: and(eq(receipts.id, predecessor.receiptId), eq(receipts.transactionId, predecessor.id)),
+    });
+    if (receipt) {
+      await db
+        .update(receipts)
+        .set({ transactionId: saved.id, updatedAt: new Date() })
+        .where(eq(receipts.id, receipt.id));
+      await db
+        .update(receiptMatches)
+        .set({ transactionId: saved.id })
+        .where(and(eq(receiptMatches.receiptId, receipt.id), eq(receiptMatches.transactionId, predecessor.id)));
+      await db
+        .update(transactions)
+        .set({ receiptId: receipt.id, receiptStatus: 'matched', updatedAt: new Date() })
+        .where(eq(transactions.id, saved.id));
+      await db
+        .update(transactions)
+        .set({ receiptId: null, updatedAt: new Date() })
+        .where(eq(transactions.id, predecessor.id));
+    }
+  }
+
+  const carry: { note?: string; flag?: string } = {};
+  if (predecessor.note && !saved.note) carry.note = predecessor.note;
+  if (predecessor.flag && !saved.flag) carry.flag = predecessor.flag;
+  if (Object.keys(carry).length > 0) {
+    await db
+      .update(transactions)
+      .set({ ...carry, updatedAt: new Date() })
+      .where(eq(transactions.id, saved.id));
+  }
 }
 
 async function receiptStatusForPlaidTransaction(

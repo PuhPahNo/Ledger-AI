@@ -331,6 +331,20 @@ export const alerts = pgTable('alerts', {
   statusIdx: index('alerts_status_idx').on(table.status),
 }));
 
+// Snapshot of transactions Plaid removed (pending→posted swaps, dedup, item revokes).
+// No FKs on purpose — the live row is gone; this is the paper trail.
+export const archivedTransactions = pgTable('archived_transactions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  originalTransactionId: uuid('original_transaction_id').notNull(),
+  plaidTransactionId: text('plaid_transaction_id'),
+  businessId: uuid('business_id'),
+  reason: text('reason').notNull(),
+  snapshot: jsonb('snapshot').$type<Record<string, unknown>>().notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  plaidIdx: index('archived_transactions_plaid_idx').on(table.plaidTransactionId),
+}));
+
 export const auditLogs = pgTable('audit_logs', {
   id: uuid('id').defaultRandom().primaryKey(),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),

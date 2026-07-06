@@ -36,7 +36,7 @@ async function main(): Promise<void> {
 
     for (const connection of selected) {
       console.log(`Backfilling ${connection.label} (${connection.id}) for ${PLAID_TRANSACTION_HISTORY_DAYS} days...`);
-      const added = await syncPlaidConnection(connection.id, {
+      const { added } = await syncPlaidConnection(connection.id, {
         resetCursor: true,
         daysRequested: PLAID_TRANSACTION_HISTORY_DAYS,
         allowAiCategorization: false,
