@@ -16,6 +16,7 @@ import {
   type ComparisonCardData,
   prevYearLabel,
 } from './cash-flow/CashFlowVisuals';
+import { TagTrendsCard } from './cash-flow/TagTrendsCard';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -266,6 +267,9 @@ export function CashFlowPage({ user, onViewChange, onLogout }: Props) {
           </div>
           <CashFlowChart periods={periods} height={260} />
         </Card>
+
+        {/* Custom tag trends (e.g. AI spend) over the same range */}
+        <TagTrendsCard from={from} to={to} onViewChange={onViewChange} />
 
         {/* Category mix + top movers */}
         <div className="grid gap-3 lg:grid-cols-2">

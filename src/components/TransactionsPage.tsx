@@ -6,6 +6,7 @@ import {
   listAccounts,
   listBusinesses,
   listCategories,
+  listTags,
   listTransactions,
   uploadReceipt,
   waiveMissingReceipts,
@@ -16,6 +17,7 @@ import type {
   Category,
   CurrentUser,
   ReceiptStatus,
+  Tag,
   Transaction,
   TransactionDirection,
   TransactionRollup,
@@ -71,11 +73,13 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [activeView, setActiveView] = useState<string>('all');
   const [business, setBusiness] = useState(initialFilters?.business ?? 'all');
   const [accountIds, setAccountIds] = useState<string[]>(initialFilters?.accountIds ?? []);
   const [categoryName, setCategoryName] = useState(initialFilters?.categories?.[0] ?? 'all');
   const [receipts, setReceipts] = useState<ReceiptStatus[]>(initialFilters?.receipts ?? []);
+  const [tagIds, setTagIds] = useState<string[]>(initialFilters?.tagIds ?? []);
   const [direction, setDirection] = useState<TransactionDirection>(initialFilters?.direction ?? 'all');
   const [query, setQuery] = useState(initialFilters?.query ?? '');
   const [from, setFrom] = useState(initialFilters?.from ?? defaultFrom());
@@ -91,6 +95,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
   const [openGroups, setOpenGroups] = useState({
     accounts: true,
     category: true,
+    tags: true,
     receipt: false,
   });
   const [missingOutflowCount, setMissingOutflowCount] = useState(0);
@@ -105,6 +110,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
     setAccountIds(initialFilters?.accountIds ?? []);
     setCategoryName(initialFilters?.categories?.[0] ?? 'all');
     setReceipts(initialFilters?.receipts ?? []);
+    setTagIds(initialFilters?.tagIds ?? []);
     setDirection(initialFilters?.direction ?? 'all');
     setQuery(initialFilters?.query ?? '');
     setFrom(initialFilters?.from ?? defaultFrom());
@@ -113,11 +119,12 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
   }, [initialFilters]);
 
   useEffect(() => {
-    Promise.all([listBusinesses(), listAccounts(), listCategories()])
-      .then(([businessRows, accountRows, categoryRows]) => {
+    Promise.all([listBusinesses(), listAccounts(), listCategories(), listTags()])
+      .then(([businessRows, accountRows, categoryRows, tagRows]) => {
         setBusinesses(businessRows);
         setAccounts(accountRows);
         setCategories(categoryRows);
+        setTags(tagRows);
       })
       .catch((loadError: Error) => setError(loadError.message));
   }, []);
@@ -133,6 +140,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
         accountIds,
         categories: categoryNames,
         receipts,
+        tagIds,
         direction,
         q: query || undefined,
         from: from || undefined,
@@ -147,6 +155,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
         accountIds,
         categories: categoryNames,
         receipts,
+        tagIds,
         direction,
         q: query || undefined,
         from: from || undefined,
@@ -160,7 +169,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
       })
       .catch((loadError: Error) => setError(loadError.message))
       .finally(() => setLoading(false));
-  }, [accountIds, activeView, business, categoryName, direction, from, offset, query, receipts, refreshKey, to]);
+  }, [accountIds, activeView, business, categoryName, direction, from, offset, query, receipts, refreshKey, tagIds, to]);
 
   // Independently track "needs receipt" count so the saved-view badge stays live.
   useEffect(() => {
@@ -318,6 +327,10 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
     setReceipts((current) => toggle(status, current));
     resetToFirstPage();
   };
+  const toggleTagFilter = (tagId: string) => {
+    setTagIds((current) => toggle(tagId, current));
+    resetToFirstPage();
+  };
   const toggleGroup = (key: keyof typeof openGroups) => setOpenGroups((g) => ({ ...g, [key]: !g[key] }));
   const activeViewLabel = SAVED_VIEWS.find((v) => v.id === activeView)?.label ?? 'All';
 
@@ -340,48 +353,40 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
       }}
     >
       <div className="flex flex-col gap-3">
-        {/* Saved view tabs */}
-        <div className="flex items-center gap-1 overflow-x-auto rounded-xl border border-ink2/10 bg-paper p-1.5 shadow-sm">
-          {SAVED_VIEWS.map((view) => {
-            const active = activeView === view.id;
-            const badge = view.id === 'needs-receipt' ? missingOutflowCount : undefined;
-            return (
-              <button
-                key={view.id}
-                type="button"
-                onClick={() => applySavedView(view.id)}
-                className={cn(
-                  'inline-flex h-8 shrink-0 items-center gap-2 rounded-lg px-3 text-xs font-bold transition-colors',
-                  active ? 'bg-inverse text-inverse-foreground' : 'text-ink hover:bg-cream',
-                )}
-              >
-                {view.label}
-                {badge !== undefined && badge > 0 && (
-                  <span className={cn(
-                    'rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none',
-                    active ? 'bg-inverse-foreground text-inverse' : 'bg-coral/20 text-coral-ink',
-                  )}>
-                    {badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Page header */}
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">
-              Saved view
-            </div>
-            <h1 className="font-display text-3xl font-bold tracking-tight">{activeViewLabel}</h1>
-            <div className="mt-1 text-sm text-dim">
+        {/* Toolbar: saved views + date range + export in one row */}
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-ink2/10 bg-paper p-1.5 shadow-sm">
+          <div className="flex items-center gap-1 overflow-x-auto">
+            {SAVED_VIEWS.map((view) => {
+              const active = activeView === view.id;
+              const badge = view.id === 'needs-receipt' ? missingOutflowCount : undefined;
+              return (
+                <button
+                  key={view.id}
+                  type="button"
+                  onClick={() => applySavedView(view.id)}
+                  className={cn(
+                    'inline-flex h-8 shrink-0 items-center gap-2 rounded-lg px-3 text-xs font-bold transition-colors',
+                    active ? 'bg-inverse text-inverse-foreground' : 'text-ink hover:bg-cream',
+                  )}
+                >
+                  {view.label}
+                  {badge !== undefined && badge > 0 && (
+                    <span className={cn(
+                      'rounded-full px-1.5 py-0.5 text-[10px] font-bold leading-none',
+                      active ? 'bg-inverse-foreground text-inverse' : 'bg-coral/20 text-coral-ink',
+                    )}>
+                      {badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <span className="hidden text-xs text-dim lg:inline" title={`${activeViewLabel} view`}>
               {rollup.rows} txns · {fmt$(rollup.operatingOutflowCents / 100)} out / {fmt$(rollup.operatingInflowCents / 100)} in
               {rollup.transferCents > 0 && ` · ${fmt$(rollup.transferCents / 100)} transfers (excluded)`}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
+            </span>
             <DateRangePill from={from} to={to} onChange={({ from: f, to: t }) => { setFrom(f); setTo(t); setOffset(0); }} />
             <Button variant="outline" size="sm" onClick={exportCsv}>
               <Download className="h-3.5 w-3.5" />
@@ -399,6 +404,8 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
             accountIds={accountIds}
             categoryName={categoryName}
             categoryOptions={categoryOptions}
+            tags={tags}
+            tagIds={tagIds}
             receipts={receipts}
             openGroups={openGroups}
             waiveBefore={waiveBefore}
@@ -407,6 +414,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
             onDirectionChange={setFilterDirection}
             onAccountToggle={toggleAccountFilter}
             onCategoryChange={setCategoryFilter}
+            onTagToggle={toggleTagFilter}
             onReceiptToggle={toggleReceiptFilter}
             onToggleGroup={toggleGroup}
             onWaiveBeforeChange={setWaiveBefore}
@@ -472,6 +480,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
               selectedIds={selectedIds}
               onToggleSelect={toggleSelect}
               onToggleSelectAll={toggleSelectAll}
+              groupByDate={activeView !== 'large'}
             />
           </div>
         </div>
@@ -481,6 +490,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
         transaction={selectedTransaction}
         businesses={businesses}
         categories={categories}
+        allTags={tags}
         onClose={() => setSelectedTransaction(null)}
         onSaved={() => setRefreshKey((key) => key + 1)}
       />

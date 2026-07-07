@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Save } from 'lucide-react';
-import { updateTransaction } from '@/api';
+import { Plus, Save } from 'lucide-react';
+import { addTransactionTag, removeTransactionTag, updateTransaction } from '@/api';
 import { categorySourceLabel, isGuessedCategorySource } from '@/lib/categorySource';
 import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
-import type { Business, Category, Transaction } from '@/types/domain';
+import type { Business, Category, Tag, Transaction, TransactionTag } from '@/types/domain';
+import { TagChip } from '@/components/ui/tag-chip';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -18,11 +19,13 @@ interface Props {
   transaction: Transaction | null;
   businesses: Business[];
   categories: Category[];
+  /** Available custom tags; omit to hide the tags editor. */
+  allTags?: Tag[];
   onClose: () => void;
   onSaved: () => void;
 }
 
-export function TransactionDrawer({ transaction, businesses, categories, onClose, onSaved }: Props) {
+export function TransactionDrawer({ transaction, businesses, categories, allTags, onClose, onSaved }: Props) {
   const { toast } = useToast();
   const resolvedBusinessId = useMemo(() => {
     if (!transaction) return '';
@@ -32,12 +35,63 @@ export function TransactionDrawer({ transaction, businesses, categories, onClose
   const [categoryId, setCategoryId] = useState<string>('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
+  const [tags, setTags] = useState<TransactionTag[]>([]);
+  const [tagBusy, setTagBusy] = useState(false);
+  const [tagsDirty, setTagsDirty] = useState(false);
 
   useEffect(() => {
     setBusinessId(resolvedBusinessId);
     setCategoryId(transaction?.categoryId ?? '');
     setNote(transaction?.note ?? '');
+    setTags(transaction?.tags ?? []);
+    setTagsDirty(false);
   }, [resolvedBusinessId, transaction]);
+
+  // Tag edits apply immediately (no Save needed), so refresh the list when closing after one.
+  const close = () => {
+    if (tagsDirty) onSaved();
+    onClose();
+  };
+
+  const addableTags = (allTags ?? []).filter(
+    (tag) => tag.active && !tags.some((applied) => applied.id === tag.id),
+  );
+
+  const handleAddTag = async (tagId: string) => {
+    if (!transaction) return;
+    setTagBusy(true);
+    try {
+      const result = await addTransactionTag(transaction.id, tagId);
+      setTags(result.tags);
+      setTagsDirty(true);
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not add tag',
+        description: error instanceof Error ? error.message : 'Try again.',
+      });
+    } finally {
+      setTagBusy(false);
+    }
+  };
+
+  const handleRemoveTag = async (tagId: string) => {
+    if (!transaction) return;
+    setTagBusy(true);
+    try {
+      await removeTransactionTag(transaction.id, tagId);
+      setTags((current) => current.filter((tag) => tag.id !== tagId));
+      setTagsDirty(true);
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not remove tag',
+        description: error instanceof Error ? error.message : 'Try again.',
+      });
+    } finally {
+      setTagBusy(false);
+    }
+  };
 
   const save = async () => {
     if (!transaction) return;
@@ -67,7 +121,7 @@ export function TransactionDrawer({ transaction, businesses, categories, onClose
   };
 
   return (
-    <Sheet open={Boolean(transaction)} onOpenChange={(open) => !open && onClose()}>
+    <Sheet open={Boolean(transaction)} onOpenChange={(open) => !open && close()}>
       <SheetContent side="right" className="w-full sm:max-w-md">
         {transaction && (
           <>
@@ -119,6 +173,44 @@ export function TransactionDrawer({ transaction, businesses, categories, onClose
               </Select>
             </div>
 
+            {allTags && (
+              <div className="grid gap-1.5">
+                <Label>Tags</Label>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {tags.map((tag) => (
+                    <TagChip
+                      key={tag.id}
+                      name={tag.name}
+                      color={tag.color}
+                      title={tag.source === 'auto' ? 'Applied automatically by a tag rule' : 'Applied manually'}
+                      onRemove={tagBusy ? undefined : () => handleRemoveTag(tag.id)}
+                    />
+                  ))}
+                  {tags.length === 0 && <span className="text-xs text-dim">No tags yet.</span>}
+                </div>
+                {addableTags.length > 0 && (
+                  <Select value="" onValueChange={handleAddTag} disabled={tagBusy}>
+                    <SelectTrigger className="h-8 w-44 text-xs">
+                      <span className="inline-flex items-center gap-1 text-dim">
+                        <Plus className="h-3 w-3" />
+                        Add tag
+                      </span>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {addableTags.map((tag) => (
+                        <SelectItem key={tag.id} value={tag.id}>
+                          <span className="inline-flex items-center gap-1.5">
+                            <span className="h-1.5 w-1.5 rounded-full" style={{ background: tag.color }} />
+                            {tag.name}
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+            )}
+
             <div className="grid gap-1.5">
               <Label htmlFor="drawer-note">Note</Label>
               <Textarea
@@ -156,7 +248,7 @@ export function TransactionDrawer({ transaction, businesses, categories, onClose
             </div>
 
             <div className="mt-auto flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={onClose}>
+              <Button variant="outline" onClick={close}>
                 Cancel
               </Button>
               <Button onClick={save} disabled={saving}>

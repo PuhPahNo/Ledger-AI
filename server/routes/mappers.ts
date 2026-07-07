@@ -7,6 +7,7 @@ import type {
   Receipt,
   Transaction,
 } from '../db/schema.js';
+import type { ApiTransactionTag } from '../services/tagging.js';
 
 export function toApiBusiness(row: Business) {
   return {
@@ -60,6 +61,7 @@ export function toApiTransaction(row: Transaction & {
   businessKey?: string;
   categoryName?: string | null;
   categoryTaxCode?: string | null;
+  tags?: ApiTransactionTag[];
 }) {
   return {
     id: row.id,
@@ -81,6 +83,7 @@ export function toApiTransaction(row: Transaction & {
     note: row.note ?? undefined,
     flag: row.flag ?? undefined,
     pending: row.pending,
+    tags: row.tags ?? [],
   };
 }
 

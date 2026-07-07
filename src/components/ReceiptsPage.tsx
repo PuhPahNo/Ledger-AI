@@ -41,6 +41,23 @@ interface Props {
   onLogout?: () => void;
 }
 
+function groupReceiptsByMonth(receipts: ReceiptInboxItem[]): Array<{ month: string; rows: ReceiptInboxItem[] }> {
+  const groups: Array<{ month: string; rows: ReceiptInboxItem[] }> = [];
+  for (const receipt of receipts) {
+    const month = (receipt.receiptDate ?? receipt.createdAt).slice(0, 7);
+    const current = groups[groups.length - 1];
+    if (current && current.month === month) current.rows.push(receipt);
+    else groups.push({ month, rows: [receipt] });
+  }
+  return groups;
+}
+
+function monthLabel(month: string): string {
+  const date = new Date(`${month}-01T00:00:00`);
+  if (Number.isNaN(date.getTime())) return month;
+  return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+
 export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
   const { toast } = useToast();
   const [businesses, setBusinesses] = useState<Business[]>([]);
@@ -303,24 +320,13 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
       search={{ query, onQueryChange: setQuery, placeholder: 'Search merchants…' }}
     >
       <div className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">Workspace</div>
-            <h1 className="font-display text-3xl font-bold tracking-tight">Receipts</h1>
-          </div>
-          <Button variant="outline" onClick={refresh}>
-            <Search className="h-4 w-4" />
-            Refresh
-          </Button>
-        </div>
-
         <div className="grid gap-3 md:grid-cols-3">
           <Metric label="Unmatched" value={String(receipts.length)} tone={receipts.length ? 'warning' : 'positive'} />
           <Metric label="Gmail" value={String(gmailCount)} />
           <Metric label="Manual uploads" value={String(uploadCount)} />
         </div>
 
-        <div className="grid gap-3 rounded-xl border border-ink2/10 bg-paper p-3 shadow-sm md:grid-cols-[220px_180px_1fr]">
+        <div className="grid items-end gap-3 rounded-xl border border-ink2/10 bg-paper p-3 shadow-sm md:grid-cols-[220px_180px_1fr_auto]">
           <Field label="Business">
             <Select value={business} onValueChange={setBusiness}>
               <SelectTrigger><SelectValue /></SelectTrigger>
@@ -343,6 +349,10 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
           <Field label="Search">
             <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Merchant, file, business" />
           </Field>
+          <Button variant="outline" onClick={refresh}>
+            <Search className="h-4 w-4" />
+            Refresh
+          </Button>
         </div>
 
         {error ? (
@@ -359,19 +369,33 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                   </Button>
                 )}
               </div>
-              <div className="divide-y divide-ink2/10">
-                {receipts.map((receipt) => (
-                  <ReceiptRow
-                    key={receipt.id}
-                    receipt={receipt}
-                    active={receipt.id === selectedReceipt?.id}
-                    busy={busyReceiptId === receipt.id}
-                    checked={checkedIds.has(receipt.id)}
-                    onSelect={() => setSelectedReceiptId(receipt.id)}
-                    onDismiss={() => handleDismiss(receipt)}
-                    onOpenFile={() => previewFile(receipt)}
-                    onToggleChecked={() => toggleChecked(receipt.id)}
-                  />
+              <div className="max-h-[70vh] overflow-y-auto">
+                {groupReceiptsByMonth(receipts).map((group) => (
+                  <div key={group.month}>
+                    <div className="sticky top-0 z-10 flex items-baseline justify-between gap-3 border-b border-ink2/10 bg-cream/95 px-4 py-1.5 backdrop-blur">
+                      <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-dim">
+                        {monthLabel(group.month)}
+                      </span>
+                      <span className="text-[11px] tabular-nums text-dim">
+                        {group.rows.length} receipt{group.rows.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    <div className="divide-y divide-ink2/10">
+                      {group.rows.map((receipt) => (
+                        <ReceiptRow
+                          key={receipt.id}
+                          receipt={receipt}
+                          active={receipt.id === selectedReceipt?.id}
+                          busy={busyReceiptId === receipt.id}
+                          checked={checkedIds.has(receipt.id)}
+                          onSelect={() => setSelectedReceiptId(receipt.id)}
+                          onDismiss={() => handleDismiss(receipt)}
+                          onOpenFile={() => previewFile(receipt)}
+                          onToggleChecked={() => toggleChecked(receipt.id)}
+                        />
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
               {loadingReceipts && <div className="p-6 text-center text-sm text-dim">Loading receipts...</div>}

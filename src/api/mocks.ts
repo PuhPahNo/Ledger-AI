@@ -9,6 +9,9 @@ import type {
   Category,
   Connection,
   SpendSummary,
+  Tag,
+  TagRule,
+  TagTrendSeries,
   Transaction,
   Account,
 } from '@/types/domain';
@@ -21,11 +24,12 @@ export const BUSINESSES: Business[] = [
 ];
 
 export const TRANSACTIONS: Transaction[] = [
-  { id:'t01', accountId:'acct-1', date:'2026-05-22', dateLabel:'May 22', merchant:'Figma', amount: -45.00, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002', note:'Design seats' },
+  { id:'t01', accountId:'acct-1', date:'2026-05-22', dateLabel:'May 22', merchant:'Figma', amount: -45.00, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002', note:'Design seats', tags:[{ id:'tag-subscriptions', name:'Subscriptions', color:'#2A6FDB', source:'auto' }] },
+  { id:'t00', accountId:'acct-1', date:'2026-05-22', dateLabel:'May 22', merchant:'OpenAI', amount: -120.00, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002', note:'API usage', tags:[{ id:'tag-ai', name:'AI', color:'#7C5CFF', source:'auto' }] },
   { id:'t02', accountId:'acct-2', date:'2026-05-22', dateLabel:'May 22', merchant:'AWS', amount:-1284.13, biz:'pointsnav', cat:'Cloud', receipt:'matched', src:'Chase ** 6711' },
   { id:'t03', accountId:'acct-1', date:'2026-05-22', dateLabel:'May 22', merchant:'Sweetgreen', amount: -38.21, biz:'draft-sharks', cat:'Meals', receipt:'missing', src:'Amex ** 4002', flag:'no-receipt' },
   { id:'t04', accountId:'acct-3', date:'2026-05-21', dateLabel:'May 21', merchant:'Tournament Gear', amount:-2104.00, biz:'womens-net', cat:'Inventory', receipt:'matched', src:'Chase ** 9981' },
-  { id:'t05', accountId:'acct-1', date:'2026-05-21', dateLabel:'May 21', merchant:'Notion', amount: -16.00, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002', flag:'dup-sub' },
+  { id:'t05', accountId:'acct-1', date:'2026-05-21', dateLabel:'May 21', merchant:'Notion', amount: -16.00, biz:'draft-sharks', cat:'Software', receipt:'matched', src:'Amex ** 4002', flag:'dup-sub', tags:[{ id:'tag-subscriptions', name:'Subscriptions', color:'#2A6FDB', source:'auto' }, { id:'tag-ai', name:'AI', color:'#7C5CFF', source:'manual' }] },
   { id:'t06', accountId:'acct-2', date:'2026-05-21', dateLabel:'May 21', merchant:'Notion (annual)', amount:-192.00, biz:'pointsnav', cat:'Software', receipt:'matched', src:'Chase ** 6711', flag:'dup-sub' },
   { id:'t07', accountId:'acct-1', date:'2026-05-20', dateLabel:'May 20', merchant:'Lyft', amount: -27.80, biz:'draft-sharks', cat:'Travel', receipt:'missing', src:'Amex ** 4002', flag:'no-receipt' },
   { id:'t08', accountId:'acct-2', date:'2026-05-20', dateLabel:'May 20', merchant:'United Airlines', amount:-612.40, biz:'pointsnav', cat:'Travel', receipt:'matched', src:'Chase ** 6711' },
@@ -121,3 +125,41 @@ SUMMARY.total = Math.abs(visibleMockTransactions(TRANSACTIONS).filter(isSpendTra
 SUMMARY.outflow = SUMMARY.total;
 SUMMARY.inflow = Math.abs(visibleMockTransactions(TRANSACTIONS).filter((txn) => txn.amount > 0).reduce((a, t) => a + t.amount, 0));
 SUMMARY.net = SUMMARY.inflow - SUMMARY.outflow;
+
+export const TAGS: Tag[] = [
+  { id: 'tag-ai', name: 'AI', color: '#7C5CFF', active: true },
+  { id: 'tag-subscriptions', name: 'Subscriptions', color: '#2A6FDB', active: true },
+];
+// Counts/spend derived from TRANSACTIONS so the mock stays self-consistent.
+for (const tag of TAGS) {
+  const tagged = TRANSACTIONS.filter((txn) => txn.tags?.some((t) => t.id === tag.id));
+  tag.txnCount = tagged.length;
+  tag.totalCents = Math.round(tagged.filter((txn) => txn.amount < 0).reduce((sum, txn) => sum - txn.amount, 0) * 100);
+}
+
+export const TAG_RULES: TagRule[] = [
+  { id: 'tag-rule-1', tagId: 'tag-ai', matchKind: 'merchant_contains', pattern: 'openai' },
+  { id: 'tag-rule-2', tagId: 'tag-ai', matchKind: 'merchant_contains', pattern: 'anthropic' },
+  { id: 'tag-rule-3', tagId: 'tag-subscriptions', matchKind: 'merchant_contains', pattern: 'figma' },
+  { id: 'tag-rule-4', tagId: 'tag-subscriptions', matchKind: 'merchant_contains', pattern: 'notion' },
+];
+
+/** Deterministic 12-month synthetic series so the trends chart demos well in mock mode. */
+export function mockTagTrends(tagIds: string[]): TagTrendSeries[] {
+  const months = SUMMARY.trailingMonthLabels ?? [];
+  return TAGS.filter((tag) => tagIds.includes(tag.id)).map((tag, tagIndex) => ({
+    tagId: tag.id,
+    name: tag.name,
+    color: tag.color,
+    points: months.map((_, index) => {
+      const base = 12000 + tagIndex * 9000;
+      const growth = index * (1400 + tagIndex * 600);
+      const wobble = ((index * 7 + tagIndex * 13) % 5) * 1800;
+      return {
+        month: `2026-${String(index + 1).padStart(2, '0')}`,
+        totalCents: base + growth + wobble,
+        count: 2 + ((index + tagIndex) % 4),
+      };
+    }),
+  }));
+}

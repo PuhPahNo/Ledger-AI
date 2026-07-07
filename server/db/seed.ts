@@ -2,7 +2,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { hashPassword } from '../auth/password.js';
 import { getEnv } from '../config/env.js';
 import { db, closeDb } from './client.js';
-import { businesses, categories, categoryRules, users } from './schema.js';
+import { businesses, categories, categoryRules, tagRules, tags, users } from './schema.js';
 
 const seedBusinesses = [
   { key: 'draft-sharks', name: 'Draft Sharks', short: 'DS', color: '#D97757', hue: 24 },
@@ -99,6 +99,33 @@ export async function seed(): Promise<void> {
       ),
     });
     if (!existing) await db.insert(categoryRules).values(rule);
+  }
+
+  await seedTags();
+}
+
+// Tags are global across businesses on purpose — e.g. track AI spend everywhere.
+const seedTagDefinitions = [
+  {
+    name: 'AI',
+    color: '#caa6f0',
+    rules: [
+      { matchKind: 'merchant_contains' as const, pattern: 'openai' },
+      { matchKind: 'merchant_contains' as const, pattern: 'anthropic' },
+    ],
+  },
+];
+
+async function seedTags(): Promise<void> {
+  for (const definition of seedTagDefinitions) {
+    const existing = await db.query.tags.findFirst({ where: eq(tags.name, definition.name) });
+    const tag = existing ?? (await db.insert(tags).values({
+      name: definition.name,
+      color: definition.color,
+    }).returning())[0];
+    for (const rule of definition.rules) {
+      await db.insert(tagRules).values({ tagId: tag.id, ...rule }).onConflictDoNothing();
+    }
   }
 }
 

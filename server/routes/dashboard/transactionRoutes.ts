@@ -3,13 +3,14 @@ import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, lt, lte, or, 
 import { z } from 'zod';
 import { requireUser } from '../../auth/session.js';
 import { db } from '../../db/client.js';
-import { accounts, businesses, categories, transactions } from '../../db/schema.js';
+import { accounts, businesses, categories, transactionTags, transactions } from '../../db/schema.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { audit } from '../../services/audit.js';
 import { categoryMatchesTransactionDirection, isIncomeCategory } from '../../services/categorization.js';
 import { createManualCategorizationFeedback } from '../../services/categorizationFeedback.js';
 import { attachReceipt } from '../../services/matching.js';
 import { getReceiptTrackingSince, setReceiptTrackingSince } from '../../services/appSettings.js';
+import { tagsByTransactionId } from '../../services/tagging.js';
 import { normalizeTransactionOverride } from '../../services/transactionOverrides.js';
 import { toApiTransaction } from '../mappers.js';
 import {
@@ -35,6 +36,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       accounts: z.string().optional(),
       categories: z.string().optional(),
       receipts: z.string().optional(),
+      tags: z.string().optional(),
       direction: z.enum(['all', 'inflow', 'outflow', 'operating-outflow', 'transfer']).default('all'),
       offset: z.coerce.number().int().min(0).default(0),
       sort: z.enum(['date', 'amount', 'largest', 'merchant', 'business', 'category', 'account']).default('date'),
@@ -43,6 +45,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     const accountIds = parseAccountIds(query.accounts);
     const categoryNames = parseList(query.categories);
     const receiptStatuses = parseList(query.receipts).filter(isReceiptStatus);
+    const tagIds = parseList(query.tags);
     const sortColumn = transactionSortColumn(query.sort);
     const sortDirection = query.dir === 'asc' ? asc : desc;
 
@@ -84,6 +87,12 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
         accountSpendFilter(accountIds),
         categoryNames.length ? inArray(categories.name, categoryNames) : sql`true`,
         receiptStatuses.length ? inArray(transactions.receiptStatus, receiptStatuses) : sql`true`,
+        // ANY-of semantics: a transaction shows if it carries at least one selected tag.
+        tagIds.length ? sql`EXISTS (
+          SELECT 1 FROM ${transactionTags}
+          WHERE ${transactionTags.transactionId} = ${transactions.id}
+            AND ${inArray(transactionTags.tagId, tagIds)}
+        )` : sql`true`,
         transactionDirectionFilter(query.direction),
         query.q ? or(
           ilike(transactions.merchant, `%${query.q}%`),
@@ -95,7 +104,8 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       .orderBy(sortDirection(sortColumn), desc(transactions.createdAt))
       .limit(Math.min(query.limit ?? 100, 2000))
       .offset(query.offset);
-    return rows.map(toApiTransaction);
+    const tagsById = await tagsByTransactionId(rows.map((row) => row.id));
+    return rows.map((row) => toApiTransaction({ ...row, tags: tagsById.get(row.id) ?? [] }));
   });
 
   app.get('/transactions/rollup', async (request) => {
@@ -108,11 +118,13 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       accounts: z.string().optional(),
       categories: z.string().optional(),
       receipts: z.string().optional(),
+      tags: z.string().optional(),
       direction: z.enum(['all', 'inflow', 'outflow', 'operating-outflow', 'transfer']).default('all'),
     }).parse(request.query);
     const accountIds = parseAccountIds(query.accounts);
     const categoryNames = parseList(query.categories);
     const receiptStatuses = parseList(query.receipts).filter(isReceiptStatus);
+    const tagIds = parseList(query.tags);
     const [row] = await db
       .select({
         rows: sql<number>`count(${transactions.id})::int`,
@@ -135,6 +147,13 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
         accountSpendFilter(accountIds),
         categoryNames.length ? inArray(categories.name, categoryNames) : sql`true`,
         receiptStatuses.length ? inArray(transactions.receiptStatus, receiptStatuses) : sql`true`,
+        // ANY-of semantics, mirroring the /transactions list filter so the metric
+        // tiles always agree with the tag-filtered table.
+        tagIds.length ? sql`EXISTS (
+          SELECT 1 FROM ${transactionTags}
+          WHERE ${transactionTags.transactionId} = ${transactions.id}
+            AND ${inArray(transactionTags.tagId, tagIds)}
+        )` : sql`true`,
         transactionDirectionFilter(query.direction),
         query.q ? or(
           ilike(transactions.merchant, `%${query.q}%`),
@@ -348,5 +367,7 @@ async function transactionById(id: string) {
     .leftJoin(categories, eq(transactions.categoryId, categories.id))
     .where(eq(transactions.id, id))
     .limit(1);
-  return row;
+  if (!row) return row;
+  const tagsById = await tagsByTransactionId([row.id]);
+  return { ...row, tags: tagsById.get(row.id) ?? [] };
 }

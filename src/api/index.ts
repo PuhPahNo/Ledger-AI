@@ -10,6 +10,7 @@ export * from './summary';
 export * from './transactions';
 export * from './categorizationReview';
 export * from './rules';
+export * from './tags';
 export * from './auth';
 export * from './admin';
 export * from './accounts';

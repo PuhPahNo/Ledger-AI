@@ -20,6 +20,8 @@ import { BusinessesTab } from './tabs/BusinessesTab';
 import { CategoriesTab } from './tabs/CategoriesTab';
 import { ConnectionsTab } from './tabs/ConnectionsTab';
 import { ExportsTab } from './tabs/ExportsTab';
+import { RulesTab } from './tabs/RulesTab';
+import { TagsTab } from './tabs/TagsTab';
 import { UsersTab } from './tabs/UsersTab';
 import type { SaveAndRefresh } from './fields';
 
@@ -29,12 +31,14 @@ interface Props {
   user?: CurrentUser;
 }
 
-type Tab = 'businesses' | 'users' | 'categories' | 'connections' | 'exports' | 'audit';
+type Tab = 'businesses' | 'users' | 'categories' | 'rules' | 'tags' | 'connections' | 'exports' | 'audit';
 
 const tabs: Array<{ id: Tab; label: string }> = [
   { id: 'businesses', label: 'Businesses' },
   { id: 'users', label: 'Users' },
-  { id: 'categories', label: 'Categories / Rules' },
+  { id: 'categories', label: 'Categories' },
+  { id: 'rules', label: 'Rules' },
+  { id: 'tags', label: 'Tags' },
   { id: 'connections', label: 'Connections' },
   { id: 'exports', label: 'Exports' },
   { id: 'audit', label: 'Audit' },
@@ -150,6 +154,12 @@ export function AdminPage({ onViewChange, onLogout, user }: Props) {
               </TabsContent>
               <TabsContent value="categories">
                 <CategoriesTab data={data} businesses={businesses} saveAndRefresh={saveAndRefresh} />
+              </TabsContent>
+              <TabsContent value="rules">
+                <RulesTab data={data} businesses={businesses} saveAndRefresh={saveAndRefresh} />
+              </TabsContent>
+              <TabsContent value="tags">
+                <TagsTab />
               </TabsContent>
               <TabsContent value="connections">
                 <ConnectionsTab connections={connections} onOpenConnections={() => setConnectionsOpen(true)} />

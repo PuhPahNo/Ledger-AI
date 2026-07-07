@@ -1,12 +1,12 @@
 import { Check, ChevronLeft, Filter } from 'lucide-react';
-import type { Account, ReceiptStatus, TransactionDirection } from '@/types/domain';
+import type { Account, ReceiptStatus, Tag, TransactionDirection } from '@/types/domain';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { accountLabel } from '@/lib/account';
 import { cn } from '@/lib/cn';
 import { AccountTypeIcon, FacetGroup, today } from './TransactionPageParts';
 
-type FilterGroup = 'accounts' | 'category' | 'receipt';
+type FilterGroup = 'accounts' | 'category' | 'tags' | 'receipt';
 
 interface TransactionsFilterRailProps {
   railOpen: boolean;
@@ -15,6 +15,8 @@ interface TransactionsFilterRailProps {
   accountIds: string[];
   categoryName: string;
   categoryOptions: string[];
+  tags: Tag[];
+  tagIds: string[];
   receipts: ReceiptStatus[];
   openGroups: Record<FilterGroup, boolean>;
   waiveBefore: string;
@@ -23,6 +25,7 @@ interface TransactionsFilterRailProps {
   onDirectionChange: (direction: TransactionDirection) => void;
   onAccountToggle: (accountId: string) => void;
   onCategoryChange: (name: string) => void;
+  onTagToggle: (tagId: string) => void;
   onReceiptToggle: (status: ReceiptStatus) => void;
   onToggleGroup: (group: FilterGroup) => void;
   onWaiveBeforeChange: (date: string) => void;
@@ -36,6 +39,8 @@ export function TransactionsFilterRail({
   accountIds,
   categoryName,
   categoryOptions,
+  tags,
+  tagIds,
   receipts,
   openGroups,
   waiveBefore,
@@ -44,6 +49,7 @@ export function TransactionsFilterRail({
   onDirectionChange,
   onAccountToggle,
   onCategoryChange,
+  onTagToggle,
   onReceiptToggle,
   onToggleGroup,
   onWaiveBeforeChange,
@@ -160,6 +166,40 @@ export function TransactionsFilterRail({
           ))}
         </div>
       </FacetGroup>
+
+      {tags.length > 0 && (
+        <FacetGroup
+          label={`Tags${tagIds.length ? ` · ${tagIds.length}` : ''}`}
+          open={openGroups.tags}
+          onToggle={() => onToggleGroup('tags')}
+        >
+          <div className="max-h-48 overflow-y-auto">
+            {tags.map((tag) => {
+              const checked = tagIds.includes(tag.id);
+              return (
+                <button
+                  key={tag.id}
+                  type="button"
+                  onClick={() => onTagToggle(tag.id)}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs hover:bg-cream/60"
+                >
+                  <span className={cn(
+                    'flex h-3.5 w-3.5 items-center justify-center rounded border',
+                    checked ? 'border-inverse bg-inverse text-inverse-foreground' : 'border-ink2/25',
+                  )}>
+                    {checked && <Check className="h-2.5 w-2.5" />}
+                  </span>
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: tag.color }} />
+                  <span className="flex-1 truncate font-medium text-ink">{tag.name}</span>
+                  {tag.txnCount != null && tag.txnCount > 0 && (
+                    <span className="font-mono text-[10px] text-dim">{tag.txnCount}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </FacetGroup>
+      )}
 
       <FacetGroup label="Receipt status" open={openGroups.receipt} onToggle={() => onToggleGroup('receipt')}>
         <div className="grid grid-cols-2 gap-1">

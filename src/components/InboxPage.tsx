@@ -145,7 +145,7 @@ export function InboxPage({ user, onViewChange, onOpenTransactions, onLogout }: 
       onLogout={onLogout}
       user={user}
       contextEyebrow="Workspace"
-      contextTitle="Inbox"
+      contextTitle="Notifications"
     >
       <div className="flex flex-col gap-4">
         <div>
@@ -292,7 +292,7 @@ export function InboxPage({ user, onViewChange, onOpenTransactions, onLogout }: 
           </section>
         )}
 
-        {loading && <div className="p-6 text-center text-sm text-dim">Loading inbox…</div>}
+        {loading && <div className="p-6 text-center text-sm text-dim">Loading notifications…</div>}
       </div>
     </AppShell>
   );

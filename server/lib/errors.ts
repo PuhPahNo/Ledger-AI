@@ -24,6 +24,10 @@ export function forbidden(message = 'Forbidden'): never {
   throw new HttpError(403, message);
 }
 
+export function conflict(message = 'Conflict', details?: unknown): never {
+  throw new HttpError(409, message, details);
+}
+
 export function serviceUnavailable(message = 'Service unavailable', details?: unknown): never {
   throw new HttpError(503, message, details);
 }

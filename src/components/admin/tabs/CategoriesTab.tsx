@@ -1,18 +1,11 @@
 import { useState } from 'react';
-import {
-  createCategory,
-  createCategoryRule,
-  updateCategory,
-  updateCategoryRule,
-  type AdminOverview,
-} from '@/api';
+import { createCategory, updateCategory, type AdminOverview } from '@/api';
 import type { Business } from '@/types/domain';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
-import { FieldBusiness, FieldColor, FieldSelect, FieldText, type SaveAndRefresh } from '../fields';
+import { FieldBusiness, FieldColor, FieldText, type SaveAndRefresh } from '../fields';
 import { EditableCategory } from '../rows/EditableCategory';
-import { EditableRule } from '../rows/EditableRule';
 
 interface Props {
   data: AdminOverview;
@@ -20,22 +13,8 @@ interface Props {
   saveAndRefresh: SaveAndRefresh;
 }
 
-const MATCH_KINDS = [
-  { value: 'merchant_contains', label: 'Merchant contains' },
-  { value: 'merchant_exact', label: 'Merchant exact' },
-  { value: 'plaid_category', label: 'Plaid category' },
-  { value: 'amount_range', label: 'Amount range' },
-];
-
 export function CategoriesTab({ data, businesses, saveAndRefresh }: Props) {
   const [categoryForm, setCategoryForm] = useState({ name: '', taxCode: '', color: '#D97757', businessId: '' });
-  const [ruleForm, setRuleForm] = useState({
-    categoryId: '',
-    businessId: '',
-    matchKind: 'merchant_contains',
-    pattern: '',
-    priority: 100,
-  });
 
   return (
     <div className="grid gap-4 lg:grid-cols-12">
@@ -83,76 +62,6 @@ export function CategoriesTab({ data, businesses, saveAndRefresh }: Props) {
               ))
             ) : (
               <EmptyState title="No categories" description="Create your first category to start grouping spend." />
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card className="lg:col-span-4">
-        <CardHeader>
-          <CardTitle>Create rule</CardTitle>
-          <CardDescription>Automatically tag transactions that match a pattern.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          <FieldBusiness
-            label="Scope"
-            value={ruleForm.businessId}
-            businesses={businesses}
-            onChange={(businessId) => setRuleForm({ ...ruleForm, businessId })}
-          />
-          <FieldSelect
-            label="Category"
-            value={ruleForm.categoryId}
-            onChange={(categoryId) => setRuleForm({ ...ruleForm, categoryId })}
-            placeholder="Choose"
-            options={data.categories.map((category) => ({ value: category.id, label: category.name }))}
-          />
-          <FieldSelect
-            label="Match"
-            value={ruleForm.matchKind}
-            onChange={(matchKind) => setRuleForm({ ...ruleForm, matchKind })}
-            options={MATCH_KINDS}
-          />
-          <FieldText label="Pattern" value={ruleForm.pattern} onChange={(pattern) => setRuleForm({ ...ruleForm, pattern })} />
-          <FieldText
-            label="Priority"
-            type="number"
-            value={String(ruleForm.priority)}
-            onChange={(priority) => setRuleForm({ ...ruleForm, priority: Number(priority) })}
-          />
-          <Button
-            onClick={() =>
-              saveAndRefresh(
-                () => createCategoryRule({ ...ruleForm, businessId: ruleForm.businessId || null }),
-                'Rule created.',
-              )
-            }
-          >
-            Create rule
-          </Button>
-        </CardContent>
-      </Card>
-
-      <Card className="lg:col-span-8">
-        <CardHeader>
-          <CardTitle>Rules</CardTitle>
-          <CardDescription>
-            {data.rules.length} active rule{data.rules.length === 1 ? '' : 's'}.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-2">
-            {data.rules.length ? (
-              data.rules.map((rule) => (
-                <EditableRule
-                  key={rule.id}
-                  rule={rule}
-                  categories={data.categories}
-                  onSave={(body) => saveAndRefresh(() => updateCategoryRule(rule.id, body), 'Rule saved.')}
-                />
-              ))
-            ) : (
-              <EmptyState title="No rules yet" description="Rules auto-categorize transactions as they come in." />
             )}
           </div>
         </CardContent>

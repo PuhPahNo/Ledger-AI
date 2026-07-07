@@ -7,6 +7,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -254,6 +255,43 @@ export const transactions = pgTable('transactions', {
   receiptIdx: index('transactions_receipt_idx').on(table.receiptId),
 }));
 
+export type TransactionTagSource = 'manual' | 'auto';
+
+export type TagRuleMatchKind = 'merchant_exact' | 'merchant_contains';
+
+// Global (cross-business) labels layered on top of categories — e.g. an "AI" tag
+// tracking AI spend across all three businesses.
+export const tags = pgTable('tags', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  name: text('name').notNull(),
+  color: text('color').notNull(),
+  active: boolean('active').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  nameLowerIdx: uniqueIndex('tags_name_lower_idx').on(sql`lower(${table.name})`),
+}));
+
+export const transactionTags = pgTable('transaction_tags', {
+  transactionId: uuid('transaction_id').notNull().references(() => transactions.id, { onDelete: 'cascade' }),
+  tagId: uuid('tag_id').notNull().references(() => tags.id, { onDelete: 'cascade' }),
+  source: text('source').$type<TransactionTagSource>().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.transactionId, table.tagId] }),
+  tagIdx: index('transaction_tags_tag_idx').on(table.tagId),
+}));
+
+export const tagRules = pgTable('tag_rules', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  tagId: uuid('tag_id').notNull().references(() => tags.id, { onDelete: 'cascade' }),
+  matchKind: text('match_kind').$type<TagRuleMatchKind>().notNull(),
+  pattern: text('pattern').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  tagIdx: index('tag_rules_tag_idx').on(table.tagId),
+  dedupeIdx: uniqueIndex('tag_rules_dedupe_idx').on(table.tagId, table.matchKind, table.pattern),
+}));
+
 export const categorizationFeedback = pgTable('categorization_feedback', {
   id: uuid('id').defaultRandom().primaryKey(),
   businessId: uuid('business_id').notNull().references(() => businesses.id, { onDelete: 'cascade' }),
@@ -435,6 +473,9 @@ export type CategoryRule = typeof categoryRules.$inferSelect;
 export type ReceiptUploader = typeof receiptUploaders.$inferSelect;
 export type ReceiptUploaderSession = typeof receiptUploaderSessions.$inferSelect;
 export type Transaction = typeof transactions.$inferSelect;
+export type Tag = typeof tags.$inferSelect;
+export type TransactionTag = typeof transactionTags.$inferSelect;
+export type TagRule = typeof tagRules.$inferSelect;
 export type CategorizationFeedback = typeof categorizationFeedback.$inferSelect;
 export type CategorizationReviewItem = typeof categorizationReviewItems.$inferSelect;
 export type TransactionCategoryEvent = typeof transactionCategoryEvents.$inferSelect;

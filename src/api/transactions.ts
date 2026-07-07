@@ -17,6 +17,8 @@ export interface ListTransactionsParams {
   accountIds?: string[];
   categories?: string[];
   receipts?: ReceiptStatus[];
+  /** Tag ids — transactions carrying ANY of these tags. */
+  tagIds?: string[];
   direction?: TransactionDirection;
   sort?: 'date' | 'amount' | 'largest' | 'merchant' | 'business' | 'category' | 'account';
   dir?: 'asc' | 'desc';
@@ -34,6 +36,7 @@ export function listTransactions(params: ListTransactionsParams = {}): Promise<T
     if (params.to) rows = rows.filter((t) => t.date <= params.to!);
     if (params.categories?.length) rows = rows.filter((t) => params.categories?.includes(t.cat));
     if (params.receipts?.length) rows = rows.filter((t) => params.receipts?.includes(t.receipt));
+    if (params.tagIds?.length) rows = rows.filter((t) => t.tags?.some((tag) => params.tagIds?.includes(tag.id)));
     if (params.direction && params.direction !== 'all') {
       rows = rows.filter((t) => transactionMatchesDirection(t, params.direction ?? 'all'));
     }
@@ -53,12 +56,13 @@ export function listTransactions(params: ListTransactionsParams = {}): Promise<T
   }
   const query = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
-    if (v == null || k === 'accountIds' || k === 'categories' || k === 'receipts') continue;
+    if (v == null || k === 'accountIds' || k === 'categories' || k === 'receipts' || k === 'tagIds') continue;
     query.set(k, String(v));
   }
   if (params.accountIds?.length) query.set('accounts', params.accountIds.join(','));
   if (params.categories?.length) query.set('categories', params.categories.join(','));
   if (params.receipts?.length) query.set('receipts', params.receipts.join(','));
+  if (params.tagIds?.length) query.set('tags', params.tagIds.join(','));
   return http<ApiTransaction[]>(`/transactions?${query.toString()}`).then((rows) => rows.map(mapTransaction));
 }
 
@@ -68,12 +72,13 @@ export function getTransactionRollup(params: Omit<ListTransactionsParams, 'limit
   }
   const query = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
-    if (v == null || k === 'accountIds' || k === 'categories' || k === 'receipts') continue;
+    if (v == null || k === 'accountIds' || k === 'categories' || k === 'receipts' || k === 'tagIds') continue;
     query.set(k, String(v));
   }
   if (params.accountIds?.length) query.set('accounts', params.accountIds.join(','));
   if (params.categories?.length) query.set('categories', params.categories.join(','));
   if (params.receipts?.length) query.set('receipts', params.receipts.join(','));
+  if (params.tagIds?.length) query.set('tags', params.tagIds.join(','));
   return http<TransactionRollup>(`/transactions/rollup?${query.toString()}`);
 }
 

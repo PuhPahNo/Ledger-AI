@@ -92,6 +92,54 @@ export interface Transaction {
   src: string;
   note?: string;
   flag?: TransactionFlag;
+  /** Custom tags layered on top of the category (e.g. "AI"). */
+  tags?: TransactionTag[];
+}
+
+export type TagAssignmentSource = 'manual' | 'auto';
+
+/** A tag as it appears attached to one transaction. */
+export interface TransactionTag {
+  id: string;
+  name: string;
+  color: string;
+  source: TagAssignmentSource;
+}
+
+/** A custom cross-business label layered on top of categories (e.g. "AI"). */
+export interface Tag {
+  id: string;
+  name: string;
+  color: string;
+  active: boolean;
+  /** Transactions currently carrying this tag. */
+  txnCount?: number;
+  /** Outflow spend across tagged transactions, in cents. */
+  totalCents?: number;
+}
+
+export type TagRuleMatchKind = 'merchant_exact' | 'merchant_contains';
+
+/** Auto-apply rule: transactions whose merchant matches get the tag. */
+export interface TagRule {
+  id: string;
+  tagId: string;
+  matchKind: TagRuleMatchKind;
+  pattern: string;
+}
+
+export interface TagTrendPoint {
+  /** 'YYYY-MM' */
+  month: string;
+  totalCents: number;
+  count: number;
+}
+
+export interface TagTrendSeries {
+  tagId: string;
+  name: string;
+  color: string;
+  points: TagTrendPoint[];
 }
 
 export type TransactionDirection = 'all' | 'inflow' | 'outflow' | 'operating-outflow' | 'transfer';

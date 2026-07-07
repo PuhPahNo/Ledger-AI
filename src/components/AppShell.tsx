@@ -2,9 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Bell,
-  Inbox,
   LayoutDashboard,
-  ListChecks,
   Receipt,
   Search,
   Settings,
@@ -33,12 +31,10 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'inbox', label: 'Inbox', icon: Inbox },
   { id: 'transactions', label: 'Transactions', icon: TableIcon },
   { id: 'cash-flow', label: 'Cash Flow', icon: TrendingUp },
   { id: 'insights', label: 'Insights', icon: Sparkles },
   { id: 'receipts', label: 'Receipts', icon: Receipt },
-  { id: 'rules', label: 'Rules', icon: ListChecks },
   { id: 'balances', label: 'Balances', icon: Wallet },
   { id: 'assistant', label: 'Assistant', icon: Sparkles },
 ];
@@ -124,11 +120,14 @@ export function AppShell({
   }, []);
 
   const displayedReviewCount = usesExternalReviewCenter ? (reviewCount ?? 0) : internalReviewItems.length;
-  // The bell routes to the Inbox page (the one place that shows everything waiting);
+  // The bell routes to the Notifications page (the one place that shows everything waiting);
   // the modal remains only as a fallback for shells rendered without navigation.
   const openReviewCenter = onViewChange
     ? () => onViewChange('inbox')
     : onOpenReviewCenter ?? (() => setInternalReviewOpen(true));
+  // When the bell leads to Notifications it counts everything waiting there;
+  // the fallback modal only shows review items, so its badge only counts those.
+  const bellCount = onViewChange ? displayedReviewCount + unmatchedReceiptCount : displayedReviewCount;
 
   return (
     <div className="min-h-screen bg-bg text-ink">
@@ -140,7 +139,6 @@ export function AppShell({
           onLogout={onLogout}
           search={search}
           unmatchedReceiptCount={unmatchedReceiptCount}
-          inboxCount={unmatchedReceiptCount + displayedReviewCount}
         />
 
         <main className="flex min-w-0 flex-1 flex-col gap-3">
@@ -149,7 +147,7 @@ export function AppShell({
             eyebrow={contextEyebrow}
             leading={contextLeading}
             actions={contextActions}
-            reviewCount={displayedReviewCount}
+            reviewCount={bellCount}
             onOpenReviewCenter={openReviewCenter}
             onClickUpload={onUploadReceipt ? () => fileInput.current?.click() : undefined}
             businesses={businesses}
@@ -195,10 +193,9 @@ interface SidebarProps {
   onLogout?: () => void;
   search?: { query: string; onQueryChange: (value: string) => void; placeholder?: string };
   unmatchedReceiptCount: number;
-  inboxCount: number;
 }
 
-function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedReceiptCount, inboxCount }: SidebarProps) {
+function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedReceiptCount }: SidebarProps) {
   return (
     <aside className="sticky top-3 hidden h-[calc(100vh-24px)] w-[220px] shrink-0 flex-col rounded-xl border border-ink2/10 bg-paper shadow-sm md:flex">
       <div className="flex items-center gap-2.5 border-b border-ink2/10 px-4 py-3">
@@ -241,11 +238,7 @@ function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedR
               <Icon className={cn('h-4 w-4', active ? 'text-inverse-foreground' : 'text-dim group-hover:text-ink')} />
               <span>{item.label}</span>
               {(() => {
-                const badgeCount = item.id === 'inbox'
-                  ? inboxCount
-                  : item.id === 'receipts'
-                    ? unmatchedReceiptCount
-                    : 0;
+                const badgeCount = item.id === 'receipts' ? unmatchedReceiptCount : 0;
                 if (badgeCount <= 0) return null;
                 return (
                   <span
