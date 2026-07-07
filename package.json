@@ -19,6 +19,7 @@
     "db:seed": "tsx server/db/seed.ts",
     "plaid:audit": "tsx server/scripts/audit-transactions.ts",
     "plaid:backfill": "tsx server/scripts/backfill-plaid-history.ts",
+    "receipts:cleanup": "tsx server/scripts/dismiss-non-receipts.ts",
     "assistant:eval": "tsx server/scripts/eval-assistant.ts",
     "admin:reset": "tsx server/scripts/reset-admin.ts",
     "test": "vitest run"

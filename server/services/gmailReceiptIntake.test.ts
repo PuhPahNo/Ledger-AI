@@ -3,6 +3,7 @@ import {
   buildEmailBodyCandidate,
   collectReceiptAttachments,
   looksLikeReceiptOrInvoiceText,
+  messageReceiptSignal,
   type GmailMimePart,
 } from './gmailReceiptIntake.js';
 
@@ -10,8 +11,11 @@ function encoded(value: string): string {
   return Buffer.from(value, 'utf8').toString('base64url');
 }
 
+const keywordOnlySignal = { isReceiptLike: false, hasReceiptKeyword: true };
+const receiptLikeSignal = { isReceiptLike: true, hasReceiptKeyword: true };
+
 describe('gmail receipt intake', () => {
-  it('collects receipt image and invoice PDF attachments', () => {
+  it('collects image and PDF attachments when the message mentions a receipt', () => {
     const payload: GmailMimePart = {
       mimeType: 'multipart/mixed',
       parts: [
@@ -28,9 +32,44 @@ describe('gmail receipt intake', () => {
       ],
     };
 
-    expect(collectReceiptAttachments(payload)).toEqual([
+    expect(collectReceiptAttachments(payload, keywordOnlySignal)).toEqual([
       { filename: 'IMG_1234.jpg', mimeType: 'image/jpeg', attachmentId: 'image-1' },
       { filename: 'May-invoice.pdf', mimeType: 'application/pdf', attachmentId: 'pdf-1' },
+    ]);
+  });
+
+  it('ignores a generic PDF on a message without any receipt signal', () => {
+    const payload: GmailMimePart = {
+      mimeType: 'multipart/mixed',
+      parts: [
+        {
+          filename: 'Parking-Garage-Map.pdf',
+          mimeType: 'application/pdf',
+          body: { attachmentId: 'pdf-1', size: 240_000 },
+        },
+        {
+          filename: 'photo.jpg',
+          mimeType: 'image/jpeg',
+          body: { attachmentId: 'image-1', size: 900_000 },
+        },
+      ],
+    };
+
+    expect(collectReceiptAttachments(payload)).toEqual([]);
+  });
+
+  it('keeps a receipt-named PDF even when the message itself has no signal', () => {
+    const payload: GmailMimePart = {
+      mimeType: 'multipart/mixed',
+      parts: [{
+        filename: 'invoice-8841.pdf',
+        mimeType: 'application/pdf',
+        body: { attachmentId: 'pdf-1', size: 42_000 },
+      }],
+    };
+
+    expect(collectReceiptAttachments(payload)).toEqual([
+      { filename: 'invoice-8841.pdf', mimeType: 'application/pdf', attachmentId: 'pdf-1' },
     ]);
   });
 
@@ -45,7 +84,22 @@ describe('gmail receipt intake', () => {
       }],
     };
 
-    expect(collectReceiptAttachments(payload, true)).toEqual([]);
+    expect(collectReceiptAttachments(payload, receiptLikeSignal)).toEqual([]);
+  });
+
+  it('grades message signals as keyword-only versus corroborated', () => {
+    expect(messageReceiptSignal('OmegaParking Services\nYour monthly parking update')).toEqual({
+      isReceiptLike: false,
+      hasReceiptKeyword: false,
+    });
+    expect(messageReceiptSignal('Your receipt is attached')).toEqual({
+      isReceiptLike: false,
+      hasReceiptKeyword: true,
+    });
+    expect(messageReceiptSignal('Receipt from Sweetgreen — Total $38.21')).toEqual({
+      isReceiptLike: true,
+      hasReceiptKeyword: true,
+    });
   });
 
   it('builds a text receipt candidate from a receipt-like email body', () => {

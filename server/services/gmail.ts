@@ -10,7 +10,7 @@ import {
   buildEmailBodyCandidate,
   collectReceiptAttachments,
   header,
-  looksLikeReceiptOrInvoiceText,
+  messageReceiptSignal,
   sanitizeFileName,
   type GmailAttachmentCandidate,
   type GmailBodyCandidate,
@@ -254,14 +254,14 @@ async function ingestGmailMessage(connectionId: string, messageId: string): Prom
   const subject = header(payload, 'Subject');
   const from = header(payload, 'From');
   const date = header(payload, 'Date');
-  const messageSignal = [
+  const messageSignalText = [
     subject,
     from,
     date,
     message.data.snippet,
   ].filter(Boolean).join('\n');
-  const messageIsReceiptLike = looksLikeReceiptOrInvoiceText(messageSignal);
-  const attachments = collectReceiptAttachments(payload, messageIsReceiptLike);
+  const messageSignal = messageReceiptSignal(messageSignalText);
+  const attachments = collectReceiptAttachments(payload, messageSignal);
   let count = 0;
   for (const attachment of attachments) {
     const data = await gmail.users.messages.attachments.get({

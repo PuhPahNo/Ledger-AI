@@ -33,6 +33,24 @@ const receiptKeywordPattern = /\b(receipt|invoice|tax invoice|sales receipt|orde
 const amountPattern = /(?:[$€£]\s?\d[\d,]*(?:\.\d{2})?|\b\d[\d,]*\.\d{2}\s?(?:usd|cad|eur|gbp)\b)/i;
 const totalPattern = /\b(total|subtotal|amount paid|amount due|balance due|paid|charged|payment)\b/i;
 const documentNumberPattern = /\b(invoice|receipt|order)\s*(#|no\.?|number|id)?\s*[:\-]?\s*[a-z0-9-]{3,}/i;
+const receiptFileNamePattern = /receipt|invoice|order|confirmation|bill/i;
+
+export interface GmailMessageSignal {
+  /** A receipt keyword plus corroborating evidence (amount, document number, or total wording). */
+  isReceiptLike: boolean;
+  /** A receipt keyword appears somewhere in the subject/sender/snippet. */
+  hasReceiptKeyword: boolean;
+}
+
+export function messageReceiptSignal(value: string): GmailMessageSignal {
+  const normalized = normalizeText(value);
+  return {
+    isReceiptLike: looksLikeReceiptOrInvoiceText(normalized),
+    hasReceiptKeyword: receiptKeywordPattern.test(normalized),
+  };
+}
+
+const noMessageSignal: GmailMessageSignal = { isReceiptLike: false, hasReceiptKeyword: false };
 
 export function header(part: GmailMimePart | undefined | null, name: string): string | undefined {
   const match = part?.headers?.find((item) => item.name?.toLowerCase() === name.toLowerCase());
@@ -41,7 +59,7 @@ export function header(part: GmailMimePart | undefined | null, name: string): st
 
 export function collectReceiptAttachments(
   part: GmailMimePart | undefined | null,
-  messageIsReceiptLike = false,
+  messageSignal: GmailMessageSignal = noMessageSignal,
 ): GmailAttachmentCandidate[] {
   if (!part) return [];
   const attachmentId = part.body?.attachmentId;
@@ -49,19 +67,19 @@ export function collectReceiptAttachments(
   const filename = sanitizeFileName(part.filename || fallbackAttachmentName(mimeType));
   const disposition = header(part, 'Content-Disposition') ?? '';
   const size = part.body?.size ?? 0;
-  const filenameIsReceiptLike = /receipt|invoice|order|confirmation|bill/i.test(filename);
+  const filenameIsReceiptLike = receiptFileNamePattern.test(filename);
   const isInlineImage = /^image\//i.test(mimeType)
     && /inline/i.test(disposition)
     && (size === 0 || size < maxInlineImageBytes)
     && !filenameIsReceiptLike;
 
-  const current = attachmentId && !isInlineImage && isSupportedReceiptFile(mimeType, filename, messageIsReceiptLike)
+  const current = attachmentId && !isInlineImage && isSupportedReceiptFile(mimeType, filename, messageSignal)
     ? [{ filename, mimeType, attachmentId }]
     : [];
 
   return [
     ...current,
-    ...(part.parts ?? []).flatMap((child) => collectReceiptAttachments(child, messageIsReceiptLike)),
+    ...(part.parts ?? []).flatMap((child) => collectReceiptAttachments(child, messageSignal)),
   ];
 }
 
@@ -123,13 +141,20 @@ function collectBodyText(part: GmailMimePart | undefined | null, mimeType: 'text
   ];
 }
 
-function isSupportedReceiptFile(mimeType: string, fileName: string, messageIsReceiptLike: boolean): boolean {
-  const signal = `${mimeType} ${fileName}`;
-  if (/application\/pdf|image\//i.test(mimeType)) return true;
-  if (/text\/plain|text\/html/i.test(mimeType)) return messageIsReceiptLike || /receipt|invoice|order|confirmation|bill/i.test(fileName);
-  if (/\.(pdf|png|jpe?g|webp|heic|heif|gif)$/i.test(fileName)) return true;
-  if (/\.(txt|html?)$/i.test(fileName)) return messageIsReceiptLike || /receipt|invoice|order|confirmation|bill/i.test(fileName);
-  return messageIsReceiptLike && /receipt|invoice|order|confirmation|bill/i.test(signal);
+function isSupportedReceiptFile(mimeType: string, fileName: string, messageSignal: GmailMessageSignal): boolean {
+  const filenameIsReceiptLike = receiptFileNamePattern.test(fileName);
+  const isBinaryReceiptType = /application\/pdf|image\//i.test(mimeType)
+    || /\.(pdf|png|jpe?g|webp|heic|heif|gif)$/i.test(fileName);
+  // A PDF or image can't be cheaply inspected here, so require at least a weak signal —
+  // a receipt keyword in the message or filename — before flagging it. Anything that
+  // slips through still faces the extractor's isReceipt verdict downstream.
+  if (isBinaryReceiptType) return messageSignal.hasReceiptKeyword || filenameIsReceiptLike;
+  // Text attachments were already classified against the message body, so hold them to
+  // the stricter keyword-plus-evidence standard.
+  if (/text\/plain|text\/html/i.test(mimeType) || /\.(txt|html?)$/i.test(fileName)) {
+    return messageSignal.isReceiptLike || filenameIsReceiptLike;
+  }
+  return messageSignal.isReceiptLike && receiptFileNamePattern.test(`${mimeType} ${fileName}`);
 }
 
 function fallbackAttachmentName(mimeType: string): string {

@@ -110,6 +110,20 @@ async function extractAndMatchReceipt(receiptId: string): Promise<void> {
     throw error;
   }
 
+  if (!extraction.isReceipt && receipt.source === 'gmail') {
+    // The extractor read the actual file and says it isn't purchase evidence, so don't
+    // park it in the review queue. Uploads are exempt — the user chose those on purpose.
+    // Dismissed rows keep the extraction and stay visible under the n/a status filter.
+    await db.update(receipts).set({
+      status: 'n/a',
+      merchant: extraction.merchant,
+      confidence: String(extraction.confidence),
+      ocrJson: extraction,
+      updatedAt: new Date(),
+    }).where(eq(receipts.id, receiptId));
+    return;
+  }
+
   const missing = [
     extraction.totalCents == null ? 'total' : null,
     extraction.receiptDate == null ? 'date' : null,
