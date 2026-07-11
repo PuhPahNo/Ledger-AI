@@ -10,7 +10,7 @@ import { categoryMatchesTransactionDirection, isIncomeCategory } from '../../ser
 import { createManualCategorizationFeedback } from '../../services/categorizationFeedback.js';
 import { attachReceipt } from '../../services/matching.js';
 import { getReceiptTrackingSince, setReceiptTrackingSince } from '../../services/appSettings.js';
-import { tagsByTransactionId } from '../../services/tagging.js';
+import { applyTagRulesBestEffort, tagsByTransactionId } from '../../services/tagging.js';
 import { normalizeTransactionOverride } from '../../services/transactionOverrides.js';
 import { toApiTransaction } from '../mappers.js';
 import {
@@ -238,6 +238,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
         userId: user.id,
       });
     }
+    if (body.categoryId !== undefined) await applyTagRulesBestEffort(updated.id);
     await audit(request, user, 'update_transaction', 'transaction', params.id, { ...body });
 
     const row = await transactionById(params.id);
@@ -283,6 +284,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
         })
         .where(eq(transactions.id, transaction.id));
       updated += 1;
+      await applyTagRulesBestEffort(transaction.id);
 
       const merchantKey = `${transaction.businessId}:${transaction.merchant.toLowerCase()}`;
       if (

@@ -13,6 +13,7 @@ import {
   type Transaction,
 } from '../db/schema.js';
 import { normalize } from './categorization.js';
+import { applyTagRulesBestEffort } from './tagging.js';
 
 /** Sources that represent explicit human judgment — never silently overwritten. */
 export const PROTECTED_CATEGORY_SOURCES: ReadonlySet<string> = new Set([
@@ -194,6 +195,7 @@ export async function updateTransactionCategory(input: {
     evidence: input.evidence,
     userId: input.userId,
   });
+  await applyTagRulesBestEffort(input.transaction.id);
 }
 
 export async function recordCategoryEvent(input: {

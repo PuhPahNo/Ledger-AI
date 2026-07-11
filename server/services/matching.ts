@@ -2,6 +2,7 @@ import { and, eq, gte, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { accounts, businesses, categories, receiptMatches, receipts, transactions, type Receipt, type Transaction } from '../db/schema.js';
 import { reviewReceiptCategoryEvidence } from './categorizationFeedback.js';
+import { applyTagRulesBestEffort } from './tagging.js';
 
 export interface MatchResult {
   transaction: Transaction;
@@ -33,6 +34,7 @@ export interface ReceiptMatchCandidate extends ScoredCandidate {
 export const AUTO_ATTACH_THRESHOLD = 0.82;
 export const SUGGESTED_THRESHOLD = 0.5;
 const REMATCH_BATCH_LIMIT = 200;
+const CANDIDATE_POOL_LIMIT = 200;
 
 export async function matchReceipt(receiptId: string): Promise<ReceiptMatchOutcome | null> {
   const receipt = await db.query.receipts.findFirst({ where: eq(receipts.id, receiptId) });
@@ -191,6 +193,9 @@ export async function attachReceipt(transactionId: string, receiptId: string): P
       receiptId,
       matchScore: match?.score == null ? null : Number(match.score),
     });
+    // Pairing may add richer category evidence and receipt-only tag signals. Re-run
+    // tags after category review so the final linked transaction is fully enriched.
+    await applyTagRulesBestEffort(transactionId);
   }
 
   return updated ?? null;
@@ -220,6 +225,10 @@ async function candidateTransactionRows(receipt: Receipt): Promise<Array<{
   from.setUTCDate(from.getUTCDate() - 5);
   const to = new Date(date);
   to.setUTCDate(to.getUTCDate() + 5);
+  const fromDate = from.toISOString().slice(0, 10);
+  const toDate = to.toISOString().slice(0, 10);
+  const receiptTotal = Math.abs(receipt.totalCents ?? 0);
+  const receiptDate = receipt.receiptDate!;
 
   const rows = await db
     .select({
@@ -234,14 +243,28 @@ async function candidateTransactionRows(receipt: Receipt): Promise<Array<{
     .leftJoin(categories, eq(transactions.categoryId, categories.id))
     .leftJoin(accounts, eq(transactions.accountId, accounts.id))
     .where(and(
-      gte(transactions.date, from.toISOString().slice(0, 10)),
-      lte(transactions.date, to.toISOString().slice(0, 10)),
+      // Plaid's posted date can lag the card authorization by several days. Search on
+      // either date so a weekend/slow-settling charge is still eligible for scoring.
+      or(
+        and(gte(transactions.date, fromDate), lte(transactions.date, toDate)),
+        and(gte(transactions.authorizedDate, fromDate), lte(transactions.authorizedDate, toDate)),
+      ),
       receipt.businessId
         ? eq(transactions.businessId, receipt.businessId)
         : sql`true`,
       or(eq(transactions.receiptStatus, 'missing'), eq(transactions.receiptStatus, 'pending')),
     ))
-    .limit(50);
+    // High-volume businesses can easily have more than 50 transactions in an 11-day
+    // window. Rank before bounding the candidate set so exact/near amounts cannot be
+    // dropped by an arbitrary database row order.
+    .orderBy(
+      sql`abs(abs(${transactions.amountCents}) - ${receiptTotal})`,
+      sql`least(
+        abs(${transactions.date} - ${receiptDate}::date),
+        coalesce(abs(${transactions.authorizedDate} - ${receiptDate}::date), 999)
+      )`,
+    )
+    .limit(CANDIDATE_POOL_LIMIT);
 
   return rows.map((row) => ({
     transaction: {
@@ -308,7 +331,12 @@ export function annotateCandidates<T extends ScoredCandidate>(scored: T[]): Arra
  */
 export function scoreMatch(receipt: Receipt, transaction: Transaction, accountMask: string | null = null): MatchResult {
   const amountScore = scoreAmount(receipt.totalCents, transaction.amountCents);
-  const dateScore = scoreDate(receipt.receiptDate, transaction.date);
+  const postedDateScore = scoreDate(receipt.receiptDate, transaction.date);
+  const authorizedDateScore = transaction.authorizedDate
+    ? scoreDate(receipt.receiptDate, transaction.authorizedDate)
+    : 0;
+  const dateScore = Math.max(postedDateScore, authorizedDateScore);
+  const dateBasis = authorizedDateScore > postedDateScore ? 'authorized' : 'posted';
   const merchantScore = scoreMerchant(receipt.merchant ?? '', transaction.merchant);
   const businessScore = receipt.businessId && receipt.businessId === transaction.businessId ? 1 : 0.7;
   const cardScore = scoreCard(receiptLast4(receipt), accountMask);
@@ -318,7 +346,7 @@ export function scoreMatch(receipt: Receipt, transaction: Transaction, accountMa
   return {
     transaction,
     score,
-    reasons: { amountScore, merchantScore, dateScore, cardScore, businessScore },
+    reasons: { amountScore, merchantScore, dateScore, dateBasis, cardScore, businessScore },
   };
 }
 

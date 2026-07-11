@@ -26,16 +26,21 @@ import { FieldColor, FieldText } from '../fields';
 const MATCH_KINDS: Array<{ value: TagRuleMatchKind; label: string }> = [
   { value: 'merchant_contains', label: 'Merchant contains' },
   { value: 'merchant_exact', label: 'Merchant exact' },
+  { value: 'category_exact', label: 'Category is' },
+  { value: 'receipt_contains', label: 'Receipt contains' },
 ];
 
 const MATCH_KIND_LABELS: Record<TagRuleMatchKind, string> = {
   merchant_exact: 'Merchant is',
   merchant_contains: 'Merchant contains',
+  category_exact: 'Category is',
+  receipt_contains: 'Receipt contains',
 };
 
 /**
  * Custom tags — a cross-business layer on top of categories (e.g. an "AI" tag that
- * collects OpenAI + Anthropic spend). Each tag carries auto-apply merchant rules.
+ * collects OpenAI + Anthropic spend). Each tag carries auto-apply rules based on
+ * merchant, category, or matched receipt evidence.
  */
 export function TagsTab() {
   const { toast } = useToast();
@@ -109,7 +114,7 @@ export function TagsTab() {
   }, 'Could not delete tag');
 
   const handleAddRule = (tag: Tag) => run(tag.id, async () => {
-    if (!ruleForm.pattern.trim()) throw new Error('Enter a merchant pattern.');
+    if (!ruleForm.pattern.trim()) throw new Error('Enter a rule value.');
     await createTagRule(tag.id, { matchKind: ruleForm.matchKind, pattern: ruleForm.pattern.trim() });
     toast({
       variant: 'success',
@@ -143,7 +148,7 @@ export function TagsTab() {
           <CardTitle>Create tag</CardTitle>
           <CardDescription>
             A label that cuts across businesses and categories — e.g. "AI" for OpenAI and
-            Anthropic spend. Add merchant rules to apply it automatically.
+            Anthropic spend. Add merchant, category, or receipt rules to apply it automatically.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
@@ -258,7 +263,7 @@ export function TagsTab() {
                         <Input
                           value={ruleForm.pattern}
                           onChange={(event) => setRuleForm({ ...ruleForm, pattern: event.target.value })}
-                          placeholder="e.g. openai"
+                          placeholder={ruleForm.matchKind === 'category_exact' ? 'e.g. Software' : 'e.g. openai'}
                           className="h-8 w-44 text-xs"
                         />
                         <Button size="sm" variant="outline" disabled={busy} onClick={() => handleAddRule(tag)}>

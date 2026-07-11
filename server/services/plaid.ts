@@ -23,7 +23,7 @@ import { serviceUnavailable } from '../lib/errors.js';
 import { resolveTransactionBusinessId } from './accountAssignment.js';
 import { categorizeTransactionWithDetails, isExcludedFromSpendCategory } from './categorization.js';
 import { createAiCategorySuggestionReview } from './categorizationFeedback.js';
-import { applyTagRulesToTransaction } from './tagging.js';
+import { applyTagRulesBestEffort } from './tagging.js';
 import { getReceiptTrackingSince } from './appSettings.js';
 
 export const PLAID_TRANSACTION_HISTORY_DAYS = 365;
@@ -357,12 +357,7 @@ async function upsertTransaction(
     await adoptPendingPredecessor(predecessor, saved);
   }
   if (saved) {
-    // Tagging is best-effort layered metadata — a bad tag rule must not fail the sync.
-    try {
-      await applyTagRulesToTransaction(saved);
-    } catch (error) {
-      console.error(`Tag rules failed for transaction ${saved.id}`, error);
-    }
+    await applyTagRulesBestEffort(saved);
   }
   return !existing;
 }

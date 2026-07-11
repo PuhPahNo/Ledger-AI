@@ -29,4 +29,25 @@ describe('tagRuleMatches', () => {
       'OpenAI',
     )).toBe(false);
   });
+
+  it('matches an exact category after normalization', () => {
+    expect(tagRuleMatches(
+      { matchKind: 'category_exact', pattern: 'Software' },
+      { merchant: 'ElevenLabs', categoryName: 'software' },
+    )).toBe(true);
+  });
+
+  it('matches text extracted from a paired receipt', () => {
+    expect(tagRuleMatches(
+      { matchKind: 'receipt_contains', pattern: 'client dinner' },
+      { merchant: 'Bistro 27', receiptText: 'Business purpose: Client dinner with ACME' },
+    )).toBe(true);
+  });
+
+  it('does not let a receipt rule fall back to merchant text', () => {
+    expect(tagRuleMatches(
+      { matchKind: 'receipt_contains', pattern: 'openai' },
+      { merchant: 'OpenAI', receiptText: null },
+    )).toBe(false);
+  });
 });

@@ -257,7 +257,11 @@ export const transactions = pgTable('transactions', {
 
 export type TransactionTagSource = 'manual' | 'auto';
 
-export type TagRuleMatchKind = 'merchant_exact' | 'merchant_contains';
+export type TagRuleMatchKind =
+  | 'merchant_exact'
+  | 'merchant_contains'
+  | 'category_exact'
+  | 'receipt_contains';
 
 // Global (cross-business) labels layered on top of categories — e.g. an "AI" tag
 // tracking AI spend across all three businesses.

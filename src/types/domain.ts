@@ -118,7 +118,11 @@ export interface Tag {
   totalCents?: number;
 }
 
-export type TagRuleMatchKind = 'merchant_exact' | 'merchant_contains';
+export type TagRuleMatchKind =
+  | 'merchant_exact'
+  | 'merchant_contains'
+  | 'category_exact'
+  | 'receipt_contains';
 
 /** Auto-apply rule: transactions whose merchant matches get the tag. */
 export interface TagRule {

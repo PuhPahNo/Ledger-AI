@@ -13,7 +13,12 @@ const TRENDS_MAX_TAGS = 10;
 
 const tagNameSchema = z.string().trim().min(1).max(64);
 const tagColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Color must be a hex string like #D97757');
-const tagRuleMatchKindSchema = z.enum(['merchant_exact', 'merchant_contains']);
+const tagRuleMatchKindSchema = z.enum([
+  'merchant_exact',
+  'merchant_contains',
+  'category_exact',
+  'receipt_contains',
+]);
 
 /**
  * Custom tags: global (cross-business) labels layered on top of categories, applied

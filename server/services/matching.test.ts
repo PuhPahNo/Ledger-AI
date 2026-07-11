@@ -102,6 +102,17 @@ describe('scoreMatch', () => {
     expect(Number(result.reasons.merchantScore)).toBeGreaterThanOrEqual(0.9);
     expect(result.score).toBeGreaterThanOrEqual(AUTO_ATTACH_THRESHOLD);
   });
+
+  it('uses the authorization date when the posted date lags the receipt', () => {
+    const result = scoreMatch(
+      makeReceipt({ receiptDate: '2026-07-03' }),
+      makeTransaction({ date: '2026-07-09', authorizedDate: '2026-07-03' }),
+    );
+
+    expect(result.reasons.dateScore).toBe(1);
+    expect(result.reasons.dateBasis).toBe('authorized');
+    expect(result.score).toBeGreaterThanOrEqual(AUTO_ATTACH_THRESHOLD);
+  });
 });
 
 describe('decideMatch', () => {
