@@ -17,6 +17,7 @@ import {
   categoryNameForKnownSignals,
   normalize,
 } from './categorization.js';
+import { trackOpenAiCall } from './aiUsageTelemetry.js';
 
 const receiptAutoMatchThreshold = 0.82;
 const receiptExtractionThreshold = 0.85;
@@ -133,40 +134,44 @@ async function inferReceiptCategoryWithAi(
   if (!env.OPENAI_API_KEY || availableCategories.length === 0) return null;
   try {
     const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-    const response = await client.responses.parse({
-      model: env.OPENAI_CATEGORIZATION_MODEL,
-      input: [{
-        role: 'user',
-        content: [{
-          type: 'input_text',
-          text: [
-            'Use receipt evidence to choose the best Ledger AI business expense category.',
-            'Choose exactly one categoryId from the provided list, or null if the receipt evidence is not enough.',
-            'Do not choose an income category for an outflow.',
-            `Transaction: ${JSON.stringify({
-              merchant: transaction.merchant,
-              amountCents: transaction.amountCents,
-              plaidCategory: plaidCategoryHints(transaction.raw),
-            })}`,
-            `Receipt: ${JSON.stringify({
-              merchant: receipt.merchant,
-              totalCents: receipt.totalCents,
-              receiptDate: receipt.receiptDate,
-              ocrJson: receipt.ocrJson,
-              evidenceText,
-            })}`,
-            `Categories: ${JSON.stringify(availableCategories.map((category) => ({
-              id: category.id,
-              name: category.name,
-              taxCode: category.taxCode,
-            })))}`,
-          ].join('\n'),
+    const response = await trackOpenAiCall(
+      'receipt_category_evidence',
+      env.OPENAI_CATEGORIZATION_MODEL,
+      () => client.responses.parse({
+        model: env.OPENAI_CATEGORIZATION_MODEL,
+        input: [{
+          role: 'user',
+          content: [{
+            type: 'input_text',
+            text: [
+              'Use receipt evidence to choose the best Ledger AI business expense category.',
+              'Choose exactly one categoryId from the provided list, or null if the receipt evidence is not enough.',
+              'Do not choose an income category for an outflow.',
+              `Transaction: ${JSON.stringify({
+                merchant: transaction.merchant,
+                amountCents: transaction.amountCents,
+                plaidCategory: plaidCategoryHints(transaction.raw),
+              })}`,
+              `Receipt: ${JSON.stringify({
+                merchant: receipt.merchant,
+                totalCents: receipt.totalCents,
+                receiptDate: receipt.receiptDate,
+                ocrJson: receipt.ocrJson,
+                evidenceText,
+              })}`,
+              `Categories: ${JSON.stringify(availableCategories.map((category) => ({
+                id: category.id,
+                name: category.name,
+                taxCode: category.taxCode,
+              })))}`,
+            ].join('\n'),
+          }],
         }],
-      }],
-      text: {
-        format: zodTextFormat(receiptCategorySchema, 'receipt_category'),
-      },
-    });
+        text: {
+          format: zodTextFormat(receiptCategorySchema, 'receipt_category'),
+        },
+      }),
+    );
     const message = response.output.find((item) => item.type === 'message');
     const parsed = message?.content.find((item) => item.type === 'output_text')?.parsed;
     const suggestion = receiptCategorySchema.parse(parsed);

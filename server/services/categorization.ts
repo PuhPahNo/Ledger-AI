@@ -12,6 +12,7 @@ import {
   transactions,
   type CategorySource,
 } from '../db/schema.js';
+import { trackOpenAiCall } from './aiUsageTelemetry.js';
 import { getSetting, setSetting } from './appSettings.js';
 
 export interface CategorizeInput {
@@ -40,7 +41,9 @@ const categorySuggestionSchema = z.object({
   categoryId: z.string().uuid().nullable(),
   confidence: z.number().min(0).max(1),
   reason: z.string().nullable(),
+  needsWebSearch: z.boolean(),
 });
+type CategorySuggestion = z.infer<typeof categorySuggestionSchema>;
 
 export async function categorizeTransaction(input: CategorizeInput): Promise<string | null> {
   const result = await categorizeTransactionWithDetails(input);
@@ -135,7 +138,7 @@ export async function categorizeTransactionWithDetails(input: CategorizeInput): 
 
   if (input.allowAi !== false) {
     const aiEligibleCategories = availableCategories.filter((category) => (
-      categoryMatchesTransactionDirection(category, input.amountCents)
+      isAiEligibleCategory(category, input.amountCents)
     ));
     const aiSuggestion = await suggestCategoryWithAi(input, aiEligibleCategories);
     if (aiSuggestion) return aiSuggestion;
@@ -246,6 +249,11 @@ export function categoryMatchesTransactionDirection(category: CategoryCandidate,
   return true;
 }
 
+export function isAiEligibleCategory(category: CategoryCandidate, amountCents: number): boolean {
+  return normalize(category.name) !== 'uncategorized'
+    && categoryMatchesTransactionDirection(category, amountCents);
+}
+
 export function preferredIncomeCategory(categories: CategoryCandidate[], businessId: string): CategoryCandidate | null {
   const incomeCategories = categories.filter(isIncomeCategory);
   return incomeCategories.find((category) => category.businessId === businessId)
@@ -316,7 +324,10 @@ function hasAny(value: string, terms: string[]): boolean {
 }
 
 const AI_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const AI_WEB_FALLBACK_CONFIDENCE = 0.85;
+const DAY_MS = 24 * 60 * 60 * 1000;
 export const AI_USAGE_SETTING_KEY = 'ai_categorization_usage';
+export const AI_WEB_SEARCH_USAGE_SETTING_KEY = 'ai_categorization_web_search_usage';
 
 function aiCacheDirection(amountCents: number): string {
   return amountCents > 0 ? 'in' : 'out';
@@ -324,15 +335,70 @@ function aiCacheDirection(amountCents: number): string {
 
 /** Today's AI call count, tracked in app settings (single worker — races are tolerable). */
 export async function getAiUsage(): Promise<{ date: string; calls: number }> {
+  return getDailyUsage(AI_USAGE_SETTING_KEY);
+}
+
+/** Today's expensive hosted-web subset of the categorization call count. */
+export async function getAiWebSearchUsage(): Promise<{ date: string; calls: number }> {
+  return getDailyUsage(AI_WEB_SEARCH_USAGE_SETTING_KEY);
+}
+
+async function getDailyUsage(key: string): Promise<{ date: string; calls: number }> {
   const today = new Date().toISOString().slice(0, 10);
   try {
-    const raw = await getSetting(AI_USAGE_SETTING_KEY);
+    const raw = await getSetting(key);
     const parsed = raw ? JSON.parse(raw) as { date?: string; calls?: number } : null;
     if (parsed?.date === today && typeof parsed.calls === 'number') return { date: today, calls: parsed.calls };
   } catch {
     // Corrupt value — treat as a fresh day.
   }
   return { date: today, calls: 0 };
+}
+
+async function reserveAiCategorizationCall(webSearch: boolean): Promise<boolean> {
+  const env = getEnv();
+  const usage = await getAiUsage();
+  if (usage.calls >= env.OPENAI_CATEGORIZATION_DAILY_LIMIT) return false;
+
+  if (!webSearch) {
+    await setSetting(AI_USAGE_SETTING_KEY, JSON.stringify({ date: usage.date, calls: usage.calls + 1 }));
+    return true;
+  }
+
+  const webUsage = await getAiWebSearchUsage();
+  if (webUsage.calls >= env.OPENAI_CATEGORIZATION_DAILY_WEB_SEARCH_LIMIT) return false;
+  await Promise.all([
+    setSetting(AI_USAGE_SETTING_KEY, JSON.stringify({ date: usage.date, calls: usage.calls + 1 })),
+    setSetting(AI_WEB_SEARCH_USAGE_SETTING_KEY, JSON.stringify({
+      date: webUsage.date,
+      calls: webUsage.calls + 1,
+    })),
+  ]);
+  return true;
+}
+
+export function shouldUseCategorizationWebSearch(
+  suggestion: Pick<CategorySuggestion, 'needsWebSearch'>,
+  webSearchEnabled: boolean,
+): boolean {
+  return webSearchEnabled && suggestion.needsWebSearch;
+}
+
+export function categorizationWebToolOptions(useWebSearch: boolean) {
+  return useWebSearch
+    ? {
+        tools: [{
+          type: 'web_search_preview' as const,
+          search_context_size: 'low' as const,
+        }],
+        tool_choice: { type: 'web_search_preview' as const },
+        max_tool_calls: 1,
+      }
+    : {};
+}
+
+export function categorizationRetryDelayMs(failureCount: number): number {
+  return failureCount <= 1 ? 7 * DAY_MS : 30 * DAY_MS;
 }
 
 async function suggestCategoryWithAi(
@@ -353,7 +419,13 @@ async function suggestCategoryWithAi(
       eq(aiCategorizationCache.direction, direction),
     ),
   });
-  if (cached && Date.now() - cached.updatedAt.getTime() < AI_CACHE_TTL_MS) {
+  const retryBlocked = cached
+    && cached.outcome !== 'result'
+    && cached.retryAfter
+    && cached.retryAfter.getTime() > Date.now();
+  if (retryBlocked) return null;
+
+  if (cached?.outcome === 'result' && Date.now() - cached.updatedAt.getTime() < AI_CACHE_TTL_MS) {
     if (!cached.categoryId) return null;
     if (!availableCategories.some((category) => category.id === cached.categoryId)) return null;
     return {
@@ -364,18 +436,133 @@ async function suggestCategoryWithAi(
     };
   }
 
-  const usage = await getAiUsage();
-  if (usage.calls >= env.OPENAI_CATEGORIZATION_DAILY_LIMIT) return null;
-  await setSetting(AI_USAGE_SETTING_KEY, JSON.stringify({ date: usage.date, calls: usage.calls + 1 }));
+  if (!await reserveAiCategorizationCall(false)) return null;
 
+  let feedbackExamples: Awaited<ReturnType<typeof loadFeedbackExamples>>;
   try {
-    const feedbackExamples = await loadFeedbackExamples(input);
-    const direction = input.amountCents > 0 ? 'inflow/income' : input.amountCents < 0 ? 'outflow/expense' : 'zero amount';
-    const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-    const useWebSearch = env.OPENAI_CATEGORIZATION_WEB_SEARCH;
-    const response = await client.responses.parse({
+    feedbackExamples = await loadFeedbackExamples(input);
+  } catch {
+    return null;
+  }
+
+  const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
+  let baseSuggestion: CategorySuggestion;
+  try {
+    baseSuggestion = await requestCategorySuggestion(
+      client,
+      input,
+      availableCategories,
+      feedbackExamples,
+      false,
+    );
+  } catch {
+    await cacheAiCategorizationFailure({
+      input,
+      normalizedMerchant,
+      direction,
+      priorFailureCount: cached?.outcome === 'error' ? cached.failureCount : 0,
+    });
+    return null;
+  }
+
+  if (!baseSuggestion.needsWebSearch) {
+    return saveAiCategorizationResult({
+      input,
+      normalizedMerchant,
+      direction,
+      suggestion: baseSuggestion,
+      availableCategories,
+      feedbackExamples,
+      usedWebSearch: false,
+      minimumConfidence: 0.6,
+    });
+  }
+
+  const canSearch = shouldUseCategorizationWebSearch(
+    baseSuggestion,
+    env.OPENAI_CATEGORIZATION_WEB_SEARCH,
+  ) && await reserveAiCategorizationCall(true);
+  if (canSearch) {
+    try {
+      const webSuggestion = await requestCategorySuggestion(
+        client,
+        input,
+        availableCategories,
+        feedbackExamples,
+        true,
+      );
+      return saveAiCategorizationResult({
+        input,
+        normalizedMerchant,
+        direction,
+        suggestion: webSuggestion,
+        availableCategories,
+        feedbackExamples,
+        usedWebSearch: true,
+        minimumConfidence: 0.6,
+      });
+    } catch {
+      if (!acceptedCategoryId(baseSuggestion, availableCategories, AI_WEB_FALLBACK_CONFIDENCE)) {
+        await cacheAiCategorizationFailure({
+          input,
+          normalizedMerchant,
+          direction,
+          priorFailureCount: cached?.outcome === 'error' ? cached.failureCount : 0,
+        });
+        return null;
+      }
+    }
+  }
+
+  if (acceptedCategoryId(baseSuggestion, availableCategories, AI_WEB_FALLBACK_CONFIDENCE)) {
+    return saveAiCategorizationResult({
+      input,
+      normalizedMerchant,
+      direction,
+      suggestion: baseSuggestion,
+      availableCategories,
+      feedbackExamples,
+      usedWebSearch: false,
+      minimumConfidence: AI_WEB_FALLBACK_CONFIDENCE,
+    });
+  }
+
+  if (env.OPENAI_CATEGORIZATION_WEB_SEARCH) {
+    await cacheAiCategorizationDeferred(input, normalizedMerchant, direction);
+  } else {
+    await saveAiCategorizationResult({
+      input,
+      normalizedMerchant,
+      direction,
+      suggestion: baseSuggestion,
+      availableCategories,
+      feedbackExamples,
+      usedWebSearch: false,
+      minimumConfidence: AI_WEB_FALLBACK_CONFIDENCE,
+    });
+  }
+  return null;
+}
+
+async function requestCategorySuggestion(
+  client: OpenAI,
+  input: CategorizeInput,
+  availableCategories: CategoryCandidate[],
+  feedbackExamples: Awaited<ReturnType<typeof loadFeedbackExamples>>,
+  useWebSearch: boolean,
+): Promise<CategorySuggestion> {
+  const env = getEnv();
+  const direction = input.amountCents > 0
+    ? 'inflow/income'
+    : input.amountCents < 0
+      ? 'outflow/expense'
+      : 'zero amount';
+  const response = await trackOpenAiCall(
+    useWebSearch ? 'categorization_web' : 'categorization_base',
+    env.OPENAI_CATEGORIZATION_MODEL,
+    () => client.responses.parse({
       model: env.OPENAI_CATEGORIZATION_MODEL,
-      ...(useWebSearch ? { tools: [{ type: 'web_search_preview' as const }] } : {}),
+      ...categorizationWebToolOptions(useWebSearch),
       input: [{
         role: 'user',
         content: [{
@@ -385,10 +572,10 @@ async function suggestCategoryWithAi(
             'Choose exactly one categoryId from the provided category list, or null if none fit.',
             `Transaction direction: ${direction}. Never contradict the direction.`,
             'Prefer tax-oriented Schedule C categories over miscellaneous internal categories.',
-            'Do not create new categories or tax codes.',
+            'Do not create new categories or tax codes. Accepted feedback is authoritative.',
             useWebSearch
-              ? 'If the merchant or domain is unfamiliar, use web search to identify what the company sells before choosing a category (e.g. "elevenlabs.io" is an AI voice/text-to-speech SaaS → Software). Cite what you found in the reason.'
-              : '',
+              ? 'Use the one available web search to identify the exact merchant or domain and what it sells. Reject fuzzy, partial-name, fictional-character, and unrelated matches. If an exact business identity is not supported, return null with confidence at or below 0.5. Set needsWebSearch=false because this is already the web pass, and briefly cite the evidence in reason.'
+              : 'Do not use web search. Set needsWebSearch=true only when the merchant identity is unfamiliar or ambiguous and identifying it would materially change the category. Otherwise set it false. Do not guess an identity.',
             `Transaction: ${JSON.stringify({
               merchant: input.merchant,
               amountCents: input.amountCents,
@@ -396,51 +583,163 @@ async function suggestCategoryWithAi(
             })}`,
             `Accepted feedback examples: ${JSON.stringify(feedbackExamples)}`,
             `Categories: ${JSON.stringify(availableCategories)}`,
-          ].filter(Boolean).join('\n'),
+          ].join('\n'),
         }],
       }],
       text: {
         format: zodTextFormat(categorySuggestionSchema, 'category_suggestion'),
       },
-    });
+    }),
+  );
 
-    const message = response.output.find((item) => item.type === 'message');
-    const parsed = message?.content.find((item) => item.type === 'output_text')?.parsed;
-    const suggestion = categorySuggestionSchema.parse(parsed);
-    const categoryExists = availableCategories.some((category) => category.id === suggestion.categoryId);
-    const accepted = categoryExists && suggestion.confidence >= 0.6;
-    await db
-      .insert(aiCategorizationCache)
-      .values({
-        businessId: input.businessId,
-        normalizedMerchant,
-        direction,
-        categoryId: accepted ? suggestion.categoryId : null,
-        confidence: suggestion.confidence.toFixed(4),
-        reason: suggestion.reason,
-      })
-      .onConflictDoUpdate({
-        target: [aiCategorizationCache.businessId, aiCategorizationCache.normalizedMerchant, aiCategorizationCache.direction],
-        set: {
-          categoryId: accepted ? suggestion.categoryId : null,
-          confidence: suggestion.confidence.toFixed(4),
-          reason: suggestion.reason,
-          updatedAt: new Date(),
-        },
-      });
-    if (!accepted) return null;
-    return {
-      categoryId: suggestion.categoryId,
-      source: 'ai_suggested',
-      confidence: suggestion.confidence,
-      evidence: {
-        reason: suggestion.reason,
-        feedbackExamples,
+  const message = response.output.find((item) => item.type === 'message');
+  const parsed = message?.content.find((item) => item.type === 'output_text')?.parsed;
+  return categorySuggestionSchema.parse(parsed);
+}
+
+async function saveAiCategorizationResult(input: {
+  input: CategorizeInput;
+  normalizedMerchant: string;
+  direction: string;
+  suggestion: CategorySuggestion;
+  availableCategories: CategoryCandidate[];
+  feedbackExamples: Awaited<ReturnType<typeof loadFeedbackExamples>>;
+  usedWebSearch: boolean;
+  minimumConfidence: number;
+}): Promise<CategorizeResult | null> {
+  const categoryId = acceptedCategoryId(
+    input.suggestion,
+    input.availableCategories,
+    input.minimumConfidence,
+  );
+  await db
+    .insert(aiCategorizationCache)
+    .values({
+      businessId: input.input.businessId,
+      normalizedMerchant: input.normalizedMerchant,
+      direction: input.direction,
+      categoryId,
+      confidence: input.suggestion.confidence.toFixed(4),
+      reason: input.suggestion.reason,
+      outcome: 'result',
+      retryAfter: null,
+      failureCount: 0,
+    })
+    .onConflictDoUpdate({
+      target: [
+        aiCategorizationCache.businessId,
+        aiCategorizationCache.normalizedMerchant,
+        aiCategorizationCache.direction,
+      ],
+      set: {
+        categoryId,
+        confidence: input.suggestion.confidence.toFixed(4),
+        reason: input.suggestion.reason,
+        outcome: 'result',
+        retryAfter: null,
+        failureCount: 0,
+        updatedAt: new Date(),
       },
-    };
-  } catch {
-    return null;
-  }
+    });
+  if (!categoryId) return null;
+  return {
+    categoryId,
+    source: 'ai_suggested',
+    confidence: input.suggestion.confidence,
+    evidence: {
+      reason: input.suggestion.reason,
+      feedbackExamples: input.feedbackExamples,
+      usedWebSearch: input.usedWebSearch,
+    },
+  };
+}
+
+function acceptedCategoryId(
+  suggestion: CategorySuggestion,
+  availableCategories: CategoryCandidate[],
+  minimumConfidence: number,
+): string | null {
+  if (suggestion.confidence < minimumConfidence) return null;
+  return availableCategories.some((category) => category.id === suggestion.categoryId)
+    ? suggestion.categoryId
+    : null;
+}
+
+async function cacheAiCategorizationFailure(input: {
+  input: CategorizeInput;
+  normalizedMerchant: string;
+  direction: string;
+  priorFailureCount: number;
+}): Promise<void> {
+  const failureCount = input.priorFailureCount + 1;
+  const retryAfter = new Date(Date.now() + categorizationRetryDelayMs(failureCount));
+  await db
+    .insert(aiCategorizationCache)
+    .values({
+      businessId: input.input.businessId,
+      normalizedMerchant: input.normalizedMerchant,
+      direction: input.direction,
+      categoryId: null,
+      confidence: null,
+      reason: 'openai_categorization_error',
+      outcome: 'error',
+      retryAfter,
+      failureCount,
+    })
+    .onConflictDoUpdate({
+      target: [
+        aiCategorizationCache.businessId,
+        aiCategorizationCache.normalizedMerchant,
+        aiCategorizationCache.direction,
+      ],
+      set: {
+        categoryId: null,
+        confidence: null,
+        reason: 'openai_categorization_error',
+        outcome: 'error',
+        retryAfter,
+        failureCount,
+        updatedAt: new Date(),
+      },
+    });
+}
+
+async function cacheAiCategorizationDeferred(
+  input: CategorizeInput,
+  normalizedMerchant: string,
+  direction: string,
+): Promise<void> {
+  const retryAfter = new Date();
+  retryAfter.setUTCHours(24, 0, 0, 0);
+  await db
+    .insert(aiCategorizationCache)
+    .values({
+      businessId: input.businessId,
+      normalizedMerchant,
+      direction,
+      categoryId: null,
+      confidence: null,
+      reason: 'web_search_daily_budget_deferred',
+      outcome: 'deferred',
+      retryAfter,
+      failureCount: 0,
+    })
+    .onConflictDoUpdate({
+      target: [
+        aiCategorizationCache.businessId,
+        aiCategorizationCache.normalizedMerchant,
+        aiCategorizationCache.direction,
+      ],
+      set: {
+        categoryId: null,
+        confidence: null,
+        reason: 'web_search_daily_budget_deferred',
+        outcome: 'deferred',
+        retryAfter,
+        failureCount: 0,
+        updatedAt: new Date(),
+      },
+    });
 }
 
 async function loadFeedbackExamples(input: CategorizeInput): Promise<Array<{

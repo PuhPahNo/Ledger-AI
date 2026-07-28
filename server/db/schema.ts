@@ -444,6 +444,9 @@ export const aiCategorizationCache = pgTable('ai_categorization_cache', {
   categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'cascade' }),
   confidence: numeric('confidence', { precision: 5, scale: 4 }),
   reason: text('reason'),
+  outcome: text('outcome').notNull().default('result'),
+  retryAfter: timestamp('retry_after', { withTimezone: true }),
+  failureCount: integer('failure_count').notNull().default(0),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
@@ -452,6 +455,27 @@ export const aiCategorizationCache = pgTable('ai_categorization_cache', {
     table.normalizedMerchant,
     table.direction,
   ),
+}));
+
+// Prompt contents are intentionally excluded. This table records only aggregate
+// request/tool usage so cost regressions can be attributed to a workload safely.
+export const aiUsageEvents = pgTable('ai_usage_events', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  workload: text('workload').notNull(),
+  model: text('model').notNull(),
+  responseId: text('response_id'),
+  status: text('status').notNull(),
+  inputTokens: integer('input_tokens').notNull().default(0),
+  cachedInputTokens: integer('cached_input_tokens').notNull().default(0),
+  outputTokens: integer('output_tokens').notNull().default(0),
+  reasoningTokens: integer('reasoning_tokens').notNull().default(0),
+  totalTokens: integer('total_tokens').notNull().default(0),
+  webSearchCalls: integer('web_search_calls').notNull().default(0),
+  errorCode: text('error_code'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  createdAtIdx: index('ai_usage_events_created_at_idx').on(table.createdAt),
+  workloadCreatedAtIdx: index('ai_usage_events_workload_created_at_idx').on(table.workload, table.createdAt),
 }));
 
 // Simple workspace-wide key/value settings (e.g. receipt_tracking_since).

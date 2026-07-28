@@ -10,6 +10,7 @@ import {
   type AssistantToolEvent,
 } from './assistantSchemas.js';
 import { isDangerousAssistantPrompt, safeJson, verifyAssistantToken } from './assistantSecurity.js';
+import { trackOpenAiCall } from './aiUsageTelemetry.js';
 import {
   assistantToolDefinitions,
   callAssistantTool,
@@ -87,21 +88,29 @@ export async function runAssistantMessage(input: RunAssistantInput): Promise<Ass
 
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
   let previousResponseId = input.previousResponseId || undefined;
-  let response: any = await client.responses.parse({
-    model: env.OPENAI_ASSISTANT_MODEL,
-    instructions,
-    previous_response_id: previousResponseId,
-    reasoning: { effort: env.OPENAI_ASSISTANT_REASONING_EFFORT },
-    tools: assistantToolDefinitions,
-    input: input.message,
-    text: { format: zodTextFormat(assistantStructuredOutputSchema, 'ledger_ai_assistant_response') },
-  } as any);
+  let response: any = await trackOpenAiCall(
+    'assistant',
+    env.OPENAI_ASSISTANT_MODEL,
+    () => client.responses.parse({
+      model: env.OPENAI_ASSISTANT_MODEL,
+      instructions,
+      previous_response_id: previousResponseId,
+      reasoning: { effort: env.OPENAI_ASSISTANT_REASONING_EFFORT },
+      tools: assistantToolDefinitions,
+      input: input.message,
+      text: { format: zodTextFormat(assistantStructuredOutputSchema, 'ledger_ai_assistant_response') },
+    } as any),
+  );
   previousResponseId = response.id;
 
   for (let step = 0; step < 6; step += 1) {
     const calls = functionCalls(response);
     if (calls.length === 0) break;
-    const outputs = [];
+    const outputs: Array<{
+      type: 'function_call_output';
+      call_id: string;
+      output: string;
+    }> = [];
     for (const call of calls) {
       const called = { name: call.name, status: 'called' as const, detail: toolEventDetail(call.name, 'called') };
       toolEvents.push(called);
@@ -132,15 +141,19 @@ export async function runAssistantMessage(input: RunAssistantInput): Promise<Ass
       });
     }
     emit({ type: 'status', message: 'Using the Ledger AI results to write the response.' });
-    response = await client.responses.parse({
-      model: env.OPENAI_ASSISTANT_MODEL,
-      instructions,
-      previous_response_id: previousResponseId,
-      reasoning: { effort: env.OPENAI_ASSISTANT_REASONING_EFFORT },
-      tools: assistantToolDefinitions,
-      input: outputs,
-      text: { format: zodTextFormat(assistantStructuredOutputSchema, 'ledger_ai_assistant_response') },
-    } as any);
+    response = await trackOpenAiCall(
+      'assistant',
+      env.OPENAI_ASSISTANT_MODEL,
+      () => client.responses.parse({
+        model: env.OPENAI_ASSISTANT_MODEL,
+        instructions,
+        previous_response_id: previousResponseId,
+        reasoning: { effort: env.OPENAI_ASSISTANT_REASONING_EFFORT },
+        tools: assistantToolDefinitions,
+        input: outputs,
+        text: { format: zodTextFormat(assistantStructuredOutputSchema, 'ledger_ai_assistant_response') },
+      } as any),
+    );
     previousResponseId = response.id;
   }
 

@@ -46,6 +46,12 @@ services:
         value: gpt-5.5
       - key: OPENAI_CATEGORIZATION_MODEL
         value: gpt-4.1-mini
+      - key: OPENAI_CATEGORIZATION_WEB_SEARCH
+        value: "true"
+      - key: OPENAI_CATEGORIZATION_DAILY_LIMIT
+        value: "200"
+      - key: OPENAI_CATEGORIZATION_DAILY_WEB_SEARCH_LIMIT
+        value: "10"
       - key: PLAID_ENV
         value: production
       - key: PLAID_CLIENT_ID

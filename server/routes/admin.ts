@@ -8,8 +8,9 @@ import { accounts, auditLogs, businesses, categories, categoryRules, exportJobs,
 import { getEnv } from '../config/env.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { canSetAdminActive } from '../services/adminGuards.js';
+import { getAiUsageSummary } from '../services/aiUsageTelemetry.js';
 import { audit } from '../services/audit.js';
-import { getAiUsage } from '../services/categorization.js';
+import { getAiUsage, getAiWebSearchUsage } from '../services/categorization.js';
 
 const userPublicColumns = {
   id: users.id,
@@ -45,7 +46,12 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       db.select(receiptUploaderPublicColumns).from(receiptUploaders).orderBy(receiptUploaders.username),
       db.select().from(exportJobs).orderBy(desc(exportJobs.createdAt)).limit(10),
     ]);
-    const aiUsage = await getAiUsage();
+    const [aiUsage, aiWebSearchUsage, aiUsageByWorkload] = await Promise.all([
+      getAiUsage(),
+      getAiWebSearchUsage(),
+      getAiUsageSummary(30),
+    ]);
+    const env = getEnv();
     return {
       businesses: businessRows,
       categories: categoryRows,
@@ -54,7 +60,13 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       users: userRows,
       receiptUploaders: uploaderRows,
       exports: exportRows,
-      aiUsage: { ...aiUsage, dailyLimit: getEnv().OPENAI_CATEGORIZATION_DAILY_LIMIT },
+      aiUsage: {
+        ...aiUsage,
+        dailyLimit: env.OPENAI_CATEGORIZATION_DAILY_LIMIT,
+        webSearchCalls: aiWebSearchUsage.calls,
+        webSearchDailyLimit: env.OPENAI_CATEGORIZATION_DAILY_WEB_SEARCH_LIMIT,
+      },
+      aiUsageByWorkload,
     };
   });
 

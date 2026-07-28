@@ -21,12 +21,13 @@ const envSchema = z.object({
   OPENAI_ASSISTANT_REASONING_EFFORT: z.enum(['low', 'medium', 'high', 'xhigh']).default('medium'),
   OPENAI_RECEIPT_MODEL: z.string().default('gpt-4.1-mini'),
   OPENAI_CATEGORIZATION_MODEL: z.string().default('gpt-4.1-mini'),
-  // Let the AI categorizer use OpenAI's hosted web search to identify unfamiliar merchants.
-  // Set to 'false' to disable (saves cost/latency on the AI-fallback path).
+  // Keep hosted web search available as a second pass for merchants the base model
+  // explicitly cannot identify. It is never exposed on the first-pass request.
   OPENAI_CATEGORIZATION_WEB_SEARCH: z.string().optional().default('true').transform((value) => value !== 'false'),
-  // Hard daily ceiling on AI categorization calls; over the cap, transactions stay
-  // uncategorized and are swept up by the nightly scan on a later day.
+  // Hard ceilings on total categorization requests and the much more expensive web
+  // subset. Over either cap, transactions stay uncategorized for a later scan.
   OPENAI_CATEGORIZATION_DAILY_LIMIT: z.coerce.number().int().min(0).optional().default(200),
+  OPENAI_CATEGORIZATION_DAILY_WEB_SEARCH_LIMIT: z.coerce.number().int().min(0).optional().default(10),
   PLAID_ENV: z.enum(['sandbox', 'development', 'production']).default('sandbox'),
   PLAID_CLIENT_ID: z.string().optional().default(''),
   PLAID_SECRET: z.string().optional().default(''),

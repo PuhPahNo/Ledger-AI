@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import { zodTextFormat } from 'openai/helpers/zod';
 import { getEnv } from '../config/env.js';
+import { trackOpenAiCall } from './aiUsageTelemetry.js';
 
 const receiptExtractionSchema = z.object({
   isReceipt: z.boolean(),
@@ -34,16 +35,20 @@ export async function extractReceipt(input: {
   }
 
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
-  const response = await client.responses.parse({
-    model: env.OPENAI_RECEIPT_MODEL,
-    input: [{
-      role: 'user',
-      content: receiptInputContent(input),
-    }],
-    text: {
-      format: zodTextFormat(receiptExtractionSchema, 'receipt_extraction'),
-    },
-  });
+  const response = await trackOpenAiCall(
+    'receipt_extraction',
+    env.OPENAI_RECEIPT_MODEL,
+    () => client.responses.parse({
+      model: env.OPENAI_RECEIPT_MODEL,
+      input: [{
+        role: 'user',
+        content: receiptInputContent(input),
+      }],
+      text: {
+        format: zodTextFormat(receiptExtractionSchema, 'receipt_extraction'),
+      },
+    }),
+  );
 
   const message = response.output.find((item) => item.type === 'message');
   const parsed = message?.content.find((item) => item.type === 'output_text')?.parsed;

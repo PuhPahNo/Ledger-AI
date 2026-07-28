@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  categorizationRetryDelayMs,
+  categorizationWebToolOptions,
   categoryNameForKnownSignals,
   categoryMatchesTransactionDirection,
+  isAiEligibleCategory,
   isExcludedFromSpendCategory,
   normalize,
   preferredIncomeCategory,
   ruleMatches,
+  shouldUseCategorizationWebSearch,
 } from './categorization.js';
 
 describe('ruleMatches', () => {
@@ -120,6 +124,23 @@ describe('isExcludedFromSpendCategory', () => {
   });
 });
 
+describe('isAiEligibleCategory', () => {
+  it('does not let the model present Uncategorized as an AI recommendation', () => {
+    expect(isAiEligibleCategory({
+      id: 'uncategorized',
+      businessId: null,
+      name: 'Uncategorized',
+      taxCode: 'review_required',
+    }, -2500)).toBe(false);
+    expect(isAiEligibleCategory({
+      id: 'software',
+      businessId: null,
+      name: 'Software',
+      taxCode: 'other_expense_software',
+    }, -2500)).toBe(true);
+  });
+});
+
 describe('normalize', () => {
   it('lowercases and collapses punctuation', () => {
     expect(normalize('Eleven-Labs, Inc.')).toBe('eleven labs inc');
@@ -143,5 +164,31 @@ describe('normalize', () => {
 
   it('matches the same merchant across descriptor styles', () => {
     expect(normalize('SQ *BLUE BOTTLE 402')).toBe(normalize('Blue Bottle'));
+  });
+});
+
+describe('AI categorization cost controls', () => {
+  it('keeps web search off the base request', () => {
+    expect(categorizationWebToolOptions(false)).toEqual({});
+  });
+
+  it('allows one low-context web lookup only for the explicit fallback request', () => {
+    expect(categorizationWebToolOptions(true)).toEqual({
+      tools: [{ type: 'web_search_preview', search_context_size: 'low' }],
+      tool_choice: { type: 'web_search_preview' },
+      max_tool_calls: 1,
+    });
+  });
+
+  it('escalates only model-flagged ambiguity while the feature remains enabled', () => {
+    expect(shouldUseCategorizationWebSearch({ needsWebSearch: true }, true)).toBe(true);
+    expect(shouldUseCategorizationWebSearch({ needsWebSearch: false }, true)).toBe(false);
+    expect(shouldUseCategorizationWebSearch({ needsWebSearch: true }, false)).toBe(false);
+  });
+
+  it('backs repeated failures off for a week, then a month', () => {
+    expect(categorizationRetryDelayMs(1)).toBe(7 * 24 * 60 * 60 * 1000);
+    expect(categorizationRetryDelayMs(2)).toBe(30 * 24 * 60 * 60 * 1000);
+    expect(categorizationRetryDelayMs(8)).toBe(30 * 24 * 60 * 60 * 1000);
   });
 });
