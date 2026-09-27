@@ -68,6 +68,8 @@ const RECENT: MockTxn[] = [
   { id:'t14', accountId:'acct-3', date:daysAgo(5), merchant:'Square hardware', amount:-187.00, biz:'womens-net', cat:'Equipment', receipt:'pending', src:'Chase ** 9981' },
   { id:'t15', accountId:'acct-3', date:daysAgo(5), merchant:'Comcast Business', amount:-129.95, biz:'womens-net', cat:'Utilities', receipt:'matched', src:'Chase ** 9981' },
   { id:'t16', accountId:'acct-1', date:daysAgo(1), merchant:'SQ *BLUE BOTTLE 0412', amount: -64.50, biz:'draft-sharks', cat:'Uncategorized', receipt:'missing', src:'Amex ** 4002' },
+  // Waived by the "Starbucks" merchant rule in the receipt-workflow mock (api/receiptWorkflow.ts).
+  { id:'t17', accountId:'acct-1', date:daysAgo(2), merchant:'Starbucks', amount: -6.45, biz:'draft-sharks', cat:'Meals', receipt:'waived', src:'Amex ** 4002' },
 ];
 
 interface MonthlyTemplate {

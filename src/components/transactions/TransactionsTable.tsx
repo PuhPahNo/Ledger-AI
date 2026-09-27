@@ -1,5 +1,5 @@
 import { Fragment } from 'react';
-import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight, Paperclip } from 'lucide-react';
 import type { Account, Business, Transaction, TransactionRollup } from '@/types/domain';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
@@ -28,6 +28,8 @@ interface TransactionsTableProps {
   onToggleSelectAll?: () => void;
   /** Group rows under day headers. Only makes sense when rows are date-sorted. */
   groupByDate?: boolean;
+  /** Row action for outflows missing a receipt: pick a file and attach it to that row. */
+  onAttachReceipt?: (transaction: Transaction) => void;
 }
 
 interface DayGroup {
@@ -74,6 +76,7 @@ export function TransactionsTable({
   onToggleSelect,
   onToggleSelectAll,
   groupByDate = false,
+  onAttachReceipt,
 }: TransactionsTableProps) {
   const selectable = Boolean(selectedIds && onToggleSelect);
   const allSelected = selectable && rows.length > 0 && rows.every((row) => selectedIds!.has(row.id));
@@ -170,7 +173,24 @@ export function TransactionsTable({
           {fmt$(transaction.amount)}
         </TableCell>
         <TableCell>
-          <ReceiptPill status={transaction.receipt} />
+          <div className="flex items-center gap-1">
+            <ReceiptPill status={transaction.receipt} />
+            {onAttachReceipt && transaction.receipt === 'missing' && transaction.amount < 0 && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="h-7 w-7 shrink-0 text-dim hover:text-ink sm:h-7 sm:w-7"
+                title={`Attach a receipt to ${transaction.merchant}`}
+                aria-label={`Attach a receipt to ${transaction.merchant}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onAttachReceipt(transaction);
+                }}
+              >
+                <Paperclip className="h-3.5 w-3.5" />
+              </Button>
+            )}
+          </div>
         </TableCell>
       </TableRow>
     );

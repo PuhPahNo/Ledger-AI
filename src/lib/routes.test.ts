@@ -32,13 +32,14 @@ describe('parseHash', () => {
     expect(parseHash('#/reports/close')).toEqual({ view: 'reports', tab: 'close' });
     expect(parseHash('#reports/bogus')).toEqual({ view: 'reports', tab: 'overview' });
     expect(parseHash('#settings/data')).toEqual({ view: 'settings', section: 'data' });
+    expect(parseHash('#settings/receipts')).toEqual({ view: 'settings', section: 'receipts' });
     expect(parseHash('#assistant')).toEqual({ view: 'assistant' });
   });
 });
 
 describe('routeToHash', () => {
   it('round-trips every route and omits default sub-pages', () => {
-    const hashes = ['', '#transactions', '#transactions/receipts', '#reports', '#reports/accounts', '#reports/close', '#assistant', '#settings', '#settings/categories', '#settings/security', '#settings/data'];
+    const hashes = ['', '#transactions', '#transactions/receipts', '#reports', '#reports/accounts', '#reports/close', '#assistant', '#settings', '#settings/categories', '#settings/receipts', '#settings/security', '#settings/data'];
     for (const hash of hashes) expect(routeToHash(parseHash(hash))).toBe(hash);
   });
 });

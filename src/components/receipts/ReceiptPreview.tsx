@@ -116,7 +116,7 @@ function PreviewBody({
         type="application/pdf"
         className="h-[560px] w-full rounded-md border border-ink2/10 bg-white lg:h-full"
       >
-        <div className="flex h-full items-center justify-center p-6 text-center">
+        <div className="flex h-full items-center justify-center bg-paper p-6 text-center">
           <PreviewFallback title="Preview unavailable" detail="This browser can't show PDFs inline — use Open or Download." />
         </div>
       </object>

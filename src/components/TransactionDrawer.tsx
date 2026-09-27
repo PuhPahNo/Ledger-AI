@@ -1,11 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ExternalLink, FileText, Plus, Save, Unlink } from 'lucide-react';
+import { Plus, Save } from 'lucide-react';
 import {
   addTransactionTag,
-  getReceipt,
-  receiptFileUrl,
   removeTransactionTag,
-  unpairReceipt,
   updateTransaction,
 } from '@/api';
 import { categorySourceLabel, isGuessedCategorySource } from '@/lib/categorySource';
@@ -21,7 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { MoneyDisplay } from '@/components/ui/money-display';
-import { receiptLabel } from './receipts/ReceiptWorkbenchParts';
+import { TransactionReceiptPanel } from './receipts/TransactionReceiptPanel';
 
 interface Props {
   transaction: Transaction | null;
@@ -46,12 +43,11 @@ export function TransactionDrawer({ transaction, businesses, categories, allTags
   const [tags, setTags] = useState<TransactionTag[]>([]);
   const [tagBusy, setTagBusy] = useState(false);
   const [tagsDirty, setTagsDirty] = useState(false);
-  // The paired receipt; unpairing applies immediately, like tag edits.
+  // The receipt slot; attach/unpair/waive apply immediately, like tag edits.
   const [receiptId, setReceiptId] = useState<string | null>(null);
   const [receiptStatus, setReceiptStatus] = useState<ReceiptStatus>('missing');
-  const [receipt, setReceipt] = useState<ReceiptInboxItem | null>(null);
-  const [unpairing, setUnpairing] = useState(false);
   const [receiptDirty, setReceiptDirty] = useState(false);
+  const [knownReceipt, setKnownReceipt] = useState<ReceiptInboxItem | null>(null);
 
   useEffect(() => {
     setBusinessId(resolvedBusinessId);
@@ -62,23 +58,8 @@ export function TransactionDrawer({ transaction, businesses, categories, allTags
     setReceiptId(transaction?.receiptId ?? null);
     setReceiptStatus(transaction?.receipt ?? 'missing');
     setReceiptDirty(false);
+    setKnownReceipt(null);
   }, [resolvedBusinessId, transaction]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setReceipt(null);
-    if (!receiptId) return;
-    getReceipt(receiptId)
-      .then((row) => {
-        if (!cancelled) setReceipt(row);
-      })
-      .catch(() => {
-        // The View link still works without the details.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [receiptId]);
 
   // Tag/receipt edits apply immediately (no Save needed), so refresh the list when closing after one.
   const close = () => {
@@ -86,25 +67,10 @@ export function TransactionDrawer({ transaction, businesses, categories, allTags
     onClose();
   };
 
-  const handleUnpair = async () => {
-    if (!receiptId) return;
-    setUnpairing(true);
-    try {
-      await unpairReceipt(receiptId);
-      setReceiptId(null);
-      setReceiptStatus('missing');
-      setReceiptDirty(true);
-      toast({ title: 'Receipt unpaired', description: 'It is back in the Receipts queue and won’t be re-paired here.' });
-    } catch (error) {
-      toast({
-        variant: 'destructive',
-        title: 'Could not unpair receipt',
-        description: error instanceof Error ? error.message : 'Try again.',
-      });
-    } finally {
-      setUnpairing(false);
-    }
-  };
+  const businessName = useMemo(
+    () => businesses.find((business) => business.dbId === resolvedBusinessId || business.id === transaction?.biz)?.name,
+    [businesses, resolvedBusinessId, transaction?.biz],
+  );
 
   const addableTags = (allTags ?? []).filter(
     (tag) => tag.active && !tags.some((applied) => applied.id === tag.id),
@@ -181,9 +147,9 @@ export function TransactionDrawer({ transaction, businesses, categories, allTags
             <SheetHeader>
               <span className="text-xs font-bold uppercase tracking-wider text-dim">{transaction.dateLabel}</span>
               <SheetTitle className="text-2xl">{transaction.merchant}</SheetTitle>
-              <SheetDescription className="flex items-center gap-2">
+              <SheetDescription className="flex flex-wrap items-center gap-2">
                 <Badge variant="muted">{transaction.cat || 'Uncategorized'}</Badge>
-                <Badge variant={receiptVariant(receiptStatus)}>{receiptStatus}</Badge>
+                <Badge variant={receiptVariant(receiptStatus)}>{receiptStatusLabel(receiptStatus)}</Badge>
               </SheetDescription>
             </SheetHeader>
 
@@ -264,36 +230,21 @@ export function TransactionDrawer({ transaction, businesses, categories, allTags
               </div>
             )}
 
-            {receiptId && (
-              <div className="grid gap-1.5">
-                <Label>Receipt</Label>
-                <div className="flex items-center gap-2 rounded-md border border-ink2/10 p-2">
-                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-cream">
-                    <FileText className="h-4 w-4" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-bold">{receipt ? receiptLabel(receipt) : 'Attached receipt'}</div>
-                    {receipt && (receipt.receiptDate || receipt.totalCents != null) && (
-                      <div className="truncate text-xs text-dim">
-                        {[receipt.receiptDate, receipt.totalCents != null ? fmt$(receipt.totalCents / 100) : null]
-                          .filter(Boolean)
-                          .join(' · ')}
-                      </div>
-                    )}
-                  </div>
-                  <Button asChild variant="outline" size="sm">
-                    <a href={receiptFileUrl(receiptId)} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      View
-                    </a>
-                  </Button>
-                  <Button variant="ghost" size="sm" disabled={unpairing} onClick={handleUnpair} title="Detach this receipt">
-                    <Unlink className="h-3.5 w-3.5" />
-                    Unpair
-                  </Button>
-                </div>
-              </div>
-            )}
+            <TransactionReceiptPanel
+              transaction={transaction}
+              receiptId={receiptId}
+              status={receiptStatus}
+              receipt={knownReceipt}
+              businessName={businessName}
+              onChange={(next) => {
+                setKnownReceipt(next.receipt ?? null);
+                setReceiptId(next.receiptId);
+                setReceiptStatus(next.status);
+                setReceiptDirty(true);
+              }}
+            />
+
+            {/* quickbooks-panel — mount <QuickbooksTransactionPanel transactionId={transaction.id} /> here. */}
 
             <div className="grid gap-1.5">
               <Label htmlFor="drawer-note">Note</Label>
@@ -351,6 +302,21 @@ function categoryReason(transaction: Transaction): string | null {
   if (typeof reason === 'string' && reason.length > 0 && !reason.includes('_')) return reason;
   if (typeof evidence.pattern === 'string') return `Matched rule pattern "${evidence.pattern}"`;
   return null;
+}
+
+function receiptStatusLabel(status: ReceiptStatus): string {
+  switch (status) {
+    case 'matched':
+      return 'Receipt attached';
+    case 'pending':
+      return 'Receipt to confirm';
+    case 'missing':
+      return 'Receipt missing';
+    case 'waived':
+      return 'No receipt needed';
+    default:
+      return 'No receipt';
+  }
 }
 
 function receiptVariant(status: Transaction['receipt']): 'success' | 'warning' | 'danger' | 'muted' {

@@ -15,6 +15,7 @@ import { RulesTab } from '../admin/tabs/RulesTab';
 import { TagsTab } from '../admin/tabs/TagsTab';
 import { UsersTab } from '../admin/tabs/UsersTab';
 import { AccountSecurityPanel } from '../shell/AccountSecurityPanel';
+import { ReceiptRulesSettings } from '../receipts/ReceiptRulesSettings';
 
 /** Everything a settings section may need; loaded once by SettingsPage. */
 export interface SettingsSectionProps {
@@ -104,6 +105,7 @@ function DataSection(props: SettingsSectionProps) {
 export const SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
   { id: 'businesses', label: 'Businesses & accounts', description: 'Businesses, and the bank, card and Gmail connections feeding them.', component: BusinessesAndAccounts },
   { id: 'categories', label: 'Categories & rules', description: 'Categories, auto-categorization rules and custom tags.', component: CategoriesAndRules },
+  { id: 'receipts', label: 'Receipt rules', description: 'When a transaction doesn’t need a receipt: a small-purchase threshold and merchant rules.', component: ReceiptRulesSettings },
   { id: 'security', label: 'Users & security', description: 'Your password and 2FA, team members, and receipt uploaders.', component: UsersAndSecurity },
   { id: 'data', label: 'Data', description: 'Audit exports and the audit log.', component: DataSection, searchPlaceholder: 'Search audit log…' },
 ];

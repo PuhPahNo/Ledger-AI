@@ -11,7 +11,7 @@ import type {
 } from '@/types/navigation';
 
 export const REPORT_TAB_IDS: readonly ReportsTab[] = ['overview', 'accounts', 'close'];
-export const SETTINGS_SECTION_IDS: readonly SettingsSection[] = ['businesses', 'categories', 'security', 'data'];
+export const SETTINGS_SECTION_IDS: readonly SettingsSection[] = ['businesses', 'categories', 'receipts', 'security', 'data'];
 const TRANSACTIONS_MODES: readonly TransactionsMode[] = ['transactions', 'receipts'];
 
 export const HOME_ROUTE: AppRoute = { view: 'home' };
@@ -34,6 +34,7 @@ const ADMIN_TAB_TO_SECTION: Record<string, SettingsSection> = {
   categories: 'categories',
   rules: 'categories',
   tags: 'categories',
+  receipts: 'receipts',
   users: 'security',
   security: 'security',
   exports: 'data',

@@ -1,4 +1,5 @@
 import type { BusinessId, ReceiptInboxItem, ReceiptMatchCandidate, ReceiptSource, ReceiptStatus, Transaction } from '@/types/domain';
+import type { ExplainedMatchCandidate } from '@/types/receiptWorkflow';
 import { API_BASE, ApiError, http, useMockApi } from './client';
 import { mapTransaction, type ApiTransaction } from './mapper';
 import { toLocalIsoDate } from '@/lib/dates';
@@ -102,7 +103,17 @@ export function listReceipts(params: ListReceiptsParams = {}): Promise<ReceiptIn
 
 export function getReceipt(receiptId: string): Promise<ReceiptInboxItem> {
   if (useMockApi) {
-    return listReceipts().then((rows) => rows.find((row) => row.id === receiptId) ?? rows[0]);
+    return listReceipts().then((rows) => rows.find((row) => row.id === receiptId) ?? {
+      // Receipts created by the receipt-workflow mocks (uploads, Gmail hits) aren't in this list.
+      ...rows[0],
+      id: receiptId,
+      merchant: null,
+      totalCents: null,
+      receiptDate: null,
+      fileName: 'receipt.pdf',
+      status: 'matched' as const,
+      confidence: 0.9,
+    });
   }
   return http<ReceiptInboxItem>(`/receipts/${receiptId}`);
 }
@@ -126,6 +137,21 @@ export function listReceiptCandidates(receiptId: string): Promise<ReceiptMatchCa
   ).then((rows) => rows.map((row) => ({ ...row, transaction: mapTransaction(row.transaction) })));
 }
 
+/**
+ * GET /api/receipts/:id/candidates with the human-readable reasons — the match queue's view of
+ * one receipt after its details were corrected. Already-rejected pairs are left out; best first.
+ */
+export function listExplainedCandidates(receiptId: string, limit = 3): Promise<ExplainedMatchCandidate[]> {
+  if (useMockApi) return Promise.resolve([]);
+  return http<Array<Omit<ExplainedMatchCandidate, 'transaction'> & { transaction: ApiTransaction }>>(
+    `/receipts/${receiptId}/candidates`,
+  ).then((rows) => rows
+    .filter((row) => !row.rejected)
+    .map((row) => ({ ...row, explanations: row.explanations ?? [], transaction: mapTransaction(row.transaction) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit));
+}
+
 export interface UpdateReceiptInput {
   merchant?: string | null;
   totalCents?: number | null;
@@ -136,7 +162,9 @@ export function updateReceipt(receiptId: string, body: UpdateReceiptInput): Prom
   if (useMockApi) {
     return listReceipts().then((rows) => ({
       ...(rows.find((row) => row.id === receiptId) ?? rows[0]),
+      id: receiptId,
       ...body,
+      extractionError: null,
       updatedAt: new Date().toISOString(),
     }));
   }

@@ -11,7 +11,7 @@ export type TransactionsMode = 'transactions' | 'receipts';
 export type ReportsTab = 'overview' | 'accounts' | 'close';
 
 /** Settings sections. Add one here and register it in components/settings/settingsSections.tsx. */
-export type SettingsSection = 'businesses' | 'categories' | 'security' | 'data';
+export type SettingsSection = 'businesses' | 'categories' | 'receipts' | 'security' | 'data';
 
 /** A fully resolved location in the app — what the hash encodes. */
 export type AppRoute =
