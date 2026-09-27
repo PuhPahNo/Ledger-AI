@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   date,
   index,
@@ -16,11 +17,11 @@ import {
 import { relations, sql } from 'drizzle-orm';
 
 export const userRole = pgEnum('user_role', ['admin']);
-export const connectionKind = pgEnum('connection_kind', ['bank', 'card', 'gmail']);
+export const connectionKind = pgEnum('connection_kind', ['bank', 'card', 'gmail', 'quickbooks']);
 export const connectionStatus = pgEnum('connection_status', ['live', 'reauth', 'disconnected']);
 export const accountKind = pgEnum('account_kind', ['checking', 'savings', 'credit', 'other']);
 export const receiptStatus = pgEnum('receipt_status', ['matched', 'pending', 'missing', 'n/a', 'waived']);
-export const receiptSource = pgEnum('receipt_source', ['upload', 'gmail']);
+export const receiptSource = pgEnum('receipt_source', ['upload', 'gmail', 'quickbooks']);
 export const receiptMatchStatus = pgEnum('receipt_match_status', ['suggested', 'accepted', 'rejected', 'auto']);
 export const alertKind = pgEnum('alert_kind', ['dup', 'missing', 'orphan', 'spike', 'reauth']);
 export const alertSeverity = pgEnum('alert_severity', ['warn', 'todo', 'info']);
@@ -640,3 +641,173 @@ export const transactionReceiptWaivers = pgTable('transaction_receipt_waivers', 
 
 export type ReceiptWaiverRule = typeof receiptWaiverRules.$inferSelect;
 export type TransactionReceiptWaiver = typeof transactionReceiptWaivers.$inferSelect;
+
+// QuickBooks Online (read-only). See server/services/quickbooks*.ts and migration 0028.
+// ---------------------------------------------------------------------------------------------
+
+export interface QboTransactionLeg {
+  /** 'main' for single-account entities; Transfers have 'from' and 'to'. */
+  leg: 'main' | 'from' | 'to';
+  accountQboId: string;
+  /** Ledger sign convention: negative = money out of the account. */
+  amountCents: number;
+}
+
+export interface QboTransactionLine {
+  amountCents: number;
+  accountQboId: string | null;
+  accountName: string | null;
+  description: string | null;
+}
+
+export interface QboLinkedTxn {
+  txnId: string;
+  txnType: string;
+}
+
+export const qboCompanies = pgTable('qbo_companies', {
+  connectionId: uuid('connection_id').primaryKey().references(() => connections.id, { onDelete: 'cascade' }),
+  businessId: uuid('business_id').notNull().references(() => businesses.id, { onDelete: 'cascade' }),
+  realmId: text('realm_id').notNull(),
+  companyName: text('company_name'),
+  environment: text('environment').notNull().default('production'),
+  active: boolean('active').notNull().default(true),
+  accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
+  refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }),
+  lastTokenRefreshAt: timestamp('last_token_refresh_at', { withTimezone: true }),
+  historyStartDate: date('history_start_date'),
+  lastFullSyncAt: timestamp('last_full_sync_at', { withTimezone: true }),
+  lastCdcAt: timestamp('last_cdc_at', { withTimezone: true }),
+  lastSyncStartedAt: timestamp('last_sync_started_at', { withTimezone: true }),
+  lastSyncError: text('last_sync_error'),
+  lastSyncStats: jsonb('last_sync_stats').$type<Record<string, unknown>>().notNull().default({}),
+  ...timestamps,
+}, (table) => ({
+  activeBusinessIdx: uniqueIndex('qbo_companies_active_business_idx').on(table.businessId).where(sql`${table.active}`),
+  activeRealmIdx: uniqueIndex('qbo_companies_active_realm_idx').on(table.realmId).where(sql`${table.active}`),
+}));
+
+export const qboAccounts = pgTable('qbo_accounts', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  connectionId: uuid('connection_id').notNull().references(() => connections.id, { onDelete: 'cascade' }),
+  qboId: text('qbo_id').notNull(),
+  name: text('name').notNull(),
+  fullyQualifiedName: text('fully_qualified_name'),
+  accountType: text('account_type'),
+  accountSubType: text('account_sub_type'),
+  classification: text('classification'),
+  acctNumLast4: text('acct_num_last4'),
+  active: boolean('active').notNull().default(true),
+  deleted: boolean('deleted').notNull().default(false),
+  currentBalanceCents: bigint('current_balance_cents', { mode: 'number' }),
+  ledgerAccountId: uuid('ledger_account_id').references(() => accounts.id, { onDelete: 'set null' }),
+  ledgerAccountMethod: text('ledger_account_method').$type<'auto' | 'manual'>(),
+  ledgerCategoryId: uuid('ledger_category_id').references(() => categories.id, { onDelete: 'set null' }),
+  ledgerCategoryMethod: text('ledger_category_method').$type<'auto' | 'manual'>(),
+  ledgerCategoryScore: numeric('ledger_category_score', { precision: 5, scale: 4 }),
+  syncToken: text('sync_token'),
+  qboUpdatedAt: timestamp('qbo_updated_at', { withTimezone: true }),
+  ...timestamps,
+}, (table) => ({
+  connectionQboIdx: uniqueIndex('qbo_accounts_connection_qbo_idx').on(table.connectionId, table.qboId),
+  ledgerAccountIdx: index('qbo_accounts_ledger_account_idx').on(table.ledgerAccountId),
+}));
+
+export const qboVendors = pgTable('qbo_vendors', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  connectionId: uuid('connection_id').notNull().references(() => connections.id, { onDelete: 'cascade' }),
+  qboId: text('qbo_id').notNull(),
+  displayName: text('display_name').notNull(),
+  companyName: text('company_name'),
+  vendor1099: boolean('vendor_1099').notNull().default(false),
+  // Only whether QuickBooks has a tax ID on file — the ID itself is never stored.
+  hasTaxId: boolean('has_tax_id').notNull().default(false),
+  active: boolean('active').notNull().default(true),
+  deleted: boolean('deleted').notNull().default(false),
+  balanceCents: bigint('balance_cents', { mode: 'number' }),
+  syncToken: text('sync_token'),
+  qboUpdatedAt: timestamp('qbo_updated_at', { withTimezone: true }),
+  ...timestamps,
+}, (table) => ({
+  connectionQboIdx: uniqueIndex('qbo_vendors_connection_qbo_idx').on(table.connectionId, table.qboId),
+}));
+
+export const qboTransactions = pgTable('qbo_transactions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  connectionId: uuid('connection_id').notNull().references(() => connections.id, { onDelete: 'cascade' }),
+  businessId: uuid('business_id').notNull().references(() => businesses.id, { onDelete: 'cascade' }),
+  entityType: text('entity_type').notNull(),
+  qboId: text('qbo_id').notNull(),
+  txnDate: date('txn_date').notNull(),
+  totalCents: bigint('total_cents', { mode: 'number' }).notNull(),
+  paymentMethod: text('payment_method'),
+  docNumber: text('doc_number'),
+  memo: text('memo'),
+  vendorQboId: text('vendor_qbo_id'),
+  payeeName: text('payee_name'),
+  payeeType: text('payee_type'),
+  bankAccountQboId: text('bank_account_qbo_id'),
+  bankAccountName: text('bank_account_name'),
+  legs: jsonb('legs').$type<QboTransactionLeg[]>().notNull().default([]),
+  lines: jsonb('lines').$type<QboTransactionLine[]>().notNull().default([]),
+  linkedTxns: jsonb('linked_txns').$type<QboLinkedTxn[]>().notNull().default([]),
+  syncToken: text('sync_token'),
+  deleted: boolean('deleted').notNull().default(false),
+  qboCreatedAt: timestamp('qbo_created_at', { withTimezone: true }),
+  qboUpdatedAt: timestamp('qbo_updated_at', { withTimezone: true }),
+  ...timestamps,
+}, (table) => ({
+  connectionEntityIdx: uniqueIndex('qbo_transactions_connection_entity_idx').on(table.connectionId, table.entityType, table.qboId),
+  businessDateIdx: index('qbo_transactions_business_date_idx').on(table.businessId, table.txnDate),
+  vendorIdx: index('qbo_transactions_vendor_idx').on(table.connectionId, table.vendorQboId),
+}));
+
+export const qboTransactionLinks = pgTable('qbo_transaction_links', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  qboTransactionId: uuid('qbo_transaction_id').notNull().references(() => qboTransactions.id, { onDelete: 'cascade' }),
+  leg: text('leg').$type<QboTransactionLeg['leg']>().notNull().default('main'),
+  transactionId: uuid('transaction_id').notNull().references(() => transactions.id, { onDelete: 'cascade' }),
+  method: text('method').$type<'auto' | 'manual'>().notNull(),
+  status: text('status').$type<'linked' | 'rejected'>().notNull().default('linked'),
+  confidence: numeric('confidence', { precision: 5, scale: 4 }),
+  reasons: jsonb('reasons').$type<Record<string, unknown>>().notNull().default({}),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  ...timestamps,
+}, (table) => ({
+  pairIdx: uniqueIndex('qbo_transaction_links_pair_idx').on(table.qboTransactionId, table.leg, table.transactionId),
+  legLinkedIdx: uniqueIndex('qbo_transaction_links_leg_linked_idx').on(table.qboTransactionId, table.leg).where(sql`${table.status} = 'linked'`),
+  txnLinkedIdx: uniqueIndex('qbo_transaction_links_txn_linked_idx').on(table.transactionId).where(sql`${table.status} = 'linked'`),
+}));
+
+export type QboAttachmentImportStatus = 'pending' | 'imported' | 'duplicate' | 'skipped' | 'failed';
+
+export const qboAttachments = pgTable('qbo_attachments', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  connectionId: uuid('connection_id').notNull().references(() => connections.id, { onDelete: 'cascade' }),
+  qboId: text('qbo_id').notNull(),
+  fileName: text('file_name'),
+  contentType: text('content_type'),
+  sizeBytes: bigint('size_bytes', { mode: 'number' }),
+  note: text('note'),
+  entityRefs: jsonb('entity_refs').$type<Array<{ type: string; value: string }>>().notNull().default([]),
+  qboTransactionId: uuid('qbo_transaction_id').references(() => qboTransactions.id, { onDelete: 'set null' }),
+  fileSha256: text('file_sha256'),
+  receiptId: uuid('receipt_id').references(() => receipts.id, { onDelete: 'set null' }),
+  importStatus: text('import_status').$type<QboAttachmentImportStatus>().notNull().default('pending'),
+  importError: text('import_error'),
+  deleted: boolean('deleted').notNull().default(false),
+  syncToken: text('sync_token'),
+  qboUpdatedAt: timestamp('qbo_updated_at', { withTimezone: true }),
+  ...timestamps,
+}, (table) => ({
+  connectionQboIdx: uniqueIndex('qbo_attachments_connection_qbo_idx').on(table.connectionId, table.qboId),
+  txnIdx: index('qbo_attachments_txn_idx').on(table.qboTransactionId),
+  receiptIdx: index('qbo_attachments_receipt_idx').on(table.receiptId),
+}));
+
+export type QboCompany = typeof qboCompanies.$inferSelect;
+export type QboAccount = typeof qboAccounts.$inferSelect;
+export type QboVendor = typeof qboVendors.$inferSelect;
+export type QboTransaction = typeof qboTransactions.$inferSelect;
+export type QboTransactionLink = typeof qboTransactionLinks.$inferSelect;
+export type QboAttachment = typeof qboAttachments.$inferSelect;

@@ -18,6 +18,7 @@ import {
   resumeBlockedPlaidSync,
 } from '../services/plaid.js';
 import { GMAIL_BACKFILL_DAYS, connectGmail, gmailOAuthUrl } from '../services/gmail.js';
+import { disconnectQuickbooks } from '../services/quickbooks.js';
 import { toApiConnection } from './mappers.js';
 
 export async function connectionRoutes(app: FastifyInstance): Promise<void> {
@@ -34,7 +35,7 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     const user = await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const row = await db.query.connections.findFirst({ where: eq(connections.id, params.id) });
-    if (!row || row.kind === 'gmail') notFound('Plaid connection not found');
+    if (!row || (row.kind !== 'bank' && row.kind !== 'card')) notFound('Plaid connection not found');
     if (row.status === 'disconnected') badRequest('This connection was disconnected. Add it again as a new Plaid connection.');
     // Status flips back to 'live' when this sync succeeds, which proves the new login works.
     const jobId = await enqueue('plaid.sync', { connectionId: params.id });
@@ -48,7 +49,7 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     const [activePlaid] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(connections)
-      .where(and(sql`${connections.kind} <> 'gmail'`, sql`${connections.status} <> 'disconnected'`));
+      .where(and(sql`${connections.kind} IN ('bank', 'card')`, sql`${connections.status} <> 'disconnected'`));
     if ((activePlaid?.count ?? 0) >= 10) {
       badRequest('Ledger AI supports up to 10 active Plaid connections');
     }
@@ -65,7 +66,8 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const row = await db.query.connections.findFirst({ where: eq(connections.id, params.id) });
     if (!row) notFound('Connection not found');
-    const jobId = await enqueue(row.kind === 'gmail' ? 'gmail.sync' : 'plaid.sync', { connectionId: params.id });
+    const jobType = row.kind === 'gmail' ? 'gmail.sync' : row.kind === 'quickbooks' ? 'quickbooks.sync' : 'plaid.sync';
+    const jobId = await enqueue(jobType, { connectionId: params.id });
     await audit(request, user, 'sync_connection', 'connection', params.id);
     return { queued: true, jobId };
   });
@@ -79,6 +81,7 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     }).parse(request.body ?? {});
     const row = await db.query.connections.findFirst({ where: eq(connections.id, params.id) });
     if (!row) notFound('Connection not found');
+    if (row.kind === 'quickbooks') badRequest('QuickBooks history is pulled automatically (24 months). Use a QuickBooks sync instead.');
 
     if (row.kind === 'gmail') {
       const daysRequested = body.days ?? GMAIL_BACKFILL_DAYS;
@@ -164,7 +167,12 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const existing = await db.query.connections.findFirst({ where: eq(connections.id, params.id) });
     if (!existing) notFound('Connection not found');
-    const isPlaid = existing.kind !== 'gmail';
+    if (existing.kind === 'quickbooks') {
+      await disconnectQuickbooks(params.id);
+      await audit(request, user, 'disconnect_quickbooks', 'connection', params.id);
+      return reply.status(204).send();
+    }
+    const isPlaid = existing.kind === 'bank' || existing.kind === 'card';
     // Best-effort: revoke the Item at Plaid so it stops billing. Never blocks the disconnect.
     if (isPlaid) await removePlaidItem(existing.encryptedAccessToken);
     const [row] = await db

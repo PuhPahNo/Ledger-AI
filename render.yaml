@@ -72,6 +72,14 @@ services:
         sync: false
       - key: GOOGLE_PUBSUB_WEBHOOK_SECRET
         sync: false
+      - key: QUICKBOOKS_CLIENT_ID
+        sync: false
+      - key: QUICKBOOKS_CLIENT_SECRET
+        sync: false
+      - key: QUICKBOOKS_REDIRECT_URI
+        sync: false
+      - key: QUICKBOOKS_ENV
+        value: production
 
 databases:
   - name: ledger-ai-postgres

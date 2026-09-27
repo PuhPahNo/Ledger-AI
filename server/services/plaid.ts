@@ -107,7 +107,7 @@ export async function createPlaidUpdateLinkToken(
     serviceUnavailable('Plaid is not configured. Add PLAID_CLIENT_ID and PLAID_SECRET in Render, then redeploy.');
   }
   const connection = await db.query.connections.findFirst({ where: eq(connections.id, connectionId) });
-  if (!connection || connection.kind === 'gmail') notFound('Plaid connection not found');
+  if (!connection || (connection.kind !== 'bank' && connection.kind !== 'card')) notFound('Plaid connection not found');
   if (!connection.encryptedAccessToken) {
     badRequest('This connection was disconnected. Add it again as a new Plaid connection.');
   }
@@ -292,6 +292,8 @@ export async function syncPlaidConnection(
   if (!client) return { added: 0, changed: 0 };
   const connection = await db.query.connections.findFirst({ where: eq(connections.id, connectionId) });
   if (!connection?.encryptedAccessToken) return { added: 0, changed: 0 };
+  // Only Plaid Items (bank/card) — never send a Gmail or QuickBooks token to Plaid.
+  if (connection.kind !== 'bank' && connection.kind !== 'card') return { added: 0, changed: 0 };
   const accessToken = decryptText(connection.encryptedAccessToken);
   const connectionBusinessId = connection.businessId ?? undefined;
   const startCursor = options.resetCursor ? undefined : connection.plaidCursor ?? undefined;
@@ -360,7 +362,7 @@ export async function syncPlaidConnection(
 export async function resumeBlockedPlaidSync(connectionId: string | null | undefined): Promise<string | null> {
   if (!connectionId) return null;
   const connection = await db.query.connections.findFirst({ where: eq(connections.id, connectionId) });
-  if (!connection || connection.kind === 'gmail' || connection.status === 'disconnected') return null;
+  if (!connection || (connection.kind !== 'bank' && connection.kind !== 'card') || connection.status === 'disconnected') return null;
   if (!connection.metadata?.syncBlocked) return null;
   if (await hasPendingPlaidSync(connectionId)) return null;
   return enqueue('plaid.sync', { connectionId });

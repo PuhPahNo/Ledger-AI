@@ -113,6 +113,8 @@ export function registerReferenceRoutes(app: FastifyInstance): void {
       .where(and(
         query.biz && query.biz !== 'all' ? eq(businesses.key, query.biz) : sql`true`,
         sql`${connections.status} <> 'disconnected'`,
+        // QuickBooks has its own status endpoint (/quickbooks/status); keep this list Plaid + Gmail.
+        sql`${connections.kind} <> 'quickbooks'`,
       ))
       .orderBy(connections.kind, connections.label);
     const health = await connectionHealthById(rows.map((row) => row.connection));

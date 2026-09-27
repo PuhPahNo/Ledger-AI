@@ -67,7 +67,7 @@ async function main(): Promise<void> {
     FROM connections
     INNER JOIN accounts ON accounts.connection_id = connections.id
     LEFT JOIN transactions ON transactions.account_id = accounts.id
-    WHERE connections.kind <> 'gmail'
+    WHERE connections.kind IN ('bank', 'card')
       AND connections.status <> 'disconnected'
     GROUP BY connections.id, connections.label, accounts.id, accounts.name, accounts.mask, accounts.enabled
     ORDER BY oldest_date NULLS LAST, connections.label, accounts.name

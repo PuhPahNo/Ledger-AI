@@ -14,7 +14,9 @@ export type JobType =
   | 'categorization.scan-uncategorized'
   | 'categorization.receipt-evidence-review'
   | 'insights.generate'
-  | 'export.build';
+  | 'export.build'
+  | 'quickbooks.sync'
+  | 'quickbooks.relink';
 
 export async function enqueue(type: JobType, payload: Record<string, unknown> = {}, runAfter = new Date()): Promise<string> {
   const [job] = await db.insert(jobs).values({ type, payload, runAfter }).returning({ id: jobs.id });

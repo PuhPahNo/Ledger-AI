@@ -21,6 +21,7 @@ import { adminRoutes } from './routes/admin.js';
 import { assistantRoutes } from './routes/assistant.js';
 import { exportRoutes } from './routes/exports.js';
 import { webhookRoutes } from './routes/webhooks.js';
+import { quickbooksRoutes } from './routes/quickbooks.js';
 import { requireUser } from './auth/session.js';
 import { storage, storedFileSecurityHeaders } from './services/storage.js';
 import { redactSensitiveUrl } from './lib/urlRedaction.js';
@@ -100,6 +101,7 @@ export async function buildApp() {
     await assistantRoutes(api);
     await exportRoutes(api);
     await webhookRoutes(api);
+    await quickbooksRoutes(api);
 
     // Local-driver download URLs (receipts, exports) point here; R2 uses signed URLs.
     // Admin session required; the key is confined to the storage root by the driver.
