@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Download } from 'lucide-react';
+import { Download, MinusCircle } from 'lucide-react';
 import {
   bulkCategorizeTransactions,
   getTransactionRollup,
@@ -12,6 +12,7 @@ import {
   uploadReceipt,
   waiveMissingReceipts,
 } from '@/api';
+import { uploadReceiptToTransaction, waiveReceipt } from '@/api/receiptWorkflow';
 import type {
   Account,
   Business,
@@ -53,6 +54,8 @@ interface Props {
   initialFilters?: TransactionViewFilters;
   /** The Transactions | Receipts segmented control, rendered above the toolbar. */
   modeSwitch?: ReactNode;
+  /** A receipt was attached, unpaired or waived — refresh receipt counts. */
+  onReceiptsChanged?: () => void;
 }
 
 interface SavedView {
@@ -73,7 +76,7 @@ const SAVED_VIEWS: SavedView[] = [
 const limit = 100;
 
 /** Transactions mode of the Transactions page: saved views, filter rail, table, bulk edit. */
-export function TransactionsLedger({ user, onViewChange, onLogout, initialFilters, modeSwitch }: Props) {
+export function TransactionsLedger({ user, onViewChange, onLogout, initialFilters, modeSwitch, onReceiptsChanged }: Props) {
   const { toast } = useToast();
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -109,6 +112,10 @@ export function TransactionsLedger({ user, onViewChange, onLogout, initialFilter
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkCategoryId, setBulkCategoryId] = useState('');
   const [bulkApplying, setBulkApplying] = useState(false);
+  const [bulkWaiving, setBulkWaiving] = useState(false);
+  // One hidden file input serves every row's "attach receipt" button.
+  const rowFileInput = useRef<HTMLInputElement>(null);
+  const [attachTarget, setAttachTarget] = useState<Transaction | null>(null);
 
   useEffect(() => {
     setBusiness(initialFilters?.business ?? 'all');
@@ -332,6 +339,61 @@ export function TransactionsLedger({ user, onViewChange, onLogout, initialFilter
     }
   };
 
+  const receiptsChanged = () => {
+    setRefreshKey((key) => key + 1);
+    onReceiptsChanged?.();
+  };
+
+  const selectedMissing = rows.filter((row) => selectedIds.has(row.id) && row.receipt === 'missing' && row.amount < 0);
+
+  const handleBulkWaive = async () => {
+    if (selectedMissing.length === 0) return;
+    setBulkWaiving(true);
+    let done = 0;
+    let failed = 0;
+    try {
+      for (const row of selectedMissing) {
+        try {
+          await waiveReceipt(row.id);
+          done += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      toast({
+        variant: failed ? 'destructive' : 'success',
+        title: `Marked ${done} as no receipt needed`,
+        description: failed ? `${failed} could not be updated — try again.` : 'Undo any of them from the transaction.',
+      });
+      setSelectedIds(new Set());
+      receiptsChanged();
+    } finally {
+      setBulkWaiving(false);
+    }
+  };
+
+  const startAttach = (transaction: Transaction) => {
+    setAttachTarget(transaction);
+    rowFileInput.current?.click();
+  };
+
+  const handleRowUpload = async (file: File) => {
+    const target = attachTarget;
+    setAttachTarget(null);
+    if (!target) return;
+    try {
+      await uploadReceiptToTransaction(target.id, file);
+      toast({ variant: 'success', title: 'Receipt attached', description: `${file.name} → ${target.merchant}` });
+      receiptsChanged();
+    } catch (uploadError) {
+      toast({
+        variant: 'destructive',
+        title: 'Upload failed',
+        description: uploadError instanceof Error ? uploadError.message : 'Try again.',
+      });
+    }
+  };
+
   const resetToFirstPage = () => setOffset(0);
   const setFilterDirection = (value: TransactionDirection) => {
     setDirection(value);
@@ -458,6 +520,12 @@ export function TransactionsLedger({ user, onViewChange, onLogout, initialFilter
                 <Button size="sm" disabled={!bulkCategoryId || bulkApplying} onClick={handleBulkCategorize}>
                   {bulkApplying ? 'Applying…' : 'Apply category'}
                 </Button>
+                {selectedMissing.length > 0 && (
+                  <Button variant="outline" size="sm" disabled={bulkWaiving} onClick={handleBulkWaive}>
+                    <MinusCircle className="h-3.5 w-3.5" />
+                    {bulkWaiving ? 'Updating…' : `No receipt needed (${selectedMissing.length})`}
+                  </Button>
+                )}
                 <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
                   Clear
                 </Button>
@@ -479,6 +547,18 @@ export function TransactionsLedger({ user, onViewChange, onLogout, initialFilter
               onToggleSelect={toggleSelect}
               onToggleSelectAll={toggleSelectAll}
               groupByDate={activeView !== 'large'}
+              onAttachReceipt={startAttach}
+            />
+            <input
+              ref={rowFileInput}
+              type="file"
+              accept="image/*,application/pdf,.pdf,.html,.htm,.eml,.txt"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = '';
+                if (file) void handleRowUpload(file);
+              }}
             />
           </div>
         </div>
@@ -490,7 +570,7 @@ export function TransactionsLedger({ user, onViewChange, onLogout, initialFilter
         categories={categories}
         allTags={tags}
         onClose={() => setSelectedTransaction(null)}
-        onSaved={() => setRefreshKey((key) => key + 1)}
+        onSaved={receiptsChanged}
       />
     </AppShell>
   );

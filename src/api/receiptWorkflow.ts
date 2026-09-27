@@ -25,6 +25,7 @@ import type {
 } from '@/types/receiptWorkflow';
 import { http, useMockApi } from './client';
 import { mapTransaction, type ApiTransaction } from './mapper';
+import { TRANSACTIONS } from './mocks';
 
 // ---------------------------------------------------------------------------------------------
 // Wire shapes (transactions arrive in cents; mapTransaction adds display fields)
@@ -66,7 +67,7 @@ const json = (body: unknown): RequestInit => ({ method: 'POST', body: JSON.strin
 // Mock world
 // ---------------------------------------------------------------------------------------------
 
-function mockTxn(id: string, merchant: string, amountCents: number, date: string, receipt: Transaction['receipt'] = 'missing'): Transaction {
+function mockTxn(id: string, merchant: string, amountCents: number, date: string, receipt: Transaction['receipt'] = 'missing', src = 'Amex •• 4002'): Transaction {
   return mapTransaction({
     id,
     date,
@@ -75,7 +76,7 @@ function mockTxn(id: string, merchant: string, amountCents: number, date: string
     biz: 'draft-sharks',
     cat: 'Software',
     receipt,
-    src: 'Amex •• 4002',
+    src,
     tags: [],
   });
 }
@@ -115,13 +116,18 @@ function mockCandidate(transaction: Transaction, score: number, explanations: Ma
   };
 }
 
+const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+
 const mock = (() => {
   const adobe = mockTxn('txn-adobe', 'ADOBE *CREATIVE CLD', -5499, '2026-09-10');
   const adobe2 = mockTxn('txn-adobe-2', 'ADOBE *ACROPRO', -2399, '2026-09-11');
+  const adobeStock = mockTxn('txn-adobe-stock', 'ADOBE STOCK', -5499, '2026-09-16', 'missing', 'Chase •• 6711');
   const figma = mockTxn('txn-figma', 'FIGMA', -1500, '2026-09-12');
   const uber = mockTxn('txn-uber', 'UBER *TRIP', -3218, '2026-09-14');
   const hotel = mockTxn('txn-hotel', 'MARRIOTT AUSTIN', -41200, '2026-09-15');
-  const matched = mockTxn('txn-notion', 'NOTION LABS', -1000, '2026-09-20', 'matched');
+  const delta = mockTxn('txn-delta', 'DELTA AIR 0062', -38940, '2026-09-08', 'missing', 'Chase •• 6711');
+  const delta2 = mockTxn('txn-delta-2', 'DELTA AIR 0063', -38940, '2026-09-08', 'missing', 'Chase •• 6711');
+  const united = mockTxn('txn-united', 'UNITED 0162', -41210, '2026-09-09', 'missing', 'Chase •• 6711');
   const queue: MatchQueueItem[] = [
     {
       receipt: mockReceipt('rcpt-adobe', 'Adobe', 5499, '2026-09-10'),
@@ -133,10 +139,16 @@ const mock = (() => {
           reason('merchant', '"Adobe" ≈ "ADOBE *CREATIVE CLD"', 'strong', 0.9),
           reason('card', 'Card ••4002 matches', 'strong', 1),
         ], true),
+        mockCandidate(adobeStock, 0.58, [
+          reason('amount', 'Amount exact', 'strong', 1),
+          reason('date', '6 days apart', 'weak', 0),
+          reason('merchant', '"Adobe" ≈ "ADOBE STOCK"', 'good', 0.7),
+          reason('card', 'Different card ••6711 (receipt ••4002)', 'conflict', 0),
+        ]),
         mockCandidate(adobe2, 0.52, [
           reason('amount', 'Amount off by $31.00 (receipt higher)', 'conflict', 0),
           reason('date', '1 day apart', 'strong', 1),
-          reason('merchant', '"Adobe" ≈ "ADOBE *ACROPRO"', 'strong', 0.9),
+          reason('merchant', '"Adobe" ≈ "ADOBE *ACROPRO"', 'good', 0.8),
         ]),
       ],
     },
@@ -152,42 +164,144 @@ const mock = (() => {
         ], true),
       ],
     },
+    {
+      receipt: mockReceipt('rcpt-delta', 'Delta Air Lines', 38940, '2026-09-08'),
+      blockedReason: null,
+      candidates: [
+        mockCandidate(delta, 0.8, [
+          reason('amount', 'Amount exact', 'strong', 1),
+          reason('date', 'Same day', 'strong', 1),
+          reason('merchant', '"Delta Air Lines" ≈ "DELTA AIR 0062"', 'good', 0.75),
+        ], true),
+        mockCandidate(delta2, 0.8, [
+          reason('amount', 'Amount exact', 'strong', 1),
+          reason('date', 'Same day', 'strong', 1),
+          reason('merchant', '"Delta Air Lines" ≈ "DELTA AIR 0063"', 'good', 0.75),
+        ]),
+        mockCandidate(united, 0.31, [
+          reason('amount', 'Amount off by $22.70 (receipt lower)', 'conflict', 0),
+          reason('date', '1 day apart', 'strong', 1),
+          reason('merchant', 'Merchant differs ("UNITED 0162")', 'weak', 0.1),
+        ]),
+      ].map((row, index) => (index < 2 ? { ...row, ambiguous: true } : row)),
+    },
+    { receipt: mockReceipt('rcpt-home-depot', 'The Home Depot', 18733, '2026-09-18', 'upload'), blockedReason: null, candidates: [] },
     { receipt: mockReceipt('rcpt-blurry', 'Unknown', null, '2026-09-16', 'upload'), blockedReason: 'missing_details', candidates: [] },
+    {
+      receipt: { ...mockReceipt('rcpt-reading', 'scan-0921.jpg', null, null, 'upload'), merchant: null, fileName: 'scan-0921.jpg', extractionError: null },
+      blockedReason: 'extraction_pending',
+      candidates: [],
+    },
   ];
-  const recent: RecentMatch[] = [{
-    matchId: 'match-notion',
-    mode: 'auto',
-    matchedAt: new Date(Date.now() - 3_600_000).toISOString(),
-    score: 0.97,
-    receipt: { ...mockReceipt('rcpt-notion', 'Notion Labs, Inc.', 1000, '2026-09-20'), status: 'matched', transactionId: matched.id },
-    transaction: matched,
-    explanations: [
-      reason('amount', 'Amount exact', 'strong', 1),
-      reason('date', 'Same day', 'strong', 1),
-      reason('merchant', '"Notion Labs, Inc." ≈ "NOTION LABS"', 'strong', 0.9),
-    ],
-  }];
-  const rules: ReceiptWaiverRule[] = [{
-    id: 'rule-threshold',
-    kind: 'threshold',
-    enabled: false,
-    label: 'Under $75.00 (lodging excluded)',
-    businessId: null,
-    thresholdCents: 7500,
-    excludeLodging: true,
-    merchantPattern: null,
-    merchantLabel: null,
-    categoryId: null,
-    categoryName: null,
-    note: 'IRS: receipts generally not required for expenses under $75 (lodging excepted)',
-    waivedCount: 0,
-    createdAt: '2026-09-01T00:00:00.000Z',
-    updatedAt: '2026-09-01T00:00:00.000Z',
-  }];
-  const missing = [adobe, adobe2, figma, uber, hotel];
-  const waivers = new Map<string, WaiverEvidence>();
-  return { queue, recent, rules, missing, waivers, skipped: new Set<string>() };
+  const matched = (id: string, merchant: string, cents: number, date: string, src?: string) => mockTxn(id, merchant, -cents, date, 'matched', src);
+  const recent: RecentMatch[] = [
+    {
+      matchId: 'match-notion',
+      mode: 'auto',
+      matchedAt: hoursAgo(1),
+      score: 0.97,
+      receipt: { ...mockReceipt('rcpt-notion', 'Notion Labs, Inc.', 1000, '2026-09-20'), status: 'matched', transactionId: 'txn-notion' },
+      transaction: matched('txn-notion', 'NOTION LABS', 1000, '2026-09-20'),
+      explanations: [
+        reason('amount', 'Amount exact', 'strong', 1),
+        reason('date', 'Same day', 'strong', 1),
+        reason('merchant', '"Notion Labs, Inc." ≈ "NOTION LABS"', 'strong', 0.9),
+      ],
+    },
+    {
+      matchId: 'match-aws',
+      mode: 'auto',
+      matchedAt: hoursAgo(5),
+      score: 0.91,
+      receipt: { ...mockReceipt('rcpt-aws', 'Amazon Web Services', 128413, '2026-09-19'), status: 'matched', transactionId: 'txn-aws' },
+      transaction: matched('txn-aws', 'AWS EMEA', 128413, '2026-09-20', 'Chase •• 6711'),
+      explanations: [
+        reason('amount', 'Amount exact', 'strong', 1),
+        reason('date', '1 day apart', 'strong', 1),
+        reason('merchant', '"Amazon Web Services" ≈ "AWS EMEA"', 'good', 0.7),
+        reason('card', 'Card ••6711 matches', 'strong', 1),
+      ],
+    },
+    {
+      matchId: 'match-costco',
+      mode: 'manual',
+      matchedAt: hoursAgo(26),
+      score: 0.66,
+      receipt: { ...mockReceipt('rcpt-costco', 'Costco Wholesale', 31874, '2026-09-17', 'upload'), status: 'matched', transactionId: 'txn-costco' },
+      transaction: matched('txn-costco', 'COSTCO WHSE #1042', 31874, '2026-09-18', 'Chase •• 9981'),
+      explanations: [
+        reason('amount', 'Amount exact', 'strong', 1),
+        reason('date', '1 day apart', 'strong', 1),
+        reason('merchant', '"Costco Wholesale" ≈ "COSTCO WHSE #1042"', 'good', 0.7),
+      ],
+    },
+    {
+      matchId: 'match-linear',
+      mode: 'auto',
+      matchedAt: hoursAgo(70),
+      score: 0.88,
+      receipt: { ...mockReceipt('rcpt-linear', 'Linear Orbit, Inc.', 1000, '2026-09-16'), status: 'matched', transactionId: 'txn-linear' },
+      transaction: matched('txn-linear', 'LINEAR.APP', 1000, '2026-09-18'),
+      explanations: [
+        reason('amount', 'Amount exact', 'strong', 1),
+        reason('date', '2 days apart', 'good', 0.6),
+        reason('merchant', '"Linear Orbit, Inc." ≈ "LINEAR.APP"', 'weak', 0.4),
+      ],
+    },
+  ];
+  const ruleBase = { businessId: null, thresholdCents: null, excludeLodging: true, merchantPattern: null, merchantLabel: null, categoryId: null, categoryName: null, note: null };
+  const rules: ReceiptWaiverRule[] = [
+    {
+      ...ruleBase,
+      id: 'rule-threshold',
+      kind: 'threshold',
+      enabled: false,
+      label: 'Under $75.00 (lodging excluded)',
+      thresholdCents: 7500,
+      note: 'IRS: receipts generally not required for expenses under $75 (lodging excepted)',
+      waivedCount: 0,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      updatedAt: '2026-09-01T00:00:00.000Z',
+    },
+    {
+      ...ruleBase,
+      id: 'rule-starbucks',
+      kind: 'merchant',
+      enabled: true,
+      label: 'Merchant: Starbucks',
+      merchantPattern: 'starbucks',
+      merchantLabel: 'Starbucks',
+      waivedCount: 6,
+      createdAt: '2026-08-12T00:00:00.000Z',
+      updatedAt: '2026-08-12T00:00:00.000Z',
+    },
+    {
+      ...ruleBase,
+      id: 'rule-parking',
+      kind: 'category',
+      enabled: true,
+      label: 'Category: Parking & tolls',
+      categoryId: 'cat-parking',
+      categoryName: 'Parking & tolls',
+      waivedCount: 3,
+      createdAt: '2026-07-02T00:00:00.000Z',
+      updatedAt: '2026-07-02T00:00:00.000Z',
+    },
+  ];
+  const missing = [adobe, adobe2, adobeStock, figma, uber, hotel, delta, delta2, united];
+  const waivers = new Map<string, WaiverEvidence>([
+    // mocks.ts row t17 (Starbucks) is waived by the merchant rule above.
+    ['t17', { kind: 'merchant', ruleId: 'rule-starbucks', label: 'Merchant: Starbucks', note: null, createdAt: hoursAgo(48) }],
+  ]);
+  return { queue, recent, rules, missing, waivers };
 })();
+
+/** Any mock transaction by id: the workflow fixtures above, then the main ledger fixtures. */
+function mockTransactionById(transactionId: string): Transaction | null {
+  return mock.missing.find((row) => row.id === transactionId)
+    ?? TRANSACTIONS.find((row) => row.id === transactionId)
+    ?? null;
+}
 
 function mockQueuePage(params: MatchQueueParams = {}): MatchQueuePage {
   const skip = new Set(params.skip ?? []);
@@ -244,16 +358,18 @@ export function pairFromQueue(receiptId: string, transactionId: string, options:
   if (useMockApi) {
     const item = mock.queue.find((row) => row.receipt.id === receiptId);
     const candidate = item?.candidates.find((row) => row.transaction.id === transactionId);
-    const transaction = candidate ? { ...candidate.transaction, receipt: 'matched' as const, receiptId } : undefined;
+    // Search-picked transactions aren't candidates; fall back to any mock transaction.
+    const picked = candidate?.transaction ?? mockTransactionById(transactionId);
+    const transaction = picked ? { ...picked, receipt: 'matched' as const, receiptId } : undefined;
     if (item && transaction) {
       mock.recent.unshift({
         matchId: `match-${receiptId}`,
         mode: 'manual',
         matchedAt: new Date().toISOString(),
-        score: candidate!.score,
+        score: candidate?.score ?? 0,
         receipt: { ...item.receipt, status: 'matched', transactionId },
         transaction,
-        explanations: candidate!.explanations,
+        explanations: candidate?.explanations ?? [],
       });
     }
     return delay(mockStep(receiptId, options.skip, transaction));
@@ -302,7 +418,7 @@ export function undoMatch(receiptId: string): Promise<ReceiptInboxItem> {
 export function getReceiptWorkflowCounts(params: { biz?: string } = {}): Promise<ReceiptWorkflowCounts> {
   if (useMockApi) {
     const missing = mock.missing.filter((row) => row.receipt === 'missing');
-    const waived = [...mock.waivers.keys()].length;
+    const waived = mock.waivers.size;
     return delay({
       unmatchedReceipts: mock.queue.length,
       missingReceipts: { count: missing.length, cents: missing.reduce((sum, row) => sum + Math.abs(row.amountCents ?? 0), 0) },
@@ -425,10 +541,17 @@ export async function applyWaivers(ruleId?: string): Promise<{ waived: number }>
 /** POST /transactions/:id/receipt/upload — attach a file directly to this transaction (manual pair). */
 export function uploadReceiptToTransaction(transactionId: string, file: File): Promise<UploadToTransactionResult> {
   if (useMockApi) {
-    const row = mock.missing.find((txn) => txn.id === transactionId);
+    const row = mockTransactionById(transactionId);
     if (row) row.receipt = 'matched';
-    const receipt = { ...mockReceipt(`rcpt-${transactionId}`, file.name, null, null, 'upload'), status: 'matched' as const, transactionId, extractionError: null };
-    return delay({ transaction: row ?? null, receipt, processing: true });
+    const receipt = {
+      ...mockReceipt(`rcpt-${transactionId}`, file.name, null, null, 'upload'),
+      merchant: null,
+      fileName: file.name,
+      status: 'matched' as const,
+      transactionId,
+      extractionError: null,
+    };
+    return delay({ transaction: row ? { ...row, receiptId: receipt.id } : null, receipt, processing: true });
   }
   const form = new FormData();
   form.append('file', file);
@@ -436,34 +559,72 @@ export function uploadReceiptToTransaction(transactionId: string, file: File): P
     .then((body) => ({ ...body, transaction: mapMaybeTransaction(body.transaction) }));
 }
 
+/**
+ * Mock outcomes by merchant so every state can be demoed from the ledger fixtures:
+ * Sweetgreen → found & paired, Lyft → found but needs review, anything else → nothing found.
+ */
+function mockGmailSearch(transaction: Transaction): FindInGmailResult {
+  const amount = Math.abs(transaction.amount).toFixed(2);
+  const term = transaction.merchant.toLowerCase().replace(/[^a-z ]/g, '').trim().split(/\s+/)[0] || 'receipt';
+  const search = {
+    query: `after:${transaction.date} before:${transaction.date} ("${amount}" OR (${term} (receipt OR invoice OR order OR payment OR billing OR subscription)))`,
+    merchantTerms: [term],
+    amountVariants: [amount],
+    from: transaction.date,
+    to: transaction.date,
+  };
+  const mailbox = (found: number) => [{ connectionId: 'gmail-1', email: 'receipts@draftsharks.com', messagesFound: found, newReceipts: found, error: null }];
+  const hitReceipt = (status: ReceiptInboxItem['status']) => ({
+    ...mockReceipt(`rcpt-gmail-${transaction.id}`, transaction.merchant, Math.round(Math.abs(transaction.amount) * 100), transaction.date),
+    status,
+    transactionId: status === 'matched' ? transaction.id : null,
+  });
+  if (/sweetgreen|figma/i.test(transaction.merchant)) {
+    transaction.receipt = 'matched';
+    const receipt = hitReceipt('matched');
+    return {
+      search,
+      searchable: true,
+      mailboxes: mailbox(1),
+      hits: [{
+        receipt,
+        status: 'paired_here',
+        isNew: true,
+        score: 0.95,
+        explanations: [reason('amount', 'Amount exact', 'strong', 1), reason('date', 'Same day', 'strong', 1), reason('merchant', `Merchant "${transaction.merchant}" matches`, 'strong', 1)],
+      }],
+      paired: true,
+      transaction: { ...transaction, receipt: 'matched', receiptId: receipt.id },
+    };
+  }
+  if (/lyft|uber/i.test(transaction.merchant)) {
+    return {
+      search,
+      searchable: true,
+      mailboxes: mailbox(2),
+      hits: [{
+        receipt: { ...hitReceipt('pending'), totalCents: Math.round(Math.abs(transaction.amount) * 100) + 300 },
+        status: 'candidate',
+        isNew: true,
+        score: 0.64,
+        explanations: [
+          reason('amount', 'Amount off by $3.00 (receipt higher — tip?)', 'weak', 0.3),
+          reason('date', 'Same day', 'strong', 1),
+          reason('merchant', `Merchant "${transaction.merchant}" matches`, 'strong', 1),
+        ],
+      }],
+      paired: false,
+      transaction: { ...transaction },
+    };
+  }
+  return { search, searchable: true, mailboxes: mailbox(0), hits: [], paired: false, transaction: { ...transaction } };
+}
+
 /** POST /transactions/:id/receipt/find-in-gmail — search connected mailboxes for this charge's receipt. */
 export function findReceiptInGmail(transactionId: string): Promise<FindInGmailResult> {
   if (useMockApi) {
-    const transaction = mock.missing.find((txn) => txn.id === transactionId) ?? mock.missing[0];
-    const found = transaction.id === 'txn-figma';
-    if (found) transaction.receipt = 'matched';
-    return delay({
-      search: {
-        query: 'after:2026/09/05 before:2026/09/20 ("15.00" OR (figma (receipt OR invoice OR order OR payment OR billing OR subscription)))',
-        merchantTerms: ['figma'],
-        amountVariants: ['15.00'],
-        from: '2026-09-05',
-        to: '2026-09-19',
-      },
-      searchable: true,
-      mailboxes: [{ connectionId: 'gmail-1', email: 'owner@example.com', messagesFound: found ? 1 : 0, newReceipts: found ? 1 : 0, error: null }],
-      hits: found
-        ? [{
-          receipt: { ...mockReceipt('rcpt-figma', 'Figma', 1500, '2026-09-12'), status: 'matched', transactionId: transaction.id },
-          status: 'paired_here',
-          isNew: true,
-          score: 0.95,
-          explanations: [reason('amount', 'Amount exact', 'strong', 1), reason('date', 'Same day', 'strong', 1), reason('merchant', 'Merchant "Figma" matches', 'strong', 1)],
-        }]
-        : [],
-      paired: found,
-      transaction: { ...transaction },
-    });
+    const transaction = mockTransactionById(transactionId) ?? mock.missing[0];
+    return new Promise((resolve) => setTimeout(() => resolve(mockGmailSearch(transaction)), 900));
   }
   return http<WithApiTransaction<FindInGmailResult>>(`/transactions/${transactionId}/receipt/find-in-gmail`, { method: 'POST' })
     .then((body) => ({ ...body, transaction: mapTransaction(body.transaction) }));
@@ -472,16 +633,38 @@ export function findReceiptInGmail(transactionId: string): Promise<FindInGmailRe
 /** POST /transactions/:id/receipt/waive — "no receipt needed", optionally always for this merchant. */
 export function waiveReceipt(transactionId: string, input: WaiveTransactionInput = {}): Promise<WaiveTransactionResult> {
   if (useMockApi) {
-    const row = mock.missing.find((txn) => txn.id === transactionId);
+    const row = mockTransactionById(transactionId);
     if (row) row.receipt = 'waived';
+    let rule: ReceiptWaiverRule | null = null;
+    if (input.alwaysForMerchant && row) {
+      const now = new Date().toISOString();
+      rule = {
+        id: `rule-${mock.rules.length + 1}`,
+        kind: 'merchant',
+        enabled: true,
+        label: `Merchant: ${row.merchant}`,
+        businessId: input.thisBusinessOnly ? row.businessId ?? row.biz : null,
+        thresholdCents: null,
+        excludeLodging: true,
+        merchantPattern: row.merchant.toLowerCase().replace(/[^a-z]/g, ''),
+        merchantLabel: row.merchant,
+        categoryId: null,
+        categoryName: null,
+        note: input.note ?? null,
+        waivedCount: 1,
+        createdAt: now,
+        updatedAt: now,
+      };
+      mock.rules.push(rule);
+    }
     mock.waivers.set(transactionId, {
-      kind: input.alwaysForMerchant ? 'merchant' : 'manual',
-      ruleId: null,
-      label: input.alwaysForMerchant ? `Merchant: ${row?.merchant ?? 'merchant'}` : 'Marked "no receipt needed"',
+      kind: rule ? 'merchant' : 'manual',
+      ruleId: rule?.id ?? null,
+      label: rule ? rule.label : 'Marked "no receipt needed"',
       note: input.note ?? null,
       createdAt: new Date().toISOString(),
     });
-    return delay({ transaction: row ?? null, rule: null, alsoWaived: 0 });
+    return delay({ transaction: row ? { ...row } : null, rule, alsoWaived: 0 });
   }
   return http<WithApiTransaction<WaiveTransactionResult>>(`/transactions/${transactionId}/receipt/waive`, json(input))
     .then((body) => ({ ...body, transaction: mapMaybeTransaction(body.transaction) }));
@@ -490,10 +673,10 @@ export function waiveReceipt(transactionId: string, input: WaiveTransactionInput
 /** DELETE /transactions/:id/receipt/waiver — undo a waiver (back to missing). */
 export function unwaiveReceipt(transactionId: string): Promise<Transaction | null> {
   if (useMockApi) {
-    const row = mock.missing.find((txn) => txn.id === transactionId);
+    const row = mockTransactionById(transactionId);
     if (row) row.receipt = 'missing';
     mock.waivers.delete(transactionId);
-    return delay(row ?? null);
+    return delay(row ? { ...row } : null);
   }
   return http<{ transaction: ApiTransaction | null }>(`/transactions/${transactionId}/receipt/waiver`, { method: 'DELETE' })
     .then((body) => mapMaybeTransaction(body.transaction));
