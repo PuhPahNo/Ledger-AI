@@ -15,6 +15,8 @@ import { RulesTab } from '../admin/tabs/RulesTab';
 import { TagsTab } from '../admin/tabs/TagsTab';
 import { UsersTab } from '../admin/tabs/UsersTab';
 import { AccountSecurityPanel } from '../shell/AccountSecurityPanel';
+import { QuickbooksSettings } from '../quickbooks/QuickbooksSettings';
+import { LearnedRulesSettings } from './LearnedRulesSettings';
 
 /** Everything a settings section may need; loaded once by SettingsPage. */
 export interface SettingsSectionProps {
@@ -44,17 +46,19 @@ function BusinessesAndAccounts(props: SettingsSectionProps) {
     <div className="grid gap-4">
       <BusinessesTab data={props.data} saveAndRefresh={props.saveAndRefresh} />
       <ConnectionsTab connections={props.connections} onOpenConnections={props.openConnectionsManager} />
+      <QuickbooksSettings businesses={props.businesses} />
     </div>
   );
 }
 
-type CategorySub = 'categories' | 'rules' | 'tags';
+type CategorySub = 'categories' | 'rules' | 'learned' | 'tags';
 
 function CategoriesAndRules(props: SettingsSectionProps) {
   const [sub, setSub] = useState<CategorySub>('categories');
   const subs: Array<{ id: CategorySub; label: string; render: () => ReactNode }> = [
     { id: 'categories', label: 'Categories', render: () => <CategoriesTab data={props.data} businesses={props.businesses} saveAndRefresh={props.saveAndRefresh} /> },
     { id: 'rules', label: 'Rules', render: () => <RulesTab data={props.data} businesses={props.businesses} saveAndRefresh={props.saveAndRefresh} /> },
+    { id: 'learned', label: 'Learned', render: () => <LearnedRulesSettings /> },
     { id: 'tags', label: 'Tags', render: () => <TagsTab /> },
   ];
   const active = subs.find((item) => item.id === sub) ?? subs[0];

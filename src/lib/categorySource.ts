@@ -33,11 +33,11 @@ export function isGuessedCategorySource(source?: AnyCategorySource): boolean {
 }
 
 /** Short tag for table rows — only guessed sources get one, so trust gaps stand out. */
-export function categorySourceTag(source?: AnyCategorySource, confidence?: number): string | null {
+export function categorySourceTag(source?: AnyCategorySource, confidence?: number, evidence?: Record<string, unknown>): string | null {
   if (!isGuessedCategorySource(source)) return null;
   if (source === 'ai_suggested') {
     return confidence != null ? `AI ${Math.round(confidence * 100)}%` : 'AI';
   }
-  if (source === 'external_signal') return 'ext';
+  if (source === 'external_signal') return evidence?.signalSource === 'quickbooks' ? 'QBO' : 'ext';
   return 'auto';
 }

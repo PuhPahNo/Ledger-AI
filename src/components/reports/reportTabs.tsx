@@ -3,6 +3,7 @@ import type { Business } from '@/types/domain';
 import type { NavigateFn, ReportsTab, TransactionViewFilters } from '@/types/navigation';
 import { AccountsReport } from './AccountsReport';
 import { CloseReport } from './CloseReport';
+import { ContractorsReport } from './ContractorsReport';
 import { OverviewReport } from './OverviewReport';
 
 /** What every Reports tab receives. Each tab owns its own period controls and data loading. */
@@ -29,4 +30,5 @@ export const REPORT_TABS: ReportTabDefinition[] = [
   { id: 'overview', label: 'Overview', component: OverviewReport },
   { id: 'accounts', label: 'Accounts', component: AccountsReport },
   { id: 'close', label: 'Close', component: CloseReport },
+  { id: 'contractors', label: 'Contractors', component: ContractorsReport },
 ];

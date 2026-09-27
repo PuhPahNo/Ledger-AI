@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import {
   getTransactionRollup,
   listAlerts,
-  listCategorizationReviewItems,
   listConnections,
   listReceipts,
   type AlertItem,
 } from '@/api';
-import type { CategorizationReviewItem, Connection, ReceiptInboxItem } from '@/types/domain';
+import { listOpenReviewItems, listReviewGroups } from '@/api/automation';
+import type { Connection, ReceiptInboxItem } from '@/types/domain';
+import type { ReviewGroup } from '@/types/automation';
+import type { AnyReviewItem } from '@/lib/reviewGroups';
 
 /**
  * Everything the Inbox lists, loaded once and shared: the Inbox page renders it and the
@@ -15,7 +17,10 @@ import type { CategorizationReviewItem, Connection, ReceiptInboxItem } from '@/t
  */
 export interface InboxData {
   receipts: ReceiptInboxItem[];
-  reviewItems: CategorizationReviewItem[];
+  /** One decision per (business, merchant, proposed category) — what Needs you lists and counts. */
+  reviewGroups: ReviewGroup[];
+  /** The individual items behind the groups (for expanding a group); not counted. */
+  reviewItems: AnyReviewItem[];
   troubledConnections: Connection[];
   missingReceipts: { rows: number; outflowCents: number };
   alerts: AlertItem[];
@@ -23,6 +28,7 @@ export interface InboxData {
 
 export const emptyInbox: InboxData = {
   receipts: [],
+  reviewGroups: [],
   reviewItems: [],
   troubledConnections: [],
   missingReceipts: { rows: 0, outflowCents: 0 },
@@ -38,11 +44,12 @@ export function isTroubledConnection(connection: Connection): boolean {
 /**
  * Number of things waiting in the Inbox — the same items, counted the same way, as the page
  * shows. Missing receipts are one summary line on the page, so they count once; counting every
- * transaction would pin the badge at "9+" for as long as any receipt is outstanding.
+ * transaction would pin the badge at "9+" for as long as any receipt is outstanding. Reviews
+ * count per group (one row, one decision), not per item.
  */
 export function inboxAttentionCount(data: InboxData): number {
   return data.receipts.length
-    + data.reviewItems.length
+    + data.reviewGroups.length
     + data.troubledConnections.length
     + (data.missingReceipts.rows > 0 ? 1 : 0)
     + data.alerts.length;
@@ -54,9 +61,10 @@ let inflight: Promise<InboxData> | null = null;
 const listeners = new Set<(data: InboxData) => void>();
 
 async function fetchInbox(): Promise<InboxData> {
-  const [receipts, reviewItems, connections, rollup, alerts] = await Promise.allSettled([
+  const [receipts, reviewGroups, reviewItems, connections, rollup, alerts] = await Promise.allSettled([
     listReceipts({ status: 'pending', unmatched: true, limit: 100 }),
-    listCategorizationReviewItems(),
+    listReviewGroups(),
+    listOpenReviewItems(),
     listConnections(),
     // Same definition as the close queue: operating outflow still needing a receipt.
     getTransactionRollup({ receipts: ['missing'], direction: 'operating-outflow' }),
@@ -65,6 +73,7 @@ async function fetchInbox(): Promise<InboxData> {
   const previous = cache?.data ?? emptyInbox;
   return {
     receipts: receipts.status === 'fulfilled' ? receipts.value : previous.receipts,
+    reviewGroups: reviewGroups.status === 'fulfilled' ? reviewGroups.value : previous.reviewGroups,
     reviewItems: reviewItems.status === 'fulfilled' ? reviewItems.value : previous.reviewItems,
     troubledConnections: connections.status === 'fulfilled'
       ? connections.value.filter(isTroubledConnection)

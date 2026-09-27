@@ -8,7 +8,7 @@ export type AppView = 'home' | 'transactions' | 'reports' | 'assistant' | 'setti
 export type TransactionsMode = 'transactions' | 'receipts';
 
 /** Reports tabs. Add a tab here and register it in components/reports/reportTabs.tsx. */
-export type ReportsTab = 'overview' | 'accounts' | 'close';
+export type ReportsTab = 'overview' | 'accounts' | 'close' | 'contractors';
 
 /** Settings sections. Add one here and register it in components/settings/settingsSections.tsx. */
 export type SettingsSection = 'businesses' | 'categories' | 'security' | 'data';
