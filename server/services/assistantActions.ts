@@ -92,14 +92,23 @@ async function applyConfirmedAction(
     };
   }
   if (payload.kind === 'category_rule') {
-    const [rule] = await db.insert(categoryRules).values({
-      businessId: payload.businessId ?? null,
-      categoryId: payload.categoryId,
-      matchKind: payload.matchKind,
-      pattern: normalizeRulePattern(payload.pattern),
-      priority: payload.priority,
-      createdByAi: true,
-    }).returning();
+    let rule: typeof categoryRules.$inferSelect;
+    try {
+      [rule] = await db.insert(categoryRules).values({
+        businessId: payload.businessId ?? null,
+        categoryId: payload.categoryId,
+        matchKind: payload.matchKind,
+        pattern: normalizeRulePattern(payload.pattern),
+        priority: payload.priority,
+        createdByAi: true,
+      }).returning();
+    } catch (error) {
+      // One exact-merchant rule per business (unique index): say so instead of a 500.
+      const code = (error as { code?: string; cause?: { code?: string } })?.code
+        ?? (error as { cause?: { code?: string } })?.cause?.code;
+      if (code === '23505') throw new HttpError(409, 'A rule for this merchant already exists. Edit it on the Rules tab instead.');
+      throw error;
+    }
     await audit(context.request!, context.user, 'assistant_create_category_rule', 'category_rule', rule.id, redactPayload(payload));
     return { ok: true, message: `Category rule created: ${payload.matchKind} "${normalizeRulePattern(payload.pattern)}".` };
   }
