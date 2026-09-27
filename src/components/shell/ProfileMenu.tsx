@@ -44,6 +44,7 @@ function ProfileMenu({
   const [open, setOpen] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [totp, setTotp] = useState<{ qrDataUrl: string; code: string } | null>(null);
+  const [currentTotpCode, setCurrentTotpCode] = useState('');
   const { toast } = useToast();
   const { theme, setTheme } = useTheme();
 
@@ -67,8 +68,17 @@ function ProfileMenu({
   };
 
   const startTotp = async () => {
-    const result = await setupTotp();
-    setTotp({ qrDataUrl: result.qrDataUrl, code: '' });
+    try {
+      const result = await setupTotp(user?.totpEnabled ? currentTotpCode : undefined);
+      setCurrentTotpCode('');
+      setTotp({ qrDataUrl: result.qrDataUrl, code: '' });
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: '2FA setup failed',
+        description: error instanceof Error ? error.message : 'Try again.',
+      });
+    }
   };
 
   const confirmTotp = async () => {
@@ -145,10 +155,28 @@ function ProfileMenu({
         <Separator className="my-3" />
 
         {!totp ? (
-          <Button variant="outline" size="sm" onClick={startTotp}>
-            <ShieldCheck className="h-3.5 w-3.5" />
-            Set up 2FA
-          </Button>
+          <div className="grid gap-2">
+            {user?.totpEnabled && (
+              <Input
+                name="profile-current-totp"
+                value={currentTotpCode}
+                onChange={(event) => setCurrentTotpCode(event.target.value)}
+                placeholder="Current authenticator code"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                className="h-9"
+              />
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={startTotp}
+              disabled={Boolean(user?.totpEnabled) && currentTotpCode.trim().length < 6}
+            >
+              <ShieldCheck className="h-3.5 w-3.5" />
+              {user?.totpEnabled ? 'Replace authenticator' : 'Set up 2FA'}
+            </Button>
+          </div>
         ) : (
           <div className="grid gap-2">
             {totp.qrDataUrl && (

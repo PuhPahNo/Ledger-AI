@@ -13,6 +13,8 @@ import { ReceiptsPage } from './components/ReceiptsPage';
 import { TransactionsPage } from './components/TransactionsPage';
 import { clearDashboardCache } from './hooks/useDashboard';
 import { clearInboxCache } from './hooks/useInbox';
+import { clearConversation } from './components/assistant/conversationStorage';
+import { LEDGER_DATA_CHANGED_EVENT } from './types/assistant';
 import type { CurrentUser } from './types/domain';
 import type { AppView, TransactionViewFilters } from './types/navigation';
 
@@ -72,10 +74,23 @@ export default function App() {
     return () => window.removeEventListener('hashchange', syncView);
   }, []);
 
+  // Assistant-applied changes (recategorize, pair receipts, new rules) make cached page
+  // data stale; drop the caches so the next page visit refetches.
+  useEffect(() => {
+    const invalidate = () => {
+      clearDashboardCache();
+      clearInboxCache();
+    };
+    window.addEventListener(LEDGER_DATA_CHANGED_EVENT, invalidate);
+    return () => window.removeEventListener(LEDGER_DATA_CHANGED_EVENT, invalidate);
+  }, []);
+
   const handleLogout = async () => {
     await logout();
     clearDashboardCache();
     clearInboxCache();
+    // The saved assistant chat holds financial answers; don't leave it for the next login.
+    clearConversation();
     setUser(null);
     setView('dashboard');
   };

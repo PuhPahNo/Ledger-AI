@@ -33,9 +33,13 @@ export function logout(): Promise<void> {
   return http<void>('/auth/logout', { method: 'POST' });
 }
 
-export function setupTotp(): Promise<{ otpauth: string; qrDataUrl: string }> {
+/** `currentCode` is required by the server when 2FA is already enabled (re-keying). */
+export function setupTotp(currentCode?: string): Promise<{ otpauth: string; qrDataUrl: string }> {
   if (useMockApi) return Promise.resolve({ otpauth: 'otpauth://mock', qrDataUrl: '' });
-  return http<{ otpauth: string; qrDataUrl: string }>('/auth/totp/setup', { method: 'POST' });
+  return http<{ otpauth: string; qrDataUrl: string }>('/auth/totp/setup', {
+    method: 'POST',
+    body: JSON.stringify(currentCode ? { currentCode } : {}),
+  });
 }
 
 export function enableTotp(code: string): Promise<{ ok: true }> {
