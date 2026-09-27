@@ -205,7 +205,7 @@ export function TagsTab() {
                           <Button
                             variant="outline"
                             size="sm"
-                            disabled={busy || !(rules?.length ?? tag.txnCount)}
+                            disabled={busy || !tag.active || !(rules?.length ?? tag.txnCount)}
                             onClick={() => handleApply(tag)}
                             title="Run this tag's rules across all existing transactions"
                           >

@@ -157,7 +157,8 @@ export function RulesTab({ data, businesses, saveAndRefresh }: Props) {
             value={ruleForm.categoryId}
             onChange={(categoryId) => setRuleForm({ ...ruleForm, categoryId })}
             placeholder="Choose"
-            options={data.categories.map((category) => ({ value: category.id, label: category.name }))}
+            options={categoriesForScope(data.categories, ruleForm.businessId || null)
+              .map((category) => ({ value: category.id, label: category.name }))}
           />
           <FieldSelect
             label="Match"
@@ -225,6 +226,11 @@ export function RulesTab({ data, businesses, saveAndRefresh }: Props) {
                             </span>
                             <span className="font-bold">“{rule.pattern}”</span>
                             {rule.createdByAi && <Badge variant="secondary">AI-created</Badge>}
+                            {rule.userConfirmed && (
+                              <Badge variant="secondary" title="Categories set by this rule are never auto-overwritten">
+                                Trusted
+                              </Badge>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell>
@@ -235,10 +241,10 @@ export function RulesTab({ data, businesses, saveAndRefresh }: Props) {
                           >
                             <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                             <SelectContent>
-                              {data.categories.map((category) => (
+                              {categoriesForScope(data.categories, rule.businessId).map((category) => (
                                 <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>
                               ))}
-                              {!data.categories.some((category) => category.id === rule.categoryId) && (
+                              {!categoriesForScope(data.categories, rule.businessId).some((category) => category.id === rule.categoryId) && (
                                 <SelectItem value={rule.categoryId}>{rule.categoryName}</SelectItem>
                               )}
                             </SelectContent>
@@ -296,4 +302,14 @@ export function RulesTab({ data, businesses, saveAndRefresh }: Props) {
       </Card>
     </div>
   );
+}
+
+/** A rule can only target active categories that are global or owned by its business. */
+function categoriesForScope(
+  categories: AdminOverview['categories'],
+  businessId: string | null,
+): AdminOverview['categories'] {
+  return categories.filter((category) => (
+    category.active && (category.businessId == null || category.businessId === businessId)
+  ));
 }

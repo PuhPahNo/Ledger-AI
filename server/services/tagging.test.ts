@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { tagRuleMatches } from './tagging.js';
+import { tagRuleDedupeKey, tagRuleMatches, withoutSuppressedTags } from './tagging.js';
 
 describe('tagRuleMatches', () => {
   it('matches merchant contains rules case-insensitively', () => {
@@ -49,5 +49,21 @@ describe('tagRuleMatches', () => {
       { matchKind: 'receipt_contains', pattern: 'openai' },
       { merchant: 'OpenAI', receiptText: null },
     )).toBe(false);
+  });
+});
+
+describe('tagRuleDedupeKey', () => {
+  it('treats patterns that normalize the same as duplicates', () => {
+    expect(tagRuleDedupeKey({ matchKind: 'merchant_contains', pattern: 'OpenAI.' }))
+      .toBe(tagRuleDedupeKey({ matchKind: 'merchant_contains', pattern: ' openai ' }));
+    expect(tagRuleDedupeKey({ matchKind: 'merchant_exact', pattern: 'openai' }))
+      .not.toBe(tagRuleDedupeKey({ matchKind: 'merchant_contains', pattern: 'openai' }));
+  });
+});
+
+describe('withoutSuppressedTags', () => {
+  it('never re-adds a tag the user removed from the transaction', () => {
+    expect(withoutSuppressedTags(new Set(['ai', 'travel']), new Set(['ai']))).toEqual(['travel']);
+    expect(withoutSuppressedTags(['ai'], new Set())).toEqual(['ai']);
   });
 });

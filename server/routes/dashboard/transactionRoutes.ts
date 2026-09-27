@@ -1,17 +1,27 @@
 import type { FastifyInstance } from 'fastify';
-import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, lt, lte, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, getTableColumns, gte, ilike, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../../auth/session.js';
 import { db } from '../../db/client.js';
-import { accounts, businesses, categories, transactionTags, transactions } from '../../db/schema.js';
+import { accounts, businesses, categories, transactionTags, transactions, type Transaction } from '../../db/schema.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { audit } from '../../services/audit.js';
-import { categoryMatchesTransactionDirection, isIncomeCategory } from '../../services/categorization.js';
+import {
+  categoryMatchesTransactionDirection,
+  invalidateAiCategorizationCache,
+  isIncomeCategory,
+  normalize,
+} from '../../services/categorization.js';
 import { createManualCategorizationFeedback } from '../../services/categorizationFeedback.js';
+import { recordCategoryEvent } from '../../services/categorizationReviewActions.js';
 import { attachReceipt } from '../../services/matching.js';
 import { getReceiptTrackingSince, setReceiptTrackingSince } from '../../services/appSettings.js';
 import { applyTagRulesBestEffort, tagsByTransactionId } from '../../services/tagging.js';
-import { normalizeTransactionOverride } from '../../services/transactionOverrides.js';
+import {
+  manualCategoryFeedbackKey,
+  normalizeTransactionOverride,
+  shouldLearnFromManualCategory,
+} from '../../services/transactionOverrides.js';
 import { toApiTransaction } from '../mappers.js';
 import {
   accountSpendFilter,
@@ -193,6 +203,10 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
       selectedCategory = await db.query.categories.findFirst({ where: eq(categories.id, body.categoryId) });
       if (!selectedCategory) notFound('Category not found');
     }
+    // Clearing a category files it under the global "Uncategorized" category — the same
+    // representation Plaid sync and the nightly scan use — rather than a bare null.
+    const clearingCategory = body.categoryId === null;
+    const uncategorizedId = clearingCategory ? await uncategorizedCategoryId() : null;
 
     const previous = await db.query.transactions.findFirst({ where: eq(transactions.id, params.id) });
     if (!previous) notFound('Transaction not found');
@@ -219,26 +233,37 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
 
     const [updated] = await db
       .update(transactions)
-      .set({ ...body, ...categoryProvenance, updatedAt: new Date() })
+      .set({
+        ...body,
+        ...(clearingCategory ? { categoryId: uncategorizedId } : {}),
+        ...categoryProvenance,
+        updatedAt: new Date(),
+      })
       .where(eq(transactions.id, params.id))
       .returning();
     if (!updated) notFound('Transaction not found');
-    if (
-      body.categoryId
-      && updated.categoryId
-      && updated.amountCents < 0
-      && selectedCategory
-      && !isIncomeCategory(selectedCategory)
-      && previous.categoryId !== updated.categoryId
-    ) {
-      await createManualCategorizationFeedback({
-        transaction: updated,
-        previousCategoryId: previous.categoryId,
-        newCategoryId: updated.categoryId,
+    if (body.categoryId !== undefined) {
+      await recordManualCategoryChange({
+        previous,
+        updated,
+        evidence: { source: 'transaction_drawer', ...(clearingCategory ? { cleared: true } : {}) },
         userId: user.id,
       });
+      if (
+        updated.categoryId
+        && selectedCategory
+        && previous.categoryId !== updated.categoryId
+        && shouldLearnFromManualCategory(updated.amountCents, isIncomeCategory(selectedCategory))
+      ) {
+        await createManualCategorizationFeedback({
+          transaction: updated,
+          previousCategoryId: previous.categoryId,
+          newCategoryId: updated.categoryId,
+          userId: user.id,
+        });
+      }
+      await applyTagRulesBestEffort(updated.id);
     }
-    if (body.categoryId !== undefined) await applyTagRulesBestEffort(updated.id);
     await audit(request, user, 'update_transaction', 'transaction', params.id, { ...body });
 
     const row = await transactionById(params.id);
@@ -247,7 +272,8 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
   });
 
   // Bulk manual categorization — the drawer's one-at-a-time flow made cleaning up a
-  // merchant's history painful. Learning feedback fires once per distinct merchant.
+  // merchant's history painful. Every changed row gets a category event; learning
+  // feedback fires once per distinct (business, normalized merchant).
   app.post('/transactions/bulk-category', async (request) => {
     const user = await requireUser(request);
     const body = z.object({
@@ -273,7 +299,7 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
         continue;
       }
       const previousCategoryId = transaction.categoryId;
-      await db
+      const [saved] = await db
         .update(transactions)
         .set({
           categoryId: body.categoryId,
@@ -282,24 +308,30 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
           categoryEvidence: { source: 'bulk_categorize' },
           updatedAt: new Date(),
         })
-        .where(eq(transactions.id, transaction.id));
+        .where(eq(transactions.id, transaction.id))
+        .returning();
+      if (!saved) continue;
       updated += 1;
-      await applyTagRulesBestEffort(transaction.id);
 
-      const merchantKey = `${transaction.businessId}:${transaction.merchant.toLowerCase()}`;
-      if (
-        transaction.amountCents < 0
-        && !isIncomeCategory(selectedCategory)
-        && !seenMerchants.has(merchantKey)
-      ) {
-        seenMerchants.add(merchantKey);
+      const merchantKey = manualCategoryFeedbackKey(saved);
+      const firstForMerchant = !seenMerchants.has(merchantKey);
+      seenMerchants.add(merchantKey);
+      await recordManualCategoryChange({
+        previous: transaction,
+        updated: saved,
+        evidence: { source: 'bulk_categorize' },
+        userId: user.id,
+        invalidateAiCache: firstForMerchant,
+      });
+      if (firstForMerchant && shouldLearnFromManualCategory(saved.amountCents, isIncomeCategory(selectedCategory))) {
         await createManualCategorizationFeedback({
-          transaction: { ...transaction, categoryId: body.categoryId },
+          transaction: saved,
           previousCategoryId,
           newCategoryId: body.categoryId,
           userId: user.id,
         });
       }
+      await applyTagRulesBestEffort(saved);
     }
 
     await audit(request, user, 'bulk_categorize_transactions', 'transaction', undefined, {
@@ -354,6 +386,39 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
     await audit(request, user, 'waive_missing_receipts', 'transaction', 'bulk', { before: body.before, count: updated.length });
     return { waived: updated.length, since: body.before };
   });
+}
+
+/**
+ * Every human category change (any direction, including clears) lands in the event log,
+ * and the cached AI verdict for that merchant is dropped so the AI stops replaying it.
+ */
+async function recordManualCategoryChange(input: {
+  previous: Transaction;
+  updated: Transaction;
+  evidence: Record<string, unknown>;
+  userId: string;
+  invalidateAiCache?: boolean;
+}): Promise<void> {
+  if (input.previous.categoryId === input.updated.categoryId) return;
+  await recordCategoryEvent({
+    transaction: input.updated,
+    previousCategoryId: input.previous.categoryId,
+    newCategoryId: input.updated.categoryId,
+    source: 'manual',
+    confidence: 1,
+    evidence: input.evidence,
+    userId: input.userId,
+  });
+  if (input.invalidateAiCache !== false && normalize(input.updated.merchant)) {
+    await invalidateAiCategorizationCache(input.updated);
+  }
+}
+
+async function uncategorizedCategoryId(): Promise<string | null> {
+  const row = await db.query.categories.findFirst({
+    where: and(isNull(categories.businessId), eq(categories.name, 'Uncategorized')),
+  });
+  return row?.id ?? null;
 }
 
 async function transactionById(id: string) {

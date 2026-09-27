@@ -14,12 +14,12 @@ import {
   categoryMatchesTransactionDirection,
   categorizeTransactionWithDetails,
   normalize,
+  shouldAutoApplyAiSuggestion,
 } from './categorization.js';
 import {
   acceptLearningRule,
   applyReviewItemCategory,
   countRuleMatches,
-  recordCategoryEvent,
   updateTransactionCategory,
   upsertReviewItem,
 } from './categorizationReviewActions.js';
@@ -40,6 +40,11 @@ export interface CategorizationReviewSummary {
   conflictCount: number;
 }
 
+/**
+ * Learning side of a manual outflow correction: store the feedback example the AI prompt
+ * uses and open a "learn this merchant?" prompt. The caller records the category event
+ * (one per changed transaction) itself.
+ */
 export async function createManualCategorizationFeedback(input: {
   transaction: Transaction;
   previousCategoryId: string | null;
@@ -63,16 +68,6 @@ export async function createManualCategorizationFeedback(input: {
     source: 'manual',
     payload: { reason: 'transaction_category_edit' },
     createdByUserId: input.userId,
-  });
-
-  await recordCategoryEvent({
-    transaction: input.transaction,
-    previousCategoryId: input.previousCategoryId,
-    newCategoryId: input.newCategoryId,
-    source: 'manual',
-    confidence: 1,
-    evidence: { reason: 'manual_transaction_edit' },
-    userId: input.userId,
   });
 
   const counts = await countRuleMatches(input.transaction.businessId, normalizedMerchant, input.newCategoryId);
@@ -141,11 +136,17 @@ export async function resolveCategorizationReviewItem(input: {
       appliedCount = result.appliedCount;
       conflictCount = result.conflictCount;
     } else if (item.type === 'ai_category_suggestion') {
-      appliedCount = await applyReviewItemCategory(item, 'ai_suggested', input.userId);
+      // A human approved it: store it under the protected 'manual' source so Plaid updates
+      // can't overwrite it; the evidence (and event log) keep the AI provenance.
+      appliedCount = await applyReviewItemCategory(item, 'manual', input.userId, {
+        confidence: 1,
+        evidence: acceptedAiSuggestionEvidence(item.payload.confidence),
+      });
+      await recordAcceptedAiSuggestionFeedback(item, input.userId);
     } else if (item.type === 'receipt_category_override') {
-      appliedCount = await applyReviewItemCategory(item, 'receipt_evidence', input.userId);
+      appliedCount = await applyReviewItemCategory(item, 'receipt_evidence', input.userId, { invalidateAiCache: true });
     } else if (item.type === 'rule_conflict_review') {
-      appliedCount = await applyReviewItemCategory(item, 'user_confirmed_rule', input.userId);
+      appliedCount = await applyReviewItemCategory(item, 'user_confirmed_rule', input.userId, { invalidateAiCache: true });
     }
   }
 
@@ -166,6 +167,36 @@ export async function resolveCategorizationReviewItem(input: {
     appliedCount,
     conflictCount,
   };
+}
+
+export function acceptedAiSuggestionEvidence(aiConfidence: number | null | undefined): Record<string, unknown> {
+  return {
+    acceptedAiSuggestion: true,
+    aiConfidence: aiConfidence ?? null,
+    source: 'review_center',
+  };
+}
+
+/** An accepted suggestion is a human confirmation — feed it back as an AI example. */
+async function recordAcceptedAiSuggestionFeedback(item: CategorizationReviewItem, userId?: string): Promise<void> {
+  const categoryId = item.payload.proposedCategoryId;
+  const transactionId = item.payload.transactionId ?? item.payload.transactionIds?.[0];
+  if (!categoryId || !transactionId) return;
+  const transaction = await db.query.transactions.findFirst({ where: eq(transactions.id, transactionId) });
+  if (!transaction) return;
+  const normalizedMerchant = normalize(transaction.merchant);
+  if (!normalizedMerchant || normalizedMerchant === 'unknown merchant') return;
+  await db.insert(categorizationFeedback).values({
+    businessId: transaction.businessId,
+    transactionId: transaction.id,
+    merchant: transaction.merchant,
+    normalizedMerchant,
+    previousCategoryId: item.payload.currentCategoryId ?? null,
+    newCategoryId: categoryId,
+    source: 'ai_suggestion_accepted',
+    payload: { reviewItemId: item.id },
+    createdByUserId: userId,
+  });
 }
 
 export async function scanUncategorizedTransactions(input: { businessId?: string; limit?: number } = {}): Promise<number> {
@@ -192,7 +223,8 @@ export async function scanUncategorizedTransactions(input: { businessId?: string
       plaidCategory: plaidCategoryHints(transaction.raw),
     });
     if (!result.categoryId || result.source === 'uncategorized') continue;
-    if (result.source === 'ai_suggested') {
+    // Same bar as Plaid sync: confident AI verdicts apply, the rest go to review.
+    if (result.source === 'ai_suggested' && !shouldAutoApplyAiSuggestion(result)) {
       await createAiCategorySuggestionReview(transaction, result);
       touched += 1;
       continue;

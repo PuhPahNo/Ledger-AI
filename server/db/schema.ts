@@ -167,9 +167,15 @@ export const categoryRules = pgTable('category_rules', {
   pattern: text('pattern').notNull(),
   priority: integer('priority').notNull().default(100),
   createdByAi: boolean('created_by_ai').notNull().default(false),
+  // A human created or confirmed this rule: its hits are protected ('user_confirmed_rule')
+  // regardless of priority.
+  userConfirmed: boolean('user_confirmed').notNull().default(false),
   ...timestamps,
 }, (table) => ({
   priorityIdx: index('category_rules_priority_idx').on(table.businessId, table.priority),
+  businessMerchantExactIdx: uniqueIndex('category_rules_business_merchant_exact_idx')
+    .on(table.businessId, table.pattern)
+    .where(sql`${table.matchKind} = 'merchant_exact' AND ${table.businessId} IS NOT NULL`),
 }));
 
 export const receiptUploaders = pgTable('receipt_uploaders', {
@@ -283,6 +289,16 @@ export const transactionTags = pgTable('transaction_tags', {
 }, (table) => ({
   pk: primaryKey({ columns: [table.transactionId, table.tagId] }),
   tagIdx: index('transaction_tags_tag_idx').on(table.tagId),
+}));
+
+// Tags a user explicitly removed from a transaction; tag rules never re-add these.
+export const transactionTagSuppressions = pgTable('transaction_tag_suppressions', {
+  transactionId: uuid('transaction_id').notNull().references(() => transactions.id, { onDelete: 'cascade' }),
+  tagId: uuid('tag_id').notNull().references(() => tags.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.transactionId, table.tagId] }),
+  tagIdx: index('transaction_tag_suppressions_tag_idx').on(table.tagId),
 }));
 
 export const tagRules = pgTable('tag_rules', {
