@@ -13,9 +13,13 @@ import {
 import {
   ASSISTANT_MUTATION_LIMIT,
   type AssistantReceiptUpdatePayload,
+  type AssistantTokenPayload,
+  safeJson,
   signAssistantToken,
   verifyAssistantToken,
 } from './assistantSecurity.js';
+import { assistantTokenStore } from './assistantTokenStore.js';
+import { HttpError } from '../lib/errors.js';
 import type { ConfirmAssistantActionResult, AssistantToolContext, AssistantToolResult } from './assistantToolTypes.js';
 import {
   bulkTransactionUpdateSchema,
@@ -33,15 +37,39 @@ export async function confirmAssistantAction(
   context: AssistantToolContext,
 ): Promise<ConfirmAssistantActionResult> {
   const envelope = verifyAssistantToken(token, context.user.id);
-  if (!envelope) throw new Error('This approval expired or is invalid. Ask the assistant to prepare it again.');
+  if (!envelope) throw new HttpError(410, 'This approval expired or is invalid. Ask the assistant to prepare it again.');
   const payload = envelope.payload;
   if (payload.kind === 'data_expansion') {
-    return { ok: true, message: 'Expanded data approved for the next assistant request.' };
+    // Expanded-data approvals are redeemed (and consumed) by the next /assistant/message call.
+    return { ok: true, message: 'Expanded data approved for the next assistant request.', actionId: envelope.jti };
   }
+  const store = assistantTokenStore();
+  if (!(await store.consume(envelope))) {
+    throw new HttpError(409, 'This approval was already used.');
+  }
+  try {
+    const result = await applyConfirmedAction(payload, context);
+    return {
+      ...result,
+      actionId: envelope.jti,
+      contextNote: `Confirmed ${payload.kind}: ${result.message} Details: ${safeJson(redactPayload(payload))}`,
+    };
+  } catch (error) {
+    // Idempotent updates can be retried from the same card. Rule creation is not idempotent, so a
+    // failure after the insert must not re-open the token.
+    if (payload.kind !== 'category_rule') await store.release(envelope.jti).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function applyConfirmedAction(
+  payload: Exclude<AssistantTokenPayload, { kind: 'data_expansion' }>,
+  context: AssistantToolContext,
+): Promise<ConfirmAssistantActionResult> {
   if (payload.kind === 'transaction_update') {
     const update = transactionUpdatePayload(payload);
     const [row] = await db.update(transactions).set(update).where(eq(transactions.id, payload.transactionId)).returning();
-    if (!row) throw new Error('Transaction not found.');
+    if (!row) throw new HttpError(400, 'Transaction not found.');
     await audit(context.request!, context.user, 'assistant_update_transaction', 'transaction', payload.transactionId, redactPayload(payload));
     return {
       ok: true,
@@ -50,7 +78,7 @@ export async function confirmAssistantAction(
     };
   }
   if (payload.kind === 'bulk_transaction_update') {
-    if (payload.transactionIds.length > ASSISTANT_MUTATION_LIMIT) throw new Error('Bulk update exceeds assistant limit.');
+    if (payload.transactionIds.length > ASSISTANT_MUTATION_LIMIT) throw new HttpError(400, 'Bulk update exceeds assistant limit.');
     const update = transactionUpdatePayload(payload);
     await db.update(transactions).set(update).where(inArray(transactions.id, payload.transactionIds));
     await audit(context.request!, context.user, 'assistant_bulk_update_transactions', 'transaction', undefined, {
@@ -73,7 +101,7 @@ export async function confirmAssistantAction(
       createdByAi: true,
     }).returning();
     await audit(context.request!, context.user, 'assistant_create_category_rule', 'category_rule', rule.id, redactPayload(payload));
-    return { ok: true, message: 'Category rule created.' };
+    return { ok: true, message: `Category rule created: ${payload.matchKind} "${normalizeRulePattern(payload.pattern)}".` };
   }
   if (payload.kind === 'receipt_update') {
     await applyReceiptUpdates(payload.receiptId, payload.updates);
@@ -119,7 +147,7 @@ export async function proposeBulkTransactionUpdate(args: z.infer<typeof bulkTran
 export async function proposeCategoryRule(args: z.infer<typeof categoryRuleSchema>, userId: string): Promise<AssistantToolResult> {
   const business = await resolveBusiness(args.business ?? args.businessId ?? null);
   const category = await db.query.categories.findFirst({ where: eq(categories.id, args.categoryId) });
-  if (!category) throw new Error('Category not found.');
+  if (!category) throw new HttpError(400, 'Category not found.');
   const approval = createApproval(userId, {
     kind: 'category_rule',
     businessId: business?.id ?? args.businessId ?? null,
@@ -133,9 +161,9 @@ export async function proposeCategoryRule(args: z.infer<typeof categoryRuleSchem
 
 export async function proposeReceiptUpdate(args: z.infer<typeof receiptUpdateSchema>, userId: string): Promise<AssistantToolResult> {
   const receipt = await receiptById(args.receiptId);
-  if (!receipt) throw new Error('Receipt not found.');
+  if (!receipt) throw new HttpError(400, 'Receipt not found.');
   const updates = receiptUpdatePayload(args);
-  if (Object.keys(updates).length === 0) throw new Error('No receipt changes were provided.');
+  if (Object.keys(updates).length === 0) throw new HttpError(400, 'No receipt changes were provided.');
   const approval = createApproval(userId, {
     kind: 'receipt_update',
     receiptId: args.receiptId,
@@ -149,8 +177,8 @@ export async function proposeReceiptPairing(args: z.infer<typeof receiptPairingS
     receiptById(args.receiptId),
     db.query.transactions.findFirst({ where: eq(transactions.id, args.transactionId) }),
   ]);
-  if (!receipt) throw new Error('Receipt not found.');
-  if (!transaction) throw new Error('Transaction not found.');
+  if (!receipt) throw new HttpError(400, 'Receipt not found.');
+  if (!transaction) throw new HttpError(400, 'Transaction not found.');
   assertPairingAllowed(receipt, transaction);
   const updates = receiptUpdatePayload(args);
   const approval = createApproval(userId, {
@@ -180,11 +208,11 @@ async function buildTransactionUpdatePayload(args: {
     : args.categoryId;
   if (categoryId) {
     const category = await db.query.categories.findFirst({ where: eq(categories.id, categoryId) });
-    if (!category) throw new Error('Category not found.');
+    if (!category) throw new HttpError(400, 'Category not found.');
   }
-  if (args.businessId && !business) throw new Error('Business not found.');
+  if (args.businessId && !business) throw new HttpError(400, 'Business not found.');
   if (categoryId === undefined && business?.id === undefined && args.note === undefined) {
-    throw new Error('No transaction changes were provided.');
+    throw new HttpError(400, 'No transaction changes were provided.');
   }
   return {
     categoryId,
@@ -220,15 +248,15 @@ function receiptUpdatePayload(args: {
 }): AssistantReceiptUpdatePayload {
   const updates: AssistantReceiptUpdatePayload = {};
   if (args.setMerchant) {
-    if (!args.merchant) throw new Error('Receipt merchant must be provided when setMerchant is true.');
+    if (!args.merchant) throw new HttpError(400, 'Receipt merchant must be provided when setMerchant is true.');
     updates.merchant = args.merchant;
   }
   if (args.setTotalCents) {
-    if (args.totalCents == null) throw new Error('Receipt total must be provided when setTotalCents is true.');
+    if (args.totalCents == null) throw new HttpError(400, 'Receipt total must be provided when setTotalCents is true.');
     updates.totalCents = args.totalCents;
   }
   if (args.setReceiptDate) {
-    if (!args.receiptDate) throw new Error('Receipt date must be provided when setReceiptDate is true.');
+    if (!args.receiptDate) throw new HttpError(400, 'Receipt date must be provided when setReceiptDate is true.');
     updates.receiptDate = args.receiptDate;
   }
   return updates;
@@ -241,7 +269,7 @@ async function applyReceiptUpdates(receiptId: string, updates: AssistantReceiptU
     .set({ ...updates, updatedAt: new Date() })
     .where(eq(receipts.id, receiptId))
     .returning({ id: receipts.id });
-  if (!updated) throw new Error('Receipt not found.');
+  if (!updated) throw new HttpError(400, 'Receipt not found.');
 }
 
 async function confirmReceiptPairing(
@@ -253,21 +281,21 @@ async function confirmReceiptPairing(
     receiptById(receiptId),
     db.query.transactions.findFirst({ where: eq(transactions.id, transactionId) }),
   ]);
-  if (!receipt) throw new Error('Receipt not found.');
-  if (!transaction) throw new Error('Transaction not found.');
+  if (!receipt) throw new HttpError(400, 'Receipt not found.');
+  if (!transaction) throw new HttpError(400, 'Transaction not found.');
   assertPairingAllowed(receipt, transaction);
   await applyReceiptUpdates(receiptId, updates);
   const paired = await attachReceipt(transactionId, receiptId);
-  if (!paired) throw new Error('Transaction not found.');
+  if (!paired) throw new HttpError(400, 'Transaction not found.');
 }
 
 function assertPairingAllowed(
   receipt: typeof receipts.$inferSelect,
   transaction: typeof transactions.$inferSelect,
 ): void {
-  if (receipt.transactionId && receipt.transactionId !== transaction.id) throw new Error('Receipt is already matched to another transaction.');
-  if (transaction.receiptId && transaction.receiptId !== receipt.id) throw new Error('Transaction already has another receipt attached.');
-  if (receipt.businessId && receipt.businessId !== transaction.businessId) throw new Error('Receipt and transaction belong to different businesses.');
+  if (receipt.transactionId && receipt.transactionId !== transaction.id) throw new HttpError(400, 'Receipt is already matched to another transaction.');
+  if (transaction.receiptId && transaction.receiptId !== receipt.id) throw new HttpError(400, 'Transaction already has another receipt attached.');
+  if (receipt.businessId && receipt.businessId !== transaction.businessId) throw new HttpError(400, 'Receipt and transaction belong to different businesses.');
 }
 
 export function createApproval(

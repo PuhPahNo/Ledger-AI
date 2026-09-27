@@ -1,4 +1,5 @@
 import type { AssistantApprovalRequest, AssistantResponse, AssistantToolEvent } from '@/types/domain';
+import type { AssistantConfirmResult } from '@/types/assistant';
 import { API_BASE, http, useMockApi } from './client';
 
 export type AssistantStreamEvent =
@@ -11,6 +12,8 @@ export interface SendAssistantMessageInput {
   message: string;
   previousResponseId?: string | null;
   approvedDataToken?: string | null;
+  /** Notes about actions confirmed since the last turn, so the model knows they happened. */
+  actionResults?: string[];
 }
 
 export async function sendAssistantMessage(
@@ -25,8 +28,15 @@ export async function sendAssistantMessage(
     body: JSON.stringify({ ...input, stream: true }),
   });
   if (!response.ok || !response.body) {
-    const message = await response.text().catch(() => 'Assistant request failed');
-    throw new Error(message || 'Assistant request failed');
+    const raw = await response.text().catch(() => '');
+    let message = 'Assistant request failed';
+    try {
+      const parsed = JSON.parse(raw) as { error?: unknown };
+      if (typeof parsed.error === 'string' && parsed.error.trim()) message = parsed.error;
+    } catch {
+      // Non-JSON error body; keep the generic message rather than echoing raw server output.
+    }
+    throw new Error(message);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -54,11 +64,13 @@ export async function sendAssistantMessage(
   return finalResponse;
 }
 
-export function confirmAssistantAction(token: string): Promise<{ ok: boolean; message: string; artifact?: AssistantResponse['artifacts'][number] }> {
+export function confirmAssistantAction(token: string): Promise<AssistantConfirmResult> {
   if (useMockApi) {
     return Promise.resolve({
       ok: true,
       message: 'Mock action confirmed.',
+      actionId: `mock-action-${Date.now()}`,
+      contextNote: 'Confirmed mock action: applied in mock mode.',
       artifact: {
         type: 'table',
         id: `mock-confirm-${Date.now()}`,
@@ -87,15 +99,15 @@ async function mockAssistantMessage(
   await wait(450);
   onEvent({ type: 'tool_event', event: finishedTool });
   await wait(250);
-  const wantsApproval = /100|500|all rows|all .*transactions|everything|export/i.test(input.message);
+  const wantsApproval = !input.approvedDataToken && /100|500|all rows|all .*transactions|everything|export/i.test(input.message);
   const approval: AssistantApprovalRequest = {
-    id: 'mock-approval',
+    id: `mock-approval-${Date.now()}`,
     kind: wantsApproval ? 'data_expansion' : 'mutation',
     title: wantsApproval ? 'Approve expanded transaction detail' : 'Confirm transaction update',
     detail: wantsApproval
       ? 'This mock request asks for more than 100 sanitized rows.'
       : 'Apply the proposed mock categorization update.',
-    token: 'mock-token',
+    token: `mock-token-${Date.now()}`,
     buttonLabel: wantsApproval ? 'Allow expanded rows' : 'Apply update',
     expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
   };
@@ -126,8 +138,8 @@ async function mockAssistantMessage(
         actions: [{ label: 'Open transactions', view: 'transactions' }],
         labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May'],
         series: [
-          { name: 'Inflow', color: '#1F8A5B', values: [8400000, 8900000, 138811900, 8200000, 9600000] },
-          { name: 'Outflow', color: '#D97757', values: [6600000, 7100000, 6800000, 7800000, 8200000] },
+          { name: 'Inflow', color: 'sage', values: [8400000, 8900000, 138811900, 8200000, 9600000] },
+          { name: 'Outflow', color: 'coral', values: [6600000, 7100000, 6800000, 7800000, 8200000] },
         ],
       },
     ],

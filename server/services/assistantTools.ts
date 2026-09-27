@@ -11,7 +11,10 @@ import {
   proposeTransactionUpdate,
 } from './assistantActions.js';
 import {
+  balancesArtifacts,
+  cashFlowBusinessTable,
   cashFlowChart,
+  rollupArtifact,
   formatCents,
   metric,
   receiptsArtifact,
@@ -54,6 +57,7 @@ import {
   transactionSortColumn,
   transferCategoryFilter,
 } from './assistantQueryHelpers.js';
+import type { AssistantArtifact } from './assistantSchemas.js';
 import type { AssistantToolContext, AssistantToolResult } from './assistantToolTypes.js';
 export { confirmAssistantAction } from './assistantActions.js';
 export { assistantToolDefinitions, toolEventDetail } from './assistantToolDefinitions.js';
@@ -70,14 +74,18 @@ export async function callAssistantTool(name: string, rawArgs: unknown, context:
       }
       case 'query_transactions':
         return queryTransactions(queryTransactionsSchema.parse(rawArgs), context);
-      case 'get_transaction_rollup':
-        return ok('Calculated transaction rollup.', await getTransactionRollup(transactionFilterSchema.parse(rawArgs)));
+      case 'get_transaction_rollup': {
+        const rollup = await getTransactionRollup(transactionFilterSchema.parse(rawArgs));
+        return { ok: true, message: 'Calculated transaction rollup.', data: rollup, artifacts: [rollupArtifact(rollup)] };
+      }
       case 'get_cash_flow':
         return getCashFlow(cashFlowSchema.parse(rawArgs));
       case 'get_owner_insights':
         return getOwnerInsights(ownerInsightsSchema.parse(rawArgs));
-      case 'get_account_balances':
-        return ok('Retrieved account balances.', await getAccountBalances(z.object({ business: emptyToNull }).parse(rawArgs).business));
+      case 'get_account_balances': {
+        const balances = await getAccountBalances(z.object({ business: emptyToNull }).parse(rawArgs).business);
+        return { ok: true, message: 'Retrieved account balances.', data: balances, artifacts: balancesArtifacts(balances) };
+      }
       case 'query_receipts':
         return queryReceipts(queryReceiptsSchema.parse(rawArgs));
       case 'propose_transaction_update':
@@ -148,6 +156,7 @@ async function queryTransactions(args: z.infer<typeof queryTransactionsSchema>, 
       kind: 'data_expansion',
       requestedLimit: Math.min(args.limit, EXPANDED_TRANSACTION_DETAIL_LIMIT),
       purpose: `Return up to ${Math.min(args.limit, EXPANDED_TRANSACTION_DETAIL_LIMIT)} transaction rows for this assistant question.`,
+      question: context.question?.slice(0, 4000),
     }, 'Approve expanded transaction detail', `This request asks for ${args.limit} rows. I can share up to ${EXPANDED_TRANSACTION_DETAIL_LIMIT} sanitized transaction rows with OpenAI if you approve.`, `Allow ${Math.min(args.limit, EXPANDED_TRANSACTION_DETAIL_LIMIT)} rows`);
     return {
       ok: true,
@@ -255,7 +264,10 @@ async function getCashFlow(args: z.infer<typeof cashFlowSchema>): Promise<Assist
     ok: true,
     message: 'Calculated cash flow.',
     data,
-    artifacts: [cashFlowChart(data.periods, args.includeTransfers)],
+    artifacts: [
+      cashFlowChart(data.periods, args.includeTransfers),
+      cashFlowBusinessTable(data.periods, args.includeTransfers),
+    ].filter((artifact): artifact is AssistantArtifact => artifact !== null),
   };
 }
 
