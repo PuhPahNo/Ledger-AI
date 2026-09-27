@@ -534,3 +534,48 @@ export type Receipt = typeof receipts.$inferSelect;
 export type ReceiptMatch = typeof receiptMatches.$inferSelect;
 export type Alert = typeof alerts.$inferSelect;
 export type ExportJob = typeof exportJobs.$inferSelect;
+
+// ---------------------------------------------------------------------------------------------
+// Receipt workflow (migration 0026)
+// ---------------------------------------------------------------------------------------------
+
+export type ReceiptWaiverRuleKind = 'threshold' | 'merchant' | 'category';
+
+// "No receipt needed" rules. 'threshold' is a single global row (seeded disabled at $75);
+// 'merchant' matches a condensed merchant pattern; 'category' matches one category id.
+export const receiptWaiverRules = pgTable('receipt_waiver_rules', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  kind: text('kind').$type<ReceiptWaiverRuleKind>().notNull(),
+  enabled: boolean('enabled').notNull().default(true),
+  // Null = every business.
+  businessId: uuid('business_id').references(() => businesses.id, { onDelete: 'cascade' }),
+  thresholdCents: integer('threshold_cents'),
+  // Threshold rule only: lodging/travel spend always needs a receipt (IRS rule).
+  excludeLodging: boolean('exclude_lodging').notNull().default(true),
+  merchantPattern: text('merchant_pattern'),
+  merchantLabel: text('merchant_label'),
+  categoryId: uuid('category_id').references(() => categories.id, { onDelete: 'cascade' }),
+  note: text('note'),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  ...timestamps,
+}, (table) => ({
+  kindIdx: index('receipt_waiver_rules_kind_idx').on(table.kind),
+}));
+
+export type ReceiptWaiverEvidenceKind = ReceiptWaiverRuleKind | 'manual';
+
+// Why a transaction's receipt was waived — one row per waived transaction. Removed when the
+// transaction is paired with a receipt or re-opened.
+export const transactionReceiptWaivers = pgTable('transaction_receipt_waivers', {
+  transactionId: uuid('transaction_id').primaryKey().references(() => transactions.id, { onDelete: 'cascade' }),
+  ruleId: uuid('rule_id').references(() => receiptWaiverRules.id, { onDelete: 'set null' }),
+  kind: text('kind').$type<ReceiptWaiverEvidenceKind>().notNull(),
+  detail: jsonb('detail').$type<Record<string, unknown>>().notNull().default({}),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (table) => ({
+  ruleIdx: index('transaction_receipt_waivers_rule_idx').on(table.ruleId),
+}));
+
+export type ReceiptWaiverRule = typeof receiptWaiverRules.$inferSelect;
+export type TransactionReceiptWaiver = typeof transactionReceiptWaivers.$inferSelect;

@@ -1,8 +1,19 @@
 import { and, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { accounts, businesses, categories, receiptMatches, receipts, transactions, type Receipt, type Transaction } from '../db/schema.js';
+import {
+  accounts,
+  businesses,
+  categories,
+  receiptMatches,
+  receipts,
+  transactionReceiptWaivers,
+  transactions,
+  type Receipt,
+  type Transaction,
+} from '../db/schema.js';
 import { getReceiptTrackingSince } from './appSettings.js';
 import { reviewReceiptCategoryEvidence } from './categorizationFeedback.js';
+import { explainMatch, type MatchReason } from './matchReasons.js';
 import {
   AUTO_ATTACH_THRESHOLD,
   MIN_EXTRACTION_CONFIDENCE_FOR_AUTO_ATTACH,
@@ -21,11 +32,14 @@ export interface MatchResult {
 export interface ScoredCandidate extends MatchResult {
   /** Receipt total equals the transaction amount (within rounding). */
   exactAmount: boolean;
+  /** Last-4 of the transaction's account, when known (feeds the card reason). */
+  accountMask?: string | null;
 }
 
 export interface ReceiptMatchOutcome extends MatchResult {
   /** True when the score cleared the auto-attach bar and the receipt was attached to the transaction. */
   attached: boolean;
+  accountMask?: string | null;
 }
 
 export interface ReceiptMatchCandidate extends ScoredCandidate {
@@ -37,6 +51,8 @@ export interface ReceiptMatchCandidate extends ScoredCandidate {
   ambiguous: boolean;
   suggested: boolean;
   wouldAutoAttach: boolean;
+  /** The user already rejected this pair (unpaired / paired elsewhere / dismissed). */
+  rejected: boolean;
 }
 
 type ReceiptStatus = Receipt['status'];
@@ -217,7 +233,8 @@ export function planAttach(input: {
     if (receipt.status !== 'pending') return { ok: false, reason: 'receipt_not_pending' };
     if (receipt.transactionId || otherHolders.length > 0) return { ok: false, reason: 'receipt_taken' };
     if (transaction.receiptId || otherReceipts.length > 0) return { ok: false, reason: 'transaction_taken' };
-    if (transaction.receiptStatus !== 'missing' && transaction.receiptStatus !== 'pending') {
+    // 'waived' is open too: a receipt that turns up for a no-receipt-needed charge still belongs on it.
+    if (transaction.receiptStatus !== 'missing' && transaction.receiptStatus !== 'pending' && transaction.receiptStatus !== 'waived') {
       return { ok: false, reason: 'transaction_not_open' };
     }
   }
@@ -289,7 +306,7 @@ export async function matchReceipt(receiptId: string): Promise<ReceiptMatchOutco
     .filter(({ transaction }) => !rejectedTransactionIds.has(transaction.id))
     .map(({ transaction, accountMask }) => {
       const result = scoreMatch(receipt, transaction, accountMask);
-      return { ...result, exactAmount: isExactAmount(receipt.totalCents, transaction.amountCents) };
+      return { ...result, accountMask, exactAmount: isExactAmount(receipt.totalCents, transaction.amountCents) };
     })
     .sort((a, b) => b.score - a.score);
   const plan = planReceiptMatch(receipt, scored);
@@ -339,17 +356,17 @@ export async function receiptMatchCandidates(receiptId: string): Promise<Receipt
   const scored = candidates
     .map(({ transaction, accountMask }) => {
       const result = scoreMatch(receipt, transaction, accountMask);
-      return { ...result, exactAmount: isExactAmount(receipt.totalCents, transaction.amountCents) };
+      return { ...result, accountMask, exactAmount: isExactAmount(receipt.totalCents, transaction.amountCents) };
     })
     .sort((a, b) => b.score - a.score);
   const eligible = scored.filter(({ transaction }) => !rejectedTransactionIds.has(transaction.id));
   const annotated = annotateCandidates(eligible, { allowAutoAttach: receiptAutoAttachEligible(receipt) });
   const annotatedById = new Map(annotated.map((candidate) => [candidate.transaction.id, candidate]));
-  return scored.map((candidate) => annotatedById.get(candidate.transaction.id) ?? {
-    ...candidate,
-    ambiguous: false,
-    suggested: false,
-    wouldAutoAttach: false,
+  return scored.map((candidate) => {
+    const annotatedCandidate = annotatedById.get(candidate.transaction.id);
+    return annotatedCandidate
+      ? { ...annotatedCandidate, rejected: false }
+      : { ...candidate, ambiguous: false, suggested: false, wouldAutoAttach: false, rejected: true };
   });
 }
 
@@ -461,6 +478,8 @@ export async function attachReceipt(
       .set({ receiptId, receiptStatus: 'matched', updatedAt: new Date() })
       .where(eq(transactions.id, transactionId))
       .returning();
+    // A waived transaction that gets its receipt after all is simply matched; drop the waiver.
+    await tx.delete(transactionReceiptWaivers).where(eq(transactionReceiptWaivers.transactionId, transactionId));
     await tx
       .update(receipts)
       .set({ transactionId, status: 'matched', updatedAt: new Date() })
@@ -642,7 +661,7 @@ async function candidateTransactionRows(receipt: Receipt): Promise<Array<{
       receipt.businessId
         ? eq(transactions.businessId, receipt.businessId)
         : sql`true`,
-      or(eq(transactions.receiptStatus, 'missing'), eq(transactions.receiptStatus, 'pending')),
+      inArray(transactions.receiptStatus, ['missing', 'pending', 'waived']),
     ))
     // High-volume businesses can easily have more than 50 transactions in an 11-day
     // window. Rank before bounding the candidate set so exact/near amounts cannot be
@@ -694,6 +713,30 @@ export function scoreMatch(receipt: Receipt, transaction: Transaction, accountMa
   };
 }
 
+/**
+ * Human-readable reasons for pairing `receipt` with `transaction`, from the scorer's components.
+ * Pass `components` when you already have them (a candidate's `reasons`); otherwise they're scored.
+ */
+export function explainReceiptMatch(
+  receipt: Receipt,
+  transaction: Transaction,
+  accountMask: string | null = null,
+  components?: Record<string, unknown>,
+): MatchReason[] {
+  return explainMatch({
+    receipt: {
+      merchant: receipt.merchant,
+      totalCents: receipt.totalCents,
+      receiptDate: receipt.receiptDate,
+      businessId: receipt.businessId,
+      cardLast4: receiptLast4(receipt),
+    },
+    transaction,
+    accountMask,
+    components: components ?? scoreMatch(receipt, transaction, accountMask).reasons,
+  });
+}
+
 function isExactAmount(receiptCents: number | null, transactionCents: number): boolean {
   if (!receiptCents) return false;
   return Math.abs(Math.abs(receiptCents) - Math.abs(transactionCents)) <= 2;
@@ -713,7 +756,7 @@ function normalizeLast4(value: string | null | undefined): string | null {
   return digits.length >= 4 ? digits.slice(-4) : null;
 }
 
-function receiptLast4(receipt: Receipt): string | null {
+export function receiptLast4(receipt: Pick<Receipt, 'ocrJson'>): string | null {
   const raw = (receipt.ocrJson as Record<string, unknown> | null | undefined)?.paymentLast4;
   return typeof raw === 'string' ? raw : null;
 }
