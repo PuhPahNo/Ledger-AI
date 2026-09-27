@@ -1,6 +1,6 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, like } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { categories, categorizationFeedback, transactions } from '../db/schema.js';
+import { categories, categorizationFeedback, categorizationReviewItems, transactions } from '../db/schema.js';
 import { getAutomationSettings } from './appSettings.js';
 import { categoryMatchesTransactionDirection, isProtectedCategorySource, normalize } from './categorization.js';
 import {
@@ -102,6 +102,7 @@ export async function recordExternalCategorySignal(input: ExternalCategorySignal
   // row as a trusted rule hit rather than being overwritten by the signal.
   const learn = () => recordExternalFeedback({ transaction, categoryId: category.id, source, confidence, evidence });
   if (decision === 'unchanged') {
+    await expireOpenSignalReviews(source, transaction.id);
     await learn();
     return { outcome: 'unchanged' };
   }
@@ -113,6 +114,7 @@ export async function recordExternalCategorySignal(input: ExternalCategorySignal
       confidence,
       evidence,
     });
+    await expireOpenSignalReviews(source, transaction.id);
     await learn();
     return { outcome: 'applied' };
   }
@@ -144,6 +146,17 @@ export async function recordExternalCategorySignal(input: ExternalCategorySignal
   });
   await learn();
   return { outcome: 'review', reviewItemId: item.id };
+}
+
+/** A signal that now applies (or already matches) makes its earlier open review items moot. */
+async function expireOpenSignalReviews(source: string, transactionId: string): Promise<void> {
+  await db.update(categorizationReviewItems)
+    .set({ status: 'expired', resolvedAction: 'superseded_by_signal', resolvedAt: new Date(), updatedAt: new Date() })
+    .where(and(
+      eq(categorizationReviewItems.type, 'external_category_suggestion'),
+      eq(categorizationReviewItems.status, 'open'),
+      like(categorizationReviewItems.fingerprint, `external:${source}:${transactionId}:%`),
+    ));
 }
 
 function sourceDisplayName(source: string): string {

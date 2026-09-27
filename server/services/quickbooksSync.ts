@@ -482,7 +482,14 @@ async function pairImportedReceipts(connectionId: string): Promise<number> {
 export async function relinkQuickbooksConnection(connectionId: string): Promise<{ linksCreated: number; linksRemoved: number; receiptsPaired: number }> {
   await applyAutoMappings(connectionId);
   const linking = await runAutoLinking(connectionId);
-  await emitQuickbooksCategorySignals(linking.created.map((l) => l.transactionId));
+  // A mapping change can alter the suggestion for records that were linked long ago, so
+  // re-send signals for every linked transaction (review items dedupe by fingerprint).
+  const linked = await db
+    .select({ transactionId: qboTransactionLinks.transactionId })
+    .from(qboTransactionLinks)
+    .innerJoin(qboTransactions, eq(qboTransactionLinks.qboTransactionId, qboTransactions.id))
+    .where(and(eq(qboTransactions.connectionId, connectionId), eq(qboTransactionLinks.status, 'linked')));
+  await emitQuickbooksCategorySignals([...new Set(linked.map((row) => row.transactionId))]);
   const paired = await pairImportedReceipts(connectionId);
   return { linksCreated: linking.created.length, linksRemoved: linking.removedStale, receiptsPaired: paired };
 }
