@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { signOAuthState, verifyOAuthState } from '../auth/oauthState.js';
 import { requireUser } from '../auth/session.js';
+import { getEnv } from '../config/env.js';
 import { db } from '../db/client.js';
 import { accounts, businesses, connections } from '../db/schema.js';
 import { badRequest, notFound } from '../lib/errors.js';
@@ -82,22 +84,23 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/connections/gmail/oauth-url', async (request) => {
-    await requireUser(request);
+    const user = await requireUser(request);
     const query = z.object({ businessId: z.string().uuid().optional() }).parse(request.query);
-    return { url: gmailOAuthUrl(JSON.stringify({ businessId: query.businessId ?? null })) };
+    const state = signOAuthState(getEnv().SESSION_SECRET, { userId: user.id, businessId: query.businessId ?? null });
+    return { url: gmailOAuthUrl(state) };
   });
 
+  // Google redirects the browser here (top-level GET, so the sameSite=lax session cookie is
+  // sent). The signed state must have been issued to this same admin within 15 minutes.
   app.get('/connections/gmail/callback', async (request, reply) => {
-    const query = z.object({ code: z.string(), state: z.string().optional() }).parse(request.query);
-    let businessId: string | undefined;
-    if (query.state) {
-      try {
-        const parsed = JSON.parse(query.state) as { businessId?: string | null };
-        businessId = parsed.businessId ?? undefined;
-      } catch {
-        badRequest('Invalid OAuth state');
-      }
+    const user = await requireUser(request);
+    const query = z.object({ code: z.string(), state: z.string() }).parse(request.query);
+    const verified = verifyOAuthState(getEnv().SESSION_SECRET, query.state, user.id);
+    if (!verified.ok) {
+      request.log.warn({ reason: verified.reason }, 'Rejected Gmail OAuth callback state');
+      badRequest('Invalid or expired OAuth state. Start the Gmail connection again.');
     }
+    const businessId = verified.payload.b ?? undefined;
     const connectionId = await connectGmail(query.code, businessId);
     await enqueue('gmail.sync', { connectionId });
     await enqueue('gmail.backfill', { connectionId, daysRequested: GMAIL_BACKFILL_DAYS });
