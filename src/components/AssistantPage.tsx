@@ -8,7 +8,7 @@ import type {
   CurrentUser,
 } from '@/types/domain';
 import { LEDGER_DATA_CHANGED_EVENT, type LedgerDataChangedDetail } from '@/types/assistant';
-import type { AppView } from '@/types/navigation';
+import type { NavigateFn } from '@/types/navigation';
 import { cn } from '@/lib/cn';
 import { useToast } from '@/hooks/useToast';
 import { AppShell } from './AppShell';
@@ -28,7 +28,7 @@ import { Badge } from '@/components/ui/badge';
 
 interface Props {
   user?: CurrentUser;
-  onViewChange?: (view: AppView) => void;
+  onViewChange?: NavigateFn;
   onLogout?: () => void;
 }
 
@@ -334,7 +334,7 @@ function MessageBubble({
   onConfirm: (approval: AssistantApprovalRequest) => void;
   onDecline: (approval: AssistantApprovalRequest) => void;
   onAsk: (message: string) => void;
-  onViewChange?: (view: AppView) => void;
+  onViewChange?: NavigateFn;
   busy: boolean;
 }) {
   if (message.role === 'user') {

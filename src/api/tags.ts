@@ -109,7 +109,7 @@ export function removeTransactionTag(transactionId: string, tagId: string): Prom
 export function getTagTrends(params: { tagIds?: string[]; from?: string; to?: string } = {}): Promise<TagTrendSeries[]> {
   if (useMockApi) {
     const ids = params.tagIds?.length ? params.tagIds : TAGS.map((tag) => tag.id);
-    return Promise.resolve(mockTagTrends(ids));
+    return Promise.resolve(mockTagTrends(ids, params.from, params.to));
   }
   const query = new URLSearchParams();
   if (params.tagIds?.length) query.set('tags', params.tagIds.join(','));

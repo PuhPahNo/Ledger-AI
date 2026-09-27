@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 
 /**
  * One categorization review item (learn-rule prompt, AI suggestion, receipt evidence,
- * rule conflict) with accept/dismiss. Shared by the notifications modal and the Inbox page.
+ * rule conflict) with accept/dismiss. Rendered inline in Home › Needs you.
  */
 export function ReviewItemCard({
   item,

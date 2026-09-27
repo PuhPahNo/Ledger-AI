@@ -1,5 +1,6 @@
 import type { Business, BusinessId, SpendSummary, Transaction } from '@/types/domain';
-import { isSpendTransaction } from '@/lib/calc';
+import { isSpendTransaction, isTransferTransaction } from '@/lib/calc';
+import type { DailyMovement } from '@/lib/periods';
 import { http, useMockApi } from './client';
 import { mapSummary, type ApiSpendSummary } from './mapper';
 import { BUSINESSES, SUMMARY, TRANSACTIONS, visibleMockTransactions } from './mocks';
@@ -128,4 +129,36 @@ export function summarizeBreakdowns(rows: Transaction[], businesses: Business[])
     byAccount: sorted(byAccount),
     byReceipt: sorted(byReceipt),
   };
+}
+
+export interface DailyMovementParams {
+  from: string;
+  to: string;
+  biz?: BusinessId | 'all';
+  accountIds?: string[];
+}
+
+/**
+ * GET /api/summary/daily — operating outflow / inflow per day (sparse: quiet days omitted).
+ * Feeds the Home spend-pace chart and its same-day-last-month KPIs.
+ */
+export function getDailyMovement(params: DailyMovementParams): Promise<DailyMovement[]> {
+  if (useMockApi) {
+    const byDate = new Map<string, DailyMovement>();
+    visibleMockTransactions(TRANSACTIONS, params.accountIds)
+      .filter((txn) => !params.biz || params.biz === 'all' || txn.biz === params.biz)
+      .filter((txn) => txn.date >= params.from && txn.date <= params.to)
+      .forEach((txn) => {
+        const entry = byDate.get(txn.date) ?? { date: txn.date, outflowCents: 0, inflowCents: 0 };
+        const cents = Math.round(txn.amount * 100);
+        if (isSpendTransaction(txn)) entry.outflowCents += Math.abs(cents);
+        else if (cents > 0 && !isTransferTransaction(txn)) entry.inflowCents += cents;
+        byDate.set(txn.date, entry);
+      });
+    return Promise.resolve([...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)));
+  }
+  const query = new URLSearchParams({ from: params.from, to: params.to });
+  if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
+  if (params.accountIds?.length) query.set('accounts', params.accountIds.join(','));
+  return http<{ days: DailyMovement[] }>(`/summary/daily?${query.toString()}`).then((body) => body.days);
 }

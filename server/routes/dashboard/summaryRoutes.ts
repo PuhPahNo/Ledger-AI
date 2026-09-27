@@ -27,6 +27,26 @@ import {
   trailingMonthWindows,
   resolveSelectedBusiness,
 } from './helpers.js';
+import { badRequest } from '../../lib/errors.js';
+
+/** Longest window /summary/daily serves (13 months + a prior 13 months, with slack). */
+const MAX_DAILY_SPAN_DAYS = 800;
+
+/** Collapse per-business daily rows into one row per date, oldest first. */
+export function foldDailyMovement(
+  rows: Array<{ date: string; outflowCents: number; inflowCents: number }>,
+): Array<{ date: string; outflowCents: number; inflowCents: number }> {
+  const byDate = new Map<string, { date: string; outflowCents: number; inflowCents: number }>();
+  for (const row of rows) {
+    const entry = byDate.get(row.date) ?? { date: row.date, outflowCents: 0, inflowCents: 0 };
+    entry.outflowCents += row.outflowCents;
+    entry.inflowCents += row.inflowCents;
+    byDate.set(row.date, entry);
+  }
+  return [...byDate.values()]
+    .filter((row) => row.outflowCents !== 0 || row.inflowCents !== 0)
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
 
 export function registerSummaryRoutes(app: FastifyInstance): void {
   app.get('/summary', async (request) => {
@@ -115,6 +135,29 @@ export function registerSummaryRoutes(app: FastifyInstance): void {
       avgOutflowCents: avgOutflow,
       avgNetCents: avgNet,
     };
+  });
+
+  /**
+   * Daily operating outflow / inflow for [from, to] — the Home spend-pace chart asks for the
+   * prior window and the current window in one call and accumulates them client-side. Same
+   * spend/inflow definitions as /summary (transfers and hidden categories excluded).
+   */
+  app.get('/summary/daily', async (request) => {
+    await requireUser(request);
+    const query = z.object({
+      from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      biz: z.string().optional(),
+      accounts: z.string().optional(),
+    }).parse(request.query);
+    if (query.to < query.from) badRequest('"to" must be on or after "from".');
+    const spanDays = Math.round((dateFromIso(query.to).getTime() - dateFromIso(query.from).getTime()) / 86400000) + 1;
+    if (spanDays > MAX_DAILY_SPAN_DAYS) badRequest(`Daily series are limited to ${MAX_DAILY_SPAN_DAYS} days.`);
+    const accountIds = parseAccountIds(query.accounts);
+    const selectedBusiness = await resolveSelectedBusiness(query.biz);
+    const businessFilter = selectedBusiness ? eq(transactions.businessId, selectedBusiness.id) : sql`true`;
+    const daily = await dailyBusinessMovement(query.from, query.to, [businessFilter, accountSpendFilter(accountIds)]);
+    return { from: query.from, to: query.to, days: foldDailyMovement(daily) };
   });
 
   /**

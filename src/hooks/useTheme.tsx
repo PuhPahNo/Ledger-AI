@@ -52,16 +52,3 @@ export function useTheme(): ThemeContextValue {
   return ctx;
 }
 
-/**
- * Resolve a theme-aware CSS color variable to an `hsl(...)` string for use in
- * places that need a JS color value (e.g. SVG charts that can't use CSS classes).
- * Re-reads on every theme change. `cssVar` is the channel-only custom property
- * (e.g. `--color-ink`); `fallback` is returned when the DOM is unavailable.
- */
-export function useResolvedColor(cssVar: string, fallback: string): string {
-  // Subscribe to theme so the value recomputes when the user toggles.
-  useTheme();
-  if (typeof document === 'undefined') return fallback;
-  const value = getComputedStyle(document.documentElement).getPropertyValue(cssVar).trim();
-  return value ? `hsl(${value})` : fallback;
-}

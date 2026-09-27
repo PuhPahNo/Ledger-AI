@@ -115,8 +115,9 @@ export async function buildCloseReadiness(input: {
       detail: 'Open suggestions should be accepted or dismissed before close.',
       severity: 'blocker',
       count: reviewItems.length,
-      actionView: 'admin',
-      filters: { tab: 'rules' },
+      // Reviews are resolved in Home › Needs you (the old view name redirects there).
+      actionView: 'dashboard',
+      filters: {},
     }),
     closeItem({
       id: 'transfers',
@@ -135,7 +136,7 @@ export async function buildCloseReadiness(input: {
     label: exportJob ? `Export ${exportJob.status}` : 'Queue audit export',
     detail: exportJob
       ? 'An audit export exists for this period.'
-      : 'Queue an audit export from Admin after the blocking items are clear.',
+      : 'Queue an audit export after the blocking items are clear.',
     severity: 'ready',
     count: exportJob ? 1 : 0,
     cents: undefined,

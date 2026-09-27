@@ -67,9 +67,3 @@ export const chartPalette = [
   'hsl(var(--chart-7))',
   'hsl(var(--chart-8))',
 ] as const;
-
-/** Same ramp the categories donut and tiles draw from. */
-export const accentRamp = chartPalette;
-
-/** Muted comparison series ("previous period") — follows the theme's ink. */
-export const chartMuted = 'hsl(var(--chart-muted))';

@@ -17,11 +17,12 @@ const buttonVariants = cva(
         link: 'text-ink underline-offset-4 hover:underline',
       },
       size: {
-        default: 'h-9 px-4',
-        sm: 'h-8 px-3 text-xs',
+        // Phones get 40px touch targets; pointer screens keep the compact sizes.
+        default: 'h-10 px-4 sm:h-9',
+        sm: 'h-10 px-3 text-xs sm:h-8',
         lg: 'h-11 px-6 text-base',
-        icon: 'h-9 w-9',
-        'icon-sm': 'h-8 w-8',
+        icon: 'h-10 w-10 sm:h-9 sm:w-9',
+        'icon-sm': 'h-10 w-10 sm:h-8 sm:w-8',
       },
     },
     defaultVariants: {

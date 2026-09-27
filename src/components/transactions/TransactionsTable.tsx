@@ -188,7 +188,7 @@ export function TransactionsTable({
             {/* min-w keeps the flexible Merchant column from collapsing to 0px when the
                 fixed columns alone exceed the container; the wrapper scrolls instead. */}
             <Table className={cn('table-fixed', groupByDate ? 'min-w-[960px]' : 'min-w-[1060px]')}>
-              <TableHeader className="sticky top-0 z-10 bg-paper">
+              <TableHeader className="sticky top-0 z-10 bg-paper [&_th]:text-dim">
                 <TableRow>
                   {selectable && (
                     <TableHead className="w-10">

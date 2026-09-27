@@ -196,28 +196,6 @@ export function Field({ label, children }: { label: string; children: ReactNode 
   );
 }
 
-export function Metric({
-  label,
-  value,
-  tone = 'default',
-}: {
-  label: string;
-  value: string;
-  tone?: 'default' | 'positive' | 'warning';
-}) {
-  return (
-    <div className={cn(
-      'rounded-lg border px-3 py-2 shadow-sm',
-      tone === 'positive' && 'border-sage/40 bg-sage/10 text-sage-ink',
-      tone === 'warning' && 'border-coral/40 bg-coral/10 text-coral-ink',
-      tone === 'default' && 'border-ink2/10 bg-paper',
-    )}>
-      <div className="font-mono text-[10px] uppercase tracking-wider text-dim">{label}</div>
-      <div className="font-display text-xl font-bold tabular-nums">{value}</div>
-    </div>
-  );
-}
-
 function MatchBadge({ score }: { score: number }) {
   return <Badge variant={matchScoreTone(score)}>{Math.round(score * 100)}%</Badge>;
 }

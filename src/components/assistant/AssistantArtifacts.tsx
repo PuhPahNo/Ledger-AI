@@ -1,11 +1,11 @@
 import type { AssistantArtifact, AssistantArtifactAction } from '@/types/domain';
-import type { AppView } from '@/types/navigation';
+import type { NavigateFn } from '@/types/navigation';
 import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/cn';
 import { fmt$ } from '@/lib/format';
 
-export function ArtifactView({ artifact, onViewChange }: { artifact: AssistantArtifact; onViewChange?: (view: AppView) => void }) {
+export function ArtifactView({ artifact, onViewChange }: { artifact: AssistantArtifact; onViewChange?: NavigateFn }) {
   return (
     <div className="space-y-2">
       {artifact.type === 'metric_grid' && <MetricGrid artifact={artifact} />}
@@ -17,7 +17,7 @@ export function ArtifactView({ artifact, onViewChange }: { artifact: AssistantAr
   );
 }
 
-function ArtifactEvidence({ artifact, onViewChange }: { artifact: AssistantArtifact; onViewChange?: (view: AppView) => void }) {
+function ArtifactEvidence({ artifact, onViewChange }: { artifact: AssistantArtifact; onViewChange?: NavigateFn }) {
   if (!artifact.sources?.length && !artifact.actions?.length) return null;
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-ink2/10 bg-paper/70 px-3 py-2 text-xs text-dim">
@@ -36,8 +36,8 @@ function ArtifactEvidence({ artifact, onViewChange }: { artifact: AssistantArtif
   );
 }
 
-function handleArtifactAction(action: AssistantArtifactAction, onViewChange?: (view: AppView) => void) {
-  onViewChange?.(action.view as AppView);
+function handleArtifactAction(action: AssistantArtifactAction, onViewChange?: NavigateFn) {
+  onViewChange?.(action.view);
 }
 
 function sourceLabel(type: string): string {
