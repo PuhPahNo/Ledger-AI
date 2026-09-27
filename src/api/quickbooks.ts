@@ -9,11 +9,42 @@ import type {
 import { http, useMockApi } from './client';
 
 // QuickBooks Online (read-only) client. In mock mode every call resolves to the fixtures
-// below so the phase-2 UI can be built without a backend.
+// below so the phase-2 UI can be built without a backend. Add `?mockQbo=unconfigured` (server
+// has no QuickBooks credentials) or `?mockQbo=none` (configured, nothing connected) to the URL
+// to demo those states.
+
+type MockQboScenario = 'connected' | 'unconfigured' | 'none';
+
+function mockScenario(): MockQboScenario {
+  if (typeof window === 'undefined') return 'connected';
+  const value = new URLSearchParams(window.location.search).get('mockQbo');
+  return value === 'unconfigured' || value === 'none' ? value : 'connected';
+}
+
+let mockStatus: QboStatus | null = null;
+let mockMappings: QboMappings | null = null;
+
+/** Mutable copy of the fixture so Disconnect / Sync behave in mock mode. */
+function mockQboStatus(): QboStatus {
+  const scenario = mockScenario();
+  if (scenario !== 'connected') {
+    return {
+      configured: scenario !== 'unconfigured',
+      environment: scenario === 'unconfigured' ? null : 'sandbox',
+      businesses: MOCK_QBO_STATUS.businesses.map((business) => ({ ...business, connection: null })),
+    };
+  }
+  mockStatus ??= structuredClone(MOCK_QBO_STATUS);
+  return mockStatus;
+}
+
+function mockHasConnections(): boolean {
+  return mockQboStatus().businesses.some((business) => business.connection);
+}
 
 /** GET /api/quickbooks/status — `configured: false` means show "QuickBooks not configured". */
 export function getQuickbooksStatus(): Promise<QboStatus> {
-  if (useMockApi) return Promise.resolve(structuredClone(MOCK_QBO_STATUS));
+  if (useMockApi) return Promise.resolve(structuredClone(mockQboStatus()));
   return http<QboStatus>('/quickbooks/status');
 }
 
@@ -25,19 +56,30 @@ export function startQuickbooksConnect(businessId: string): Promise<{ url: strin
 
 /** POST /api/quickbooks/:connectionId/sync — `full` re-pulls 24 months instead of changes only. */
 export function syncQuickbooks(connectionId: string, full = false): Promise<{ queued: boolean; jobId?: string; alreadyQueued?: boolean }> {
-  if (useMockApi) return Promise.resolve({ queued: true, jobId: 'mock-qbo-sync' });
+  if (useMockApi) {
+    const connection = mockQboStatus().businesses.find((business) => business.connection?.id === connectionId)?.connection;
+    if (connection) connection.lastSyncAt = new Date().toISOString();
+    return Promise.resolve({ queued: true, jobId: 'mock-qbo-sync' });
+  }
   return http(`/quickbooks/${connectionId}/sync`, { method: 'POST', body: JSON.stringify({ full }) });
 }
 
 /** DELETE /api/quickbooks/:connectionId — revokes the token; synced history is kept. */
 export function disconnectQuickbooks(connectionId: string): Promise<void> {
-  if (useMockApi) return Promise.resolve();
+  if (useMockApi) {
+    const business = mockQboStatus().businesses.find((row) => row.connection?.id === connectionId);
+    if (business) business.connection = null;
+    return Promise.resolve();
+  }
   return http<void>(`/quickbooks/${connectionId}`, { method: 'DELETE' });
 }
 
 /** GET /api/quickbooks/:connectionId/mappings */
 export function getQuickbooksMappings(connectionId: string): Promise<QboMappings> {
-  if (useMockApi) return Promise.resolve({ ...structuredClone(MOCK_QBO_MAPPINGS), connectionId });
+  if (useMockApi) {
+    mockMappings ??= structuredClone(MOCK_QBO_MAPPINGS);
+    return Promise.resolve({ ...structuredClone(mockMappings), connectionId });
+  }
   return http<QboMappings>(`/quickbooks/${connectionId}/mappings`);
 }
 
@@ -47,7 +89,8 @@ export function updateQuickbooksMappings(
   update: QboMappingsUpdate,
 ): Promise<{ bankAccounts: number; expenseAccounts: number; relinkQueued: boolean; mappings: QboMappings }> {
   if (useMockApi) {
-    const mappings = structuredClone(MOCK_QBO_MAPPINGS);
+    mockMappings ??= structuredClone(MOCK_QBO_MAPPINGS);
+    const mappings = mockMappings;
     for (const change of update.bankAccounts ?? []) {
       const row = mappings.bankAccounts.find((b) => b.qboAccount.id === change.qboAccountId);
       if (row) Object.assign(row, { ledgerAccountId: change.ledgerAccountId, method: 'manual' });
@@ -66,7 +109,7 @@ export function updateQuickbooksMappings(
       bankAccounts: update.bankAccounts?.length ?? 0,
       expenseAccounts: update.expenseAccounts?.length ?? 0,
       relinkQueued: true,
-      mappings: { ...mappings, connectionId },
+      mappings: { ...structuredClone(mappings), connectionId },
     });
   }
   return http(`/quickbooks/${connectionId}/mappings`, { method: 'PUT', body: JSON.stringify(update) });
@@ -74,7 +117,14 @@ export function updateQuickbooksMappings(
 
 /** GET /api/quickbooks/contractors?biz&from&to (defaults: year-to-date). */
 export function getQuickbooksContractors(params: { biz?: string | 'all'; from?: string; to?: string } = {}): Promise<QboContractorsReport> {
-  if (useMockApi) return Promise.resolve(structuredClone(MOCK_QBO_CONTRACTORS));
+  if (useMockApi) {
+    const connected = new Set(mockQboStatus().businesses
+      .filter((business) => business.connection && (!params.biz || params.biz === 'all' || business.businessKey === params.biz))
+      .map((business) => business.businessId));
+    const report = structuredClone(MOCK_QBO_CONTRACTORS);
+    report.companies = report.companies.filter((company) => connected.has(company.businessId));
+    return Promise.resolve(report);
+  }
   const query = new URLSearchParams();
   if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
   if (params.from) query.set('from', params.from);
@@ -84,7 +134,10 @@ export function getQuickbooksContractors(params: { biz?: string | 'all'; from?: 
 
 /** GET /api/transactions/:id/quickbooks — QBO payee, accounts, memo, attachments for the drawer. */
 export function getTransactionQuickbooks(transactionId: string): Promise<QboTransactionDetails> {
-  if (useMockApi) return Promise.resolve({ ...structuredClone(MOCK_QBO_TRANSACTION_DETAILS), transactionId });
+  if (useMockApi) {
+    if (!mockHasConnections()) return Promise.resolve({ transactionId, links: [], categorySuggestion: null, candidates: [] });
+    return Promise.resolve({ ...structuredClone(MOCK_QBO_TRANSACTION_DETAILS), transactionId });
+  }
   return http<QboTransactionDetails>(`/transactions/${transactionId}/quickbooks`);
 }
 

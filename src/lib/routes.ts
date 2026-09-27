@@ -10,7 +10,7 @@ import type {
   TransactionsMode,
 } from '@/types/navigation';
 
-export const REPORT_TAB_IDS: readonly ReportsTab[] = ['overview', 'accounts', 'close'];
+export const REPORT_TAB_IDS: readonly ReportsTab[] = ['overview', 'accounts', 'close', 'contractors'];
 export const SETTINGS_SECTION_IDS: readonly SettingsSection[] = ['businesses', 'categories', 'security', 'data'];
 const TRANSACTIONS_MODES: readonly TransactionsMode[] = ['transactions', 'receipts'];
 
