@@ -32,7 +32,7 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
       status: z.enum(['matched', 'pending', 'missing', 'n/a', 'waived']).optional(),
       unmatched: z.enum(['true', 'false']).optional().transform((value) => value === 'true'),
       biz: z.string().optional(),
-      source: z.enum(['upload', 'gmail', 'all']).optional().default('all'),
+      source: z.enum(['upload', 'gmail', 'quickbooks', 'all']).optional().default('all'),
       q: z.string().optional(),
       limit: z.coerce.number().int().min(1).max(200).default(100),
       offset: z.coerce.number().int().min(0).max(100_000).default(0),

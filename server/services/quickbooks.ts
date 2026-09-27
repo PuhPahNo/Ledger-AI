@@ -33,6 +33,7 @@ import {
   type QboConfig,
   type QboTokenSet,
 } from './quickbooksClient.js';
+import { recordExternalCategorySignal } from './externalCategorySignals.js';
 import { isContractLaborAccount } from './quickbooksContractors.js';
 import { categoriesForBusiness, ledgerAccountsForBusiness, suggestCategory, suggestLedgerAccounts } from './quickbooksMapping.js';
 import { isBankOrCardAccountType, isExpenseAccountType } from './quickbooksNormalize.js';
@@ -599,15 +600,15 @@ export async function emitQuickbooksCategorySignals(transactionIds: string[]): P
     const suggestion = await quickbooksCategorySuggestion(transactionId);
     if (!suggestion) continue;
     out.push(suggestion);
-    // TODO(automation-merge): hand the suggestion to the categorization learning loop once the
-    // automation agent's hook lands, e.g.
-    //   await recordExternalCategorySignal({
-    //     transactionId: suggestion.transactionId,
-    //     categoryId: suggestion.categoryId,
-    //     source: 'quickbooks',
-    //     confidence: suggestion.confidence,
-    //     evidence: suggestion.evidence,
-    //   });
+    // Hand the QuickBooks account mapping to the learning loop: applied when confident and the
+    // row isn't human-set, otherwise queued as a review item.
+    await recordExternalCategorySignal({
+      transactionId: suggestion.transactionId,
+      categoryId: suggestion.categoryId,
+      source: 'quickbooks',
+      confidence: suggestion.confidence,
+      evidence: suggestion.evidence,
+    });
   }
   return out;
 }

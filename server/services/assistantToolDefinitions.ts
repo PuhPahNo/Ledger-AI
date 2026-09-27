@@ -72,7 +72,7 @@ const receiptStatusFilterSchema = z.enum(['matched', 'pending', 'missing', 'n/a'
 export const queryReceiptsSchema = z.object({
   business: emptyToNull.describe('Business key/id/name, or null for all businesses.'),
   status: receiptStatusFilterSchema.nullable().default('pending'),
-  source: z.enum(['upload', 'gmail', 'all']).nullable().default('all'),
+  source: z.enum(['upload', 'gmail', 'quickbooks', 'all']).nullable().default('all'),
   unmatched: z.boolean().default(true),
   q: emptyToNull.describe('Merchant, file name, or business search text.'),
   from: emptyToNull.describe('Receipt date YYYY-MM-DD inclusive start date.'),
@@ -194,7 +194,7 @@ function zodToJsonSchema(name: string, _schema: z.ZodTypeAny) {
     query_receipts: {
       business: all,
       status: { type: ['string', 'null'], enum: ['matched', 'pending', 'missing', 'n/a', 'all', null] },
-      source: { type: ['string', 'null'], enum: ['upload', 'gmail', 'all', null] },
+      source: { type: ['string', 'null'], enum: ['upload', 'gmail', 'quickbooks', 'all', null] },
       unmatched: bool,
       q: all,
       from: all,

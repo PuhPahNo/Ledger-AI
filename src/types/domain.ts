@@ -35,7 +35,7 @@ export type ReceiptStatus =
   | 'n/a'       // inflow / non-receiptable
   | 'waived';   // intentionally not expected (e.g. spend before receipt tracking began)
 
-export type ReceiptSource = 'upload' | 'gmail';
+export type ReceiptSource = 'upload' | 'gmail' | 'quickbooks';
 
 export interface ReceiptInboxItem {
   id: string;
