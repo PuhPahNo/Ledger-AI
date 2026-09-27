@@ -40,6 +40,7 @@ export interface ListReceiptsParams {
   source?: ReceiptSource | 'all';
   q?: string;
   limit?: number;
+  offset?: number;
 }
 
 export function listReceipts(params: ListReceiptsParams = {}): Promise<ReceiptInboxItem[]> {
@@ -93,6 +94,7 @@ export function listReceipts(params: ListReceiptsParams = {}): Promise<ReceiptIn
   if (params.source && params.source !== 'all') query.set('source', params.source);
   if (params.q) query.set('q', params.q);
   if (params.limit) query.set('limit', String(params.limit));
+  if (params.offset) query.set('offset', String(params.offset));
   return http<ReceiptInboxItem[]>(`/receipts?${query.toString()}`);
 }
 
@@ -160,6 +162,25 @@ export async function fetchReceiptFileText(receiptId: string): Promise<string> {
 export function dismissReceipt(receiptId: string): Promise<{ ok: true }> {
   if (useMockApi) return Promise.resolve({ ok: true });
   return http<{ ok: true }>(`/receipts/${receiptId}/dismiss`, { method: 'POST' });
+}
+
+/**
+ * POST /api/receipts/:id/unpair — detach a receipt from its transaction. The pair is remembered
+ * as rejected (auto-match won't re-pair it) and the receipt returns to the review queue.
+ */
+export function unpairReceipt(receiptId: string): Promise<ReceiptInboxItem> {
+  if (useMockApi) {
+    return getReceipt(receiptId).then((row) => ({ ...row, status: 'pending', transactionId: null }));
+  }
+  return http<ReceiptInboxItem>(`/receipts/${receiptId}/unpair`, { method: 'POST' });
+}
+
+/** Extraction has run (or failed) — the receipt's fields are as good as they'll get without the user. */
+export function receiptExtractionSettled(receipt: ReceiptInboxItem): boolean {
+  return receipt.confidence != null
+    || Boolean(receipt.extractionError)
+    || receipt.status !== 'pending'
+    || Boolean(receipt.transactionId);
 }
 
 /** POST /api/receipts/bulk-dismiss — mark many receipts not-applicable at once. */

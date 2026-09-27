@@ -217,6 +217,11 @@ export const receipts = pgTable('receipts', {
   // Why this receipt can't match yet (extraction failed or total/date unreadable); cleared
   // once extraction succeeds or the user fills the missing fields.
   extractionError: text('extraction_error'),
+  // Receipt fields the user corrected by hand ('merchant' | 'totalCents' | 'receiptDate');
+  // extraction retries never overwrite these.
+  userEditedFields: text('user_edited_fields').array().notNull().default(sql`'{}'::text[]`),
+  // When the matcher last evaluated this receipt; the rematch sweep takes the oldest first.
+  lastMatchAttemptAt: timestamp('last_match_attempt_at', { withTimezone: true }),
   ...timestamps,
 }, (table) => ({
   businessIdx: index('receipts_business_idx').on(table.businessId),
@@ -253,6 +258,8 @@ export const transactions = pgTable('transactions', {
   receiptStatusIdx: index('transactions_receipt_status_idx').on(table.receiptStatus),
   categoryIdx: index('transactions_category_idx').on(table.categoryId),
   receiptIdx: index('transactions_receipt_idx').on(table.receiptId),
+  // One transaction per receipt (migration 0022).
+  receiptUniqueIdx: uniqueIndex('transactions_receipt_id_unique_idx').on(table.receiptId).where(sql`${table.receiptId} IS NOT NULL`),
 }));
 
 export type TransactionTagSource = 'manual' | 'auto';

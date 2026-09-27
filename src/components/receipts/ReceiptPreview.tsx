@@ -11,8 +11,20 @@ interface Props {
   className?: string;
 }
 
+/**
+ * The server serves the stored MIME type whenever it's specific, so a ".pdf" whose stored type is
+ * something else (e.g. text/html) would not render as a PDF — and must never reach an
+ * unsandboxed frame. Only trust the PDF viewer when the response will really be application/pdf.
+ */
+function servedAsPdf(mimeType?: string | null, fileName?: string | null): boolean {
+  const mime = (mimeType ?? '').toLowerCase();
+  if (mime === 'application/pdf') return true;
+  return (!mime || mime === 'application/octet-stream') && /\.pdf$/i.test(fileName ?? '');
+}
+
 export function ReceiptPreview({ receipt, className }: Props) {
-  const kind = receiptPreviewKind(receipt.mimeType, receipt.fileName);
+  const detectedKind = receiptPreviewKind(receipt.mimeType, receipt.fileName);
+  const kind = detectedKind === 'pdf' && !servedAsPdf(receipt.mimeType, receipt.fileName) ? 'unsupported' : detectedKind;
   const inlineUrl = useMemo(() => receiptFileUrl(receipt.id), [receipt.id]);
   const downloadUrl = useMemo(() => receiptFileUrl(receipt.id, { download: true }), [receipt.id]);
   const [text, setText] = useState('');
@@ -95,12 +107,19 @@ function PreviewBody({
   fileName?: string | null;
 }) {
   if (kind === 'pdf') {
+    // <object> hands the (verified application/pdf) response to the browser's isolated PDF
+    // viewer; sandboxed iframes block that viewer, and HTML never takes this path.
     return (
-      <iframe
-        title={fileName ?? 'Receipt PDF'}
-        src={inlineUrl}
+      <object
+        aria-label={fileName ?? 'Receipt PDF'}
+        data={inlineUrl}
+        type="application/pdf"
         className="h-[560px] w-full rounded-md border border-ink2/10 bg-white lg:h-full"
-      />
+      >
+        <div className="flex h-full items-center justify-center p-6 text-center">
+          <PreviewFallback title="Preview unavailable" detail="This browser can't show PDFs inline — use Open or Download." />
+        </div>
+      </object>
     );
   }
 

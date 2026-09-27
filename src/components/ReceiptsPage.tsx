@@ -4,10 +4,13 @@ import {
   attachReceipt,
   bulkDismissReceipts,
   dismissReceipt,
+  getReceipt,
   listBusinesses,
   listReceiptCandidates,
   listReceipts,
+  receiptExtractionSettled,
   rematchReceipt,
+  unpairReceipt,
   updateReceipt,
   uploadReceipt,
 } from '@/api';
@@ -17,6 +20,7 @@ import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
 import { AppShell } from './AppShell';
 import { Button } from '@/components/ui/button';
+import { ToastAction } from '@/components/ui/toast';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -34,6 +38,11 @@ import {
   receiptLabel,
   receiptNeedsDetails,
 } from './receipts/ReceiptWorkbenchParts';
+
+const PAGE_SIZE = 100;
+const EXTRACTION_POLL_TIMEOUT_MS = 90_000;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface Props {
   user?: CurrentUser;
@@ -78,9 +87,21 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
   const [refreshKey, setRefreshKey] = useState(0);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
   const [bulkDismissing, setBulkDismissing] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Uploads whose extraction is still running — shown as "Reading…" rather than "Needs details".
+  const [extractingIds, setExtractingIds] = useState<Set<string>>(new Set());
+  const [candidatesVersion, setCandidatesVersion] = useState(0);
   const detailRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
 
   const selectedReceipt = receipts.find((receipt) => receipt.id === selectedReceiptId) ?? receipts[0] ?? null;
+  const selectedReceiptIdRef = useRef<string | null>(null);
+  selectedReceiptIdRef.current = selectedReceipt?.id ?? null;
+  const selectedExtracting = selectedReceipt ? extractingIds.has(selectedReceipt.id) : false;
   const receiptForMatching = useMemo(() => {
     if (!selectedReceipt) return null;
     const draftTotal = parseDollarInput(receiptDraft.total);
@@ -103,25 +124,47 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
     listBusinesses().then(setBusinesses).catch((loadError: Error) => setError(loadError.message));
   }, []);
 
+  const listFilters = useMemo(() => ({
+    status: 'pending' as const,
+    unmatched: true,
+    biz: business,
+    source,
+    q: query || undefined,
+  }), [business, query, source]);
+
   useEffect(() => {
     setLoadingReceipts(true);
     setError('');
-    listReceipts({
-      status: 'pending',
-      unmatched: true,
-      biz: business,
-      source,
-      q: query || undefined,
-      limit: 100,
-    })
+    listReceipts({ ...listFilters, limit: PAGE_SIZE })
       .then((rows) => {
         setReceipts(rows);
+        setHasMore(rows.length === PAGE_SIZE);
         setCheckedIds(new Set());
         setSelectedReceiptId((current) => (current && rows.some((row) => row.id === current) ? current : rows[0]?.id ?? null));
       })
       .catch((loadError: Error) => setError(loadError.message))
       .finally(() => setLoadingReceipts(false));
-  }, [business, query, refreshKey, source]);
+  }, [listFilters, refreshKey]);
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const rows = await listReceipts({ ...listFilters, limit: PAGE_SIZE, offset: receipts.length });
+      setReceipts((current) => {
+        const seen = new Set(current.map((row) => row.id));
+        return [...current, ...rows.filter((row) => !seen.has(row.id))];
+      });
+      setHasMore(rows.length === PAGE_SIZE);
+    } catch (loadError) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not load more receipts',
+        description: loadError instanceof Error ? loadError.message : 'Try again.',
+      });
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     if (!selectedReceipt) {
@@ -145,7 +188,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
       .then(setCandidates)
       .catch((loadError: Error) => toast({ variant: 'destructive', title: 'Could not load candidates', description: loadError.message }))
       .finally(() => setLoadingCandidates(false));
-  }, [selectedReceipt?.id, toast]);
+  }, [candidatesVersion, selectedReceipt?.id, toast]);
 
   const refresh = () => setRefreshKey((key) => key + 1);
 
@@ -217,17 +260,96 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
     }
   };
 
+  /** Poll one receipt until extraction (and the auto-match that follows it) has settled. */
+  const waitForExtraction = async (receiptId: string): Promise<ReceiptInboxItem | null> => {
+    const deadline = Date.now() + EXTRACTION_POLL_TIMEOUT_MS;
+    let delay = 1500;
+    while (mountedRef.current && Date.now() < deadline) {
+      await sleep(delay);
+      delay = Math.min(Math.round(delay * 1.5), 5000);
+      try {
+        const receipt = await getReceipt(receiptId);
+        if (receiptExtractionSettled(receipt)) return receipt;
+      } catch {
+        // Transient — keep polling until the deadline.
+      }
+    }
+    return null;
+  };
+
+  const setExtracting = (receiptId: string, extracting: boolean) => {
+    setExtractingIds((current) => {
+      const next = new Set(current);
+      if (extracting) next.add(receiptId);
+      else next.delete(receiptId);
+      return next;
+    });
+  };
+
   const handleUpload = async (file: File) => {
+    let receiptId: string;
     try {
       const selectedBusiness = businesses.find((item) => item.id === business);
-      await uploadReceipt(file, selectedBusiness?.dbId);
-      toast({ variant: 'success', title: 'Receipt queued', description: 'OCR and matching will run in the background.' });
-      refresh();
+      ({ receiptId } = await uploadReceipt(file, selectedBusiness?.dbId));
     } catch (uploadError) {
       toast({
         variant: 'destructive',
         title: 'Upload failed',
         description: uploadError instanceof Error ? uploadError.message : 'Try again.',
+      });
+      return;
+    }
+
+    setExtracting(receiptId, true);
+    setSelectedReceiptId(receiptId);
+    refresh();
+    const settled = await waitForExtraction(receiptId);
+    if (!mountedRef.current) return;
+    setExtracting(receiptId, false);
+    if (!settled) {
+      toast({ title: 'Still reading receipt', description: 'Details will appear here when processing finishes.' });
+      return;
+    }
+    if (settled.transactionId) {
+      toast({
+        variant: 'success',
+        title: 'Receipt matched',
+        description: `${receiptLabel(settled)} was paired automatically.`,
+        action: (
+          <ToastAction altText="Unpair receipt" onClick={() => handleUnpair(settled)}>
+            Unpair
+          </ToastAction>
+        ),
+      });
+      refresh();
+      return;
+    }
+    // Still in the queue: show the extracted fields and fresh candidates in place.
+    setReceipts((rows) => rows.map((row) => (row.id === settled.id ? settled : row)));
+    if (selectedReceiptIdRef.current === settled.id) {
+      setReceiptDraft({
+        merchant: settled.merchant ?? '',
+        total: formatCentsInput(settled.totalCents),
+        receiptDate: settled.receiptDate ?? '',
+      });
+      setDetailMode(receiptNeedsDetails(settled) ? 'pair' : 'receipt');
+      setCandidatesVersion((version) => version + 1);
+    }
+  };
+
+  const handleUnpair = async (receipt: ReceiptInboxItem) => {
+    try {
+      await unpairReceipt(receipt.id);
+      toast({ title: 'Receipt unpaired', description: `${receiptLabel(receipt)} is back in the queue.` });
+      if (mountedRef.current) {
+        setSelectedReceiptId(receipt.id);
+        refresh();
+      }
+    } catch (unpairError) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not unpair receipt',
+        description: unpairError instanceof Error ? unpairError.message : 'Try again.',
       });
     }
   };
@@ -321,7 +443,11 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
     >
       <div className="flex flex-col gap-4">
         <div className="grid gap-3 md:grid-cols-3">
-          <Metric label="Unmatched" value={String(receipts.length)} tone={receipts.length ? 'warning' : 'positive'} />
+          <Metric
+            label="Unmatched"
+            value={`${receipts.length}${hasMore ? '+' : ''}`}
+            tone={receipts.length ? 'warning' : 'positive'}
+          />
           <Metric label="Gmail" value={String(gmailCount)} />
           <Metric label="Manual uploads" value={String(uploadCount)} />
         </div>
@@ -387,6 +513,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                           receipt={receipt}
                           active={receipt.id === selectedReceipt?.id}
                           busy={busyReceiptId === receipt.id}
+                          extracting={extractingIds.has(receipt.id)}
                           checked={checkedIds.has(receipt.id)}
                           onSelect={() => setSelectedReceiptId(receipt.id)}
                           onDismiss={() => handleDismiss(receipt)}
@@ -397,6 +524,13 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                     </div>
                   </div>
                 ))}
+                {hasMore && !loadingReceipts && (
+                  <div className="border-t border-ink2/10 p-3 text-center">
+                    <Button variant="ghost" size="sm" disabled={loadingMore} onClick={loadMore}>
+                      {loadingMore ? 'Loading…' : 'Load more'}
+                    </Button>
+                  </div>
+                )}
               </div>
               {loadingReceipts && <div className="p-6 text-center text-sm text-dim">Loading receipts...</div>}
               {!loadingReceipts && receipts.length === 0 && (
@@ -418,6 +552,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                       <div className="mt-1 flex flex-wrap gap-2 text-sm text-dim">
                         {selectedReceipt.receiptDate && <span>{selectedReceipt.receiptDate}</span>}
                         {selectedReceipt.totalCents != null && <span>{fmt$(selectedReceipt.totalCents / 100)}</span>}
+                        {selectedExtracting && <span>Reading receipt…</span>}
                         {selectedReceipt.confidence != null && <span>{Math.round(selectedReceipt.confidence * 100)}% OCR</span>}
                       </div>
                     </div>
@@ -432,7 +567,7 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
                     </Button>
                   </div>
 
-                  {(selectedReceipt.extractionError || receiptNeedsDetails(selectedReceipt)) && (
+                  {!selectedExtracting && (selectedReceipt.extractionError || receiptNeedsDetails(selectedReceipt)) && (
                     <div className="border-b border-coral/30 bg-coral/10 px-4 py-2 text-xs font-bold text-coral-ink">
                       {selectedReceipt.extractionError
                         ?? 'Missing a total or date — fill them in under Pair, then Save & find matches.'}

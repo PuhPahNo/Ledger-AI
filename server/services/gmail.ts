@@ -1,5 +1,5 @@
 import { google } from 'googleapis';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, or } from 'drizzle-orm';
 import { getEnv } from '../config/env.js';
 import { db } from '../db/client.js';
 import { connections, receipts } from '../db/schema.js';
@@ -9,6 +9,7 @@ import { serviceUnavailable } from '../lib/errors.js';
 import {
   buildEmailBodyCandidate,
   collectReceiptAttachments,
+  gmailReceiptStorageKey,
   header,
   messageReceiptSignal,
   sanitizeFileName,
@@ -305,16 +306,27 @@ async function insertGmailAttachmentReceipt(input: {
   buffer: Buffer;
   emailMetadata: Record<string, string | undefined>;
 }): Promise<boolean> {
+  // Gmail attachment ids aren't stable across fetches, so a re-backfill would otherwise
+  // re-ingest the same file — dedupe on content within the message too.
+  const fileSha256 = sha256Buffer(input.buffer);
   const existing = await db.query.receipts.findFirst({
     where: and(
       eq(receipts.gmailMessageId, input.messageId),
-      eq(receipts.gmailAttachmentId, input.attachment.attachmentId),
+      or(
+        eq(receipts.gmailAttachmentId, input.attachment.attachmentId),
+        eq(receipts.fileSha256, fileSha256),
+      ),
     ),
   });
   if (existing) return false;
 
   const fileName = sanitizeFileName(input.attachment.filename);
-  const key = `receipts/gmail/${input.connectionId}/${input.messageId}/${fileName}`;
+  const key = gmailReceiptStorageKey({
+    connectionId: input.connectionId,
+    messageId: input.messageId,
+    fileName,
+    contentSha256: fileSha256,
+  });
   await storage().put({ key, body: input.buffer, contentType: input.attachment.mimeType });
   const [receipt] = await db.insert(receipts).values({
     businessId: input.businessId,
@@ -323,7 +335,7 @@ async function insertGmailAttachmentReceipt(input: {
     fileKey: key,
     fileName,
     mimeType: input.attachment.mimeType,
-    fileSha256: sha256Buffer(input.buffer),
+    fileSha256,
     gmailMessageId: input.messageId,
     gmailAttachmentId: input.attachment.attachmentId,
     ocrJson: {
@@ -352,7 +364,13 @@ async function insertGmailBodyReceipt(input: {
   if (existing) return false;
 
   const buffer = Buffer.from(input.bodyCandidate.text, 'utf8');
-  const key = `receipts/gmail/${input.connectionId}/${input.messageId}/${input.bodyCandidate.filename}`;
+  const fileSha256 = sha256Buffer(buffer);
+  const key = gmailReceiptStorageKey({
+    connectionId: input.connectionId,
+    messageId: input.messageId,
+    fileName: input.bodyCandidate.filename,
+    contentSha256: fileSha256,
+  });
   await storage().put({ key, body: buffer, contentType: input.bodyCandidate.mimeType });
   const [receipt] = await db.insert(receipts).values({
     businessId: input.businessId,
@@ -361,7 +379,7 @@ async function insertGmailBodyReceipt(input: {
     fileKey: key,
     fileName: input.bodyCandidate.filename,
     mimeType: input.bodyCandidate.mimeType,
-    fileSha256: sha256Buffer(buffer),
+    fileSha256,
     gmailMessageId: input.messageId,
     gmailAttachmentId: bodyPartId,
     ocrJson: {

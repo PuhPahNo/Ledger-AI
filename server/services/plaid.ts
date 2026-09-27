@@ -388,14 +388,15 @@ async function adoptPendingPredecessor(predecessor: Transaction, saved: Transact
         .update(receiptMatches)
         .set({ transactionId: saved.id })
         .where(and(eq(receiptMatches.receiptId, receipt.id), eq(receiptMatches.transactionId, predecessor.id)));
-      await db
-        .update(transactions)
-        .set({ receiptId: receipt.id, receiptStatus: 'matched', updatedAt: new Date() })
-        .where(eq(transactions.id, saved.id));
+      // Release the pending row first: transactions.receipt_id is unique (migration 0022).
       await db
         .update(transactions)
         .set({ receiptId: null, updatedAt: new Date() })
         .where(eq(transactions.id, predecessor.id));
+      await db
+        .update(transactions)
+        .set({ receiptId: receipt.id, receiptStatus: 'matched', updatedAt: new Date() })
+        .where(eq(transactions.id, saved.id));
     }
   }
 

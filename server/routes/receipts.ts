@@ -9,7 +9,13 @@ import { enqueue } from '../jobs/queue.js';
 import { sha256Buffer } from '../lib/crypto.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
-import { matchReceipt, receiptMatchCandidates } from '../services/matching.js';
+import {
+  matchReceipt,
+  mergeUserEditedFields,
+  receiptMatchCandidates,
+  receiptMatchSkipReason,
+  unpairReceipt,
+} from '../services/matching.js';
 import { storage } from '../services/storage.js';
 import { toApiReceipt, toApiTransaction } from './mappers.js';
 
@@ -23,6 +29,7 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
       source: z.enum(['upload', 'gmail', 'all']).optional().default('all'),
       q: z.string().optional(),
       limit: z.coerce.number().int().min(1).max(200).default(100),
+      offset: z.coerce.number().int().min(0).max(100_000).default(0),
     }).parse(request.query);
 
     const rows = await db
@@ -48,8 +55,9 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
           OR ${businesses.name} ILIKE ${`%${query.q}%`}
         )` : sql`true`,
       ))
-      .orderBy(desc(receipts.createdAt))
-      .limit(query.limit);
+      .orderBy(desc(receipts.createdAt), desc(receipts.id))
+      .limit(query.limit)
+      .offset(query.offset);
 
     return rows.map((row) => toApiReceipt(row));
   });
@@ -87,9 +95,15 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
       receiptDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
     }).parse(request.body);
 
+    const existing = await db.query.receipts.findFirst({ where: eq(receipts.id, params.id) });
+    if (!existing) notFound('Receipt not found');
+    // Remember which fields the user actually changed so a late extraction retry can't
+    // overwrite them (and so hand-entered totals/dates count as trustworthy for auto-match).
+    const userEditedFields = mergeUserEditedFields(existing.userEditedFields, existing, body);
+
     const [updated] = await db
       .update(receipts)
-      .set({ ...body, updatedAt: new Date() })
+      .set({ ...body, userEditedFields, updatedAt: new Date() })
       .where(eq(receipts.id, params.id))
       .returning();
     if (!updated) notFound('Receipt not found');
@@ -167,6 +181,11 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
   app.post('/receipts/:id/match', async (request) => {
     await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const receipt = await db.query.receipts.findFirst({ where: eq(receipts.id, params.id) });
+    if (!receipt) notFound('Receipt not found');
+    // Dismissed or already-paired receipts are never re-matched (matchReceipt enforces this too).
+    const skipped = receiptMatchSkipReason(receipt);
+    if (skipped === 'not_pending' || skipped === 'already_matched') return { matched: null, skipped };
     const result = await matchReceipt(params.id);
     return {
       matched: result
@@ -177,6 +196,19 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
         }
         : null,
     };
+  });
+
+  // Detach a receipt from its transaction. The pair is recorded as rejected so auto-match
+  // never re-pairs it; the receipt returns to the review queue.
+  app.post('/receipts/:id/unpair', async (request) => {
+    const user = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const result = await unpairReceipt(params.id);
+    if (!result) notFound('Receipt not found');
+    await audit(request, user, 'unpair_receipt', 'receipt', params.id, { transactionIds: result.transactionIds });
+    const receipt = await receiptWithPresentation(params.id);
+    if (!receipt) notFound('Receipt not found');
+    return toApiReceipt(receipt);
   });
 
   app.post('/receipts/:id/dismiss', async (request) => {

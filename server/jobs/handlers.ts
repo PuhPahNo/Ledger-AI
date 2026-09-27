@@ -1,7 +1,14 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { exportJobs, receipts } from '../db/schema.js';
-import { extractReceipt } from '../services/receiptExtraction.js';
+import {
+  extractReceipt,
+  isPermanentExtractionFailure,
+  PermanentExtractionError,
+  receiptExtractionUpdate,
+  unsupportedReceiptFileReason,
+  type ReceiptExtraction,
+} from '../services/receiptExtraction.js';
 import { storage } from '../services/storage.js';
 import { matchReceipt, rematchUnmatchedReceipts } from '../services/matching.js';
 import { enqueue } from './queue.js';
@@ -88,8 +95,10 @@ async function extractAndMatchReceipt(receiptId: string): Promise<void> {
   const receipt = await db.query.receipts.findFirst({ where: eq(receipts.id, receiptId) });
   if (!receipt?.fileKey || !receipt.mimeType || !receipt.fileName) return;
 
-  let extraction;
+  let extraction: ReceiptExtraction;
   try {
+    const unsupported = unsupportedReceiptFileReason({ mimeType: receipt.mimeType, fileName: receipt.fileName });
+    if (unsupported) throw new PermanentExtractionError(unsupported);
     const chunks: Buffer[] = [];
     const stream = await storage().getStream(receipt.fileKey);
     for await (const chunk of stream) {
@@ -107,37 +116,16 @@ async function extractAndMatchReceipt(receiptId: string): Promise<void> {
       extractionError: error instanceof Error ? error.message : String(error),
       updatedAt: new Date(),
     }).where(eq(receipts.id, receiptId));
+    // Permanent failures (e.g. HEIC) would fail identically — and be billed — on every retry.
+    if (isPermanentExtractionFailure(error)) return;
     throw error;
   }
 
-  if (!extraction.isReceipt && receipt.source === 'gmail') {
-    // The extractor read the actual file and says it isn't purchase evidence, so don't
-    // park it in the review queue. Uploads are exempt — the user chose those on purpose.
-    // Dismissed rows keep the extraction and stay visible under the n/a status filter.
-    await db.update(receipts).set({
-      status: 'n/a',
-      merchant: extraction.merchant,
-      confidence: String(extraction.confidence),
-      ocrJson: extraction,
-      updatedAt: new Date(),
-    }).where(eq(receipts.id, receiptId));
-    return;
-  }
-
-  const missing = [
-    extraction.totalCents == null ? 'total' : null,
-    extraction.receiptDate == null ? 'date' : null,
-  ].filter((field): field is string => field !== null);
-  await db.update(receipts).set({
-    merchant: extraction.merchant,
-    totalCents: extraction.totalCents,
-    receiptDate: extraction.receiptDate,
-    confidence: String(extraction.confidence),
-    ocrJson: extraction,
-    extractionError: missing.length > 0
-      ? `Could not read the receipt ${missing.join(' or ')} — add ${missing.length > 1 ? 'them' : 'it'} manually to enable matching.`
-      : null,
-    updatedAt: new Date(),
-  }).where(eq(receipts.id, receiptId));
+  // Re-read: the user may have edited, paired, or dismissed the receipt while extraction ran.
+  const current = await db.query.receipts.findFirst({ where: eq(receipts.id, receiptId) });
+  if (!current) return;
+  await db.update(receipts)
+    .set({ ...receiptExtractionUpdate(current, extraction), updatedAt: new Date() })
+    .where(eq(receipts.id, receiptId));
   await matchReceipt(receiptId);
 }
