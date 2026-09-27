@@ -80,9 +80,9 @@ function ChartArtifact({ artifact }: { artifact: Extract<AssistantArtifact, { ty
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-display text-lg font-bold">{artifact.title}</h3>
         <div className="flex flex-wrap gap-2">
-          {artifact.series.map((series) => (
+          {artifact.series.map((series, seriesIndex) => (
             <span key={series.name} className="flex items-center gap-1 text-xs text-dim">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: series.color ?? '#111' }} />
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: seriesColor(series.color, seriesIndex) }} />
               {series.name}
             </span>
           ))}
@@ -92,7 +92,7 @@ function ChartArtifact({ artifact }: { artifact: Extract<AssistantArtifact, { ty
         {artifact.labels.map((label, labelIndex) => (
           <div key={label} className="flex min-w-12 flex-1 flex-col items-center gap-2">
             <div className="flex h-52 w-full items-end justify-center gap-1">
-              {artifact.series.map((series) => {
+              {artifact.series.map((series, seriesIndex) => {
                 const value = series.values[labelIndex] ?? 0;
                 const height = Math.max(4, Math.round((Math.abs(value) / max) * 200));
                 return (
@@ -100,7 +100,7 @@ function ChartArtifact({ artifact }: { artifact: Extract<AssistantArtifact, { ty
                     key={series.name}
                     className="w-full max-w-6 rounded-t-md"
                     title={`${series.name}: ${formatValue(value, artifact.valueType)}`}
-                    style={{ height, background: series.color ?? '#111' }}
+                    style={{ height, background: seriesColor(series.color, seriesIndex) }}
                   />
                 );
               })}
@@ -124,7 +124,7 @@ function DonutChart({ artifact, max }: { artifact: Extract<AssistantArtifact, { 
           const value = values[index] ?? 0;
           return (
             <div key={label} className="flex items-center gap-3">
-              <div className="h-3 rounded-full" style={{ width: `${Math.max(8, (value / total) * 180)}px`, background: artifact.series[index]?.color ?? '#D97757' }} />
+              <div className="h-3 rounded-full" style={{ width: `${Math.max(8, (value / total) * 180)}px`, background: seriesColor(null, index) }} />
               <span className="text-sm">{label}</span>
               <span className="ml-auto font-semibold">{formatValue(value, artifact.valueType)}</span>
             </div>
@@ -191,10 +191,33 @@ function TableArtifact({ artifact }: { artifact: Extract<AssistantArtifact, { ty
   );
 }
 
+/** Theme tokens a chart series may name; each maps to a CSS variable that follows light/dark mode. */
+const seriesTokens: Record<string, string> = {
+  sage: 'hsl(var(--color-sage))',
+  coral: 'hsl(var(--color-coral))',
+  sky: 'hsl(var(--color-sky))',
+  lemon: 'hsl(var(--color-lemon))',
+  pink: 'hsl(var(--color-pink))',
+  purple: 'hsl(var(--color-purple))',
+  ink: 'hsl(var(--color-ink))',
+  dim: 'hsl(var(--color-dim))',
+};
+const seriesPalette = ['sage', 'coral', 'sky', 'lemon', 'purple', 'pink'];
+
+/**
+ * Resolve a series color to a theme-aware CSS value. Only known token names are honored;
+ * anything else (legacy hex values, unexpected strings) falls back to the palette by index,
+ * so arbitrary strings never reach inline styles.
+ */
+export function seriesColor(color: string | null | undefined, index: number): string {
+  if (color && seriesTokens[color]) return seriesTokens[color];
+  return seriesTokens[seriesPalette[index % seriesPalette.length]] ?? seriesTokens.ink;
+}
+
 function toneClass(tone: string) {
-  if (tone === 'positive') return 'text-emerald-700';
+  if (tone === 'positive') return 'text-sage-ink';
   if (tone === 'warning') return 'text-coral-ink';
-  if (tone === 'danger') return 'text-red-700';
+  if (tone === 'danger') return 'text-destructive';
   if (tone === 'muted') return 'text-dim';
   return 'text-ink';
 }

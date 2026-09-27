@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { scrubSecrets } from './assistantSecurity.js';
 
 export const assistantToneSchema = z.enum(['default', 'positive', 'warning', 'muted', 'danger']);
 
@@ -85,71 +86,6 @@ export const assistantArtifactSchema = z.discriminatedUnion('type', [
   }),
 ]);
 
-const assistantStructuredArtifactRowSchema = z.object({
-  id: z.string().nullable(),
-  date: z.string().nullable(),
-  merchant: z.string().nullable(),
-  business: z.string().nullable(),
-  category: z.string().nullable(),
-  account: z.string().nullable(),
-  amountCents: z.number().int().nullable(),
-  receiptStatus: z.string().nullable(),
-  cells: z.array(z.string()).max(8).nullable(),
-});
-
-const assistantStructuredArtifactSchema = z.object({
-  type: z.enum(['metric_grid', 'table', 'transactions', 'chart']),
-  id: z.string(),
-  title: z.string(),
-  metrics: z.array(assistantMetricSchema).max(12).nullable(),
-  columns: z.array(assistantTableColumnSchema).max(8).nullable(),
-  rows: z.array(assistantStructuredArtifactRowSchema).max(100).nullable(),
-  chartType: assistantChartTypeSchema.nullable(),
-  valueType: assistantValueTypeSchema.nullable(),
-  labels: z.array(z.string()).max(36).nullable(),
-  series: z.array(assistantChartSeriesSchema).max(8).nullable(),
-}).superRefine((artifact, ctx) => {
-  if (artifact.type === 'metric_grid' && !artifact.metrics) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['metrics'], message: 'Metric artifacts require metrics.' });
-  }
-  if (artifact.type === 'table' && (!artifact.columns || !artifact.rows)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['rows'], message: 'Table artifacts require columns and rows.' });
-  }
-  if (artifact.type === 'table') {
-    artifact.rows?.forEach((row, index) => {
-      if (!row.cells) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['rows', index, 'cells'], message: 'Table rows require ordered cells.' });
-      }
-    });
-  }
-  if (artifact.type === 'transactions') {
-    if (!artifact.rows) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['rows'], message: 'Transaction artifacts require rows.' });
-      return;
-    }
-    artifact.rows.forEach((row, index) => {
-      const hasRequiredShape = typeof row.id === 'string'
-        && typeof row.date === 'string'
-        && typeof row.merchant === 'string'
-        && typeof row.business === 'string'
-        && typeof row.category === 'string'
-        && typeof row.account === 'string'
-        && typeof row.amountCents === 'number'
-        && typeof row.receiptStatus === 'string';
-      if (!hasRequiredShape) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['rows', index],
-          message: 'Transaction rows require id, date, merchant, business, category, account, amountCents, and receiptStatus.',
-        });
-      }
-    });
-  }
-  if (artifact.type === 'chart' && (!artifact.chartType || !artifact.valueType || !artifact.labels || !artifact.series)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['series'], message: 'Chart artifacts require chartType, valueType, labels, and series.' });
-  }
-});
-
 export const assistantApprovalSchema = z.object({
   id: z.string(),
   kind: z.enum(['data_expansion', 'mutation']),
@@ -166,12 +102,18 @@ export const assistantToolEventSchema = z.object({
   detail: z.string(),
 });
 
+/**
+ * What the model returns. The model never writes chart/table data: tools register server-built
+ * artifacts with short ids (a1, a2, ...) and the model only picks which ones to show. Approval
+ * cards are likewise attached by the server from tool results, never copied by the model.
+ */
 export const assistantStructuredOutputSchema = z.object({
   answer: z.string(),
-  artifacts: z.array(assistantStructuredArtifactSchema).default([]),
-  approvalRequests: z.array(assistantApprovalSchema).default([]),
-  followUpSuggestions: z.array(z.string()).max(4).default([]),
+  artifactIds: z.array(z.string()).max(8),
+  followUpSuggestions: z.array(z.string()).max(4),
 });
+
+export type AssistantModelOutput = z.infer<typeof assistantStructuredOutputSchema>;
 
 export const assistantOutputSchema = z.object({
   answer: z.string(),
@@ -191,84 +133,24 @@ export type AssistantApiResponse = z.infer<typeof assistantApiResponseSchema>;
 export type AssistantStructuredOutput = z.infer<typeof assistantOutputSchema>;
 export type AssistantToolEvent = z.infer<typeof assistantToolEventSchema>;
 
-export function sanitizeAssistantOutput(input: unknown): AssistantStructuredOutput {
-  const direct = assistantOutputSchema.safeParse(input);
-  if (direct.success) return direct.data;
+const fallbackModelOutput: AssistantModelOutput = {
+  answer: 'I could not safely format that response. Try asking again with a narrower finance question.',
+  artifactIds: [],
+  followUpSuggestions: [],
+};
+
+/** Validate the model's structured output and scrub anything secret-looking from its prose. */
+export function sanitizeAssistantOutput(input: unknown): AssistantModelOutput {
   const parsed = assistantStructuredOutputSchema.safeParse(input);
-  if (parsed.success) {
-    return assistantOutputSchema.parse({
-      ...parsed.data,
-      artifacts: parsed.data.artifacts.map(normalizeStructuredArtifact).filter((artifact) => artifact !== null),
-    });
+  if (!parsed.success) {
+    const answer = input && typeof input === 'object' && typeof (input as { answer?: unknown }).answer === 'string'
+      ? (input as { answer: string }).answer
+      : null;
+    return answer ? { ...fallbackModelOutput, answer: scrubSecrets(answer) } : fallbackModelOutput;
   }
   return {
-    answer: 'I could not safely format that response. Try asking again with a narrower finance question.',
-    artifacts: [],
-    approvalRequests: [],
-    followUpSuggestions: [],
+    answer: scrubSecrets(parsed.data.answer),
+    artifactIds: parsed.data.artifactIds,
+    followUpSuggestions: parsed.data.followUpSuggestions.map(scrubSecrets),
   };
-}
-
-function normalizeStructuredArtifact(artifact: z.infer<typeof assistantStructuredArtifactSchema>): AssistantArtifact | null {
-  if (artifact.type === 'metric_grid' && artifact.metrics) {
-    return {
-      type: 'metric_grid',
-      id: artifact.id,
-      title: artifact.title,
-      metrics: artifact.metrics,
-    };
-  }
-  if (artifact.type === 'table' && artifact.columns && artifact.rows) {
-    return {
-      type: 'table',
-      id: artifact.id,
-      title: artifact.title,
-      columns: artifact.columns,
-      rows: artifact.rows.map((row) => ({ cells: row.cells ?? [] })),
-    };
-  }
-  if (artifact.type === 'transactions' && artifact.rows) {
-    const rows = artifact.rows.flatMap((row) => {
-      if (
-        !row.id
-        || !row.date
-        || !row.merchant
-        || !row.business
-        || !row.category
-        || !row.account
-        || typeof row.amountCents !== 'number'
-        || !row.receiptStatus
-      ) {
-        return [];
-      }
-      return [{
-        id: row.id,
-        date: row.date,
-        merchant: row.merchant,
-        business: row.business,
-        category: row.category,
-        account: row.account,
-        amountCents: row.amountCents,
-        receiptStatus: row.receiptStatus,
-      }];
-    });
-    return {
-      type: 'transactions',
-      id: artifact.id,
-      title: artifact.title,
-      rows,
-    };
-  }
-  if (artifact.type === 'chart' && artifact.chartType && artifact.valueType && artifact.labels && artifact.series) {
-    return {
-      type: 'chart',
-      id: artifact.id,
-      title: artifact.title,
-      chartType: artifact.chartType,
-      valueType: artifact.valueType,
-      labels: artifact.labels,
-      series: artifact.series,
-    };
-  }
-  return null;
 }

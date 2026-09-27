@@ -1,18 +1,27 @@
-import { useRef, useState } from 'react';
-import { Check, Loader2, Send, Sparkles, Wrench } from 'lucide-react';
-import { confirmAssistantAction, sendAssistantMessage, uploadReceipt } from '@/api';
+import { useEffect, useRef, useState } from 'react';
+import { Check, Loader2, MessageSquarePlus, Send, Sparkles, Wrench, X } from 'lucide-react';
+import { ApiError, confirmAssistantAction, sendAssistantMessage, uploadReceipt } from '@/api';
 import type {
   AssistantApprovalRequest,
-  AssistantArtifact,
   AssistantResponse,
   AssistantToolEvent,
   CurrentUser,
 } from '@/types/domain';
+import { LEDGER_DATA_CHANGED_EVENT, type LedgerDataChangedDetail } from '@/types/assistant';
 import type { AppView } from '@/types/navigation';
 import { cn } from '@/lib/cn';
 import { useToast } from '@/hooks/useToast';
 import { AppShell } from './AppShell';
 import { ArtifactView } from './assistant/AssistantArtifacts';
+import { RichText } from './assistant/RichText';
+import {
+  clearConversation,
+  emptyConversation,
+  loadConversation,
+  saveConversation,
+  type ApprovalStatus,
+  type ChatMessage,
+} from './assistant/conversationStorage';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -22,18 +31,6 @@ interface Props {
   onViewChange?: (view: AppView) => void;
   onLogout?: () => void;
 }
-
-type ChatMessage =
-  | { id: string; role: 'user'; text: string }
-  | {
-      id: string;
-      role: 'assistant';
-      text: string;
-      artifacts: AssistantArtifact[];
-      approvals: AssistantApprovalRequest[];
-      toolEvents: AssistantToolEvent[];
-      followUps: string[];
-    };
 
 interface LiveState {
   statuses: string[];
@@ -49,48 +46,23 @@ const examples = [
 
 export function AssistantPage({ user, onViewChange, onLogout }: Props) {
   const { toast } = useToast();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [initial] = useState(loadConversation);
+  const [messages, setMessages] = useState<ChatMessage[]>(initial.messages);
+  const [previousResponseId, setPreviousResponseId] = useState<string | null>(initial.previousResponseId);
+  const [pendingActionResults, setPendingActionResults] = useState<string[]>(initial.pendingActionResults);
+  const [approvalStatus, setApprovalStatus] = useState<Record<string, ApprovalStatus>>(initial.approvalStatus);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [live, setLive] = useState<LiveState>({ statuses: [], toolEvents: [] });
-  const [previousResponseId, setPreviousResponseId] = useState<string | null>(null);
-  const lastUserMessage = useRef('');
+  // Synchronous guard against double-clicks landing before React re-renders.
+  const inFlight = useRef(new Set<string>());
 
-  const ask = async (message: string, approvedDataToken?: string) => {
-    const trimmed = message.trim();
-    if (!trimmed || busy) return;
-    lastUserMessage.current = trimmed;
-    setDraft('');
-    setBusy(true);
-    setLive({ statuses: [], toolEvents: [] });
-    if (!approvedDataToken) {
-      setMessages((current) => [...current, { id: crypto.randomUUID(), role: 'user', text: trimmed }]);
-    }
-    try {
-      const response = await sendAssistantMessage({
-        message: trimmed,
-        previousResponseId,
-        approvedDataToken,
-      }, (event) => {
-        if (event.type === 'status') {
-          setLive((current) => ({ ...current, statuses: [...current.statuses.slice(-3), event.message] }));
-        }
-        if (event.type === 'tool_event') {
-          setLive((current) => ({ ...current, toolEvents: [...current.toolEvents, event.event] }));
-        }
-      });
-      setPreviousResponseId(response.nextResponseId);
-      appendAssistant(response);
-    } catch (error) {
-      toast({
-        variant: 'destructive',
-        title: 'Assistant failed',
-        description: error instanceof Error ? error.message : 'Try again.',
-      });
-    } finally {
-      setBusy(false);
-      setLive({ statuses: [], toolEvents: [] });
-    }
+  useEffect(() => {
+    saveConversation({ version: 1, messages, previousResponseId, pendingActionResults, approvalStatus });
+  }, [messages, previousResponseId, pendingActionResults, approvalStatus]);
+
+  const markApproval = (id: string, status: ApprovalStatus) => {
+    setApprovalStatus((current) => ({ ...current, [id]: status }));
   };
 
   const appendAssistant = (response: AssistantResponse) => {
@@ -105,14 +77,75 @@ export function AssistantPage({ user, onViewChange, onLogout }: Props) {
     }]);
   };
 
-  const confirm = async (approval: AssistantApprovalRequest) => {
-    if (approval.kind === 'data_expansion') {
-      await ask(lastUserMessage.current, approval.token);
-      return;
+  /** Run one model turn. `message` is shown as a user bubble unless this is an approval replay. */
+  const runTurn = async ({ message, approvedDataToken }: { message: string; approvedDataToken?: string }) => {
+    if (busy || inFlight.current.has('turn')) return false;
+    inFlight.current.add('turn');
+    const actionResults = pendingActionResults;
+    setBusy(true);
+    setLive({ statuses: [], toolEvents: [] });
+    if (!approvedDataToken) {
+      setMessages((current) => [...current, { id: crypto.randomUUID(), role: 'user', text: message }]);
     }
     try {
+      const response = await sendAssistantMessage({
+        message,
+        previousResponseId,
+        approvedDataToken,
+        actionResults,
+      }, (event) => {
+        if (event.type === 'status') {
+          setLive((current) => ({ ...current, statuses: [...current.statuses.slice(-3), event.message] }));
+        }
+        if (event.type === 'tool_event') {
+          setLive((current) => ({ ...current, toolEvents: [...current.toolEvents, event.event] }));
+        }
+      });
+      setPreviousResponseId(response.nextResponseId);
+      // The model has now seen these notes (or the thread was reset); don't resend them.
+      setPendingActionResults((current) => current.filter((note) => !actionResults.includes(note)));
+      appendAssistant(response);
+      return true;
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Assistant failed',
+        description: error instanceof Error ? error.message : 'Try again.',
+      });
+      return false;
+    } finally {
+      inFlight.current.delete('turn');
+      setBusy(false);
+      setLive({ statuses: [], toolEvents: [] });
+    }
+  };
+
+  const ask = async (message: string) => {
+    const trimmed = message.trim();
+    if (!trimmed || busy) return;
+    setDraft('');
+    await runTurn({ message: trimmed });
+  };
+
+  const confirm = async (approval: AssistantApprovalRequest) => {
+    if (busy || inFlight.current.has(approval.id) || approvalStatus[approval.id]) return;
+    if (new Date(approval.expiresAt).getTime() <= Date.now()) {
+      markApproval(approval.id, 'expired');
+      return;
+    }
+    inFlight.current.add(approval.id);
+    markApproval(approval.id, 'confirming');
+    try {
+      if (approval.kind === 'data_expansion') {
+        // The server replays the question this approval was issued for; no duplicate user turn.
+        const ok = await runTurn({ message: '', approvedDataToken: approval.token });
+        markApproval(approval.id, 'done');
+        if (!ok) toast({ variant: 'destructive', title: 'Approval not applied', description: 'Ask the question again to get a new approval.' });
+        return;
+      }
       setBusy(true);
       const result = await confirmAssistantAction(approval.token);
+      markApproval(approval.id, 'done');
       appendAssistant({
         answer: result.message,
         artifacts: result.artifact ? [result.artifact] : [],
@@ -121,16 +154,51 @@ export function AssistantPage({ user, onViewChange, onLogout }: Props) {
         toolEvents: [],
         nextResponseId: previousResponseId,
       });
+      setPendingActionResults((current) => [...current, result.contextNote ?? `Confirmed: ${approval.title}. ${result.message}`]);
+      try {
+        window.dispatchEvent(new CustomEvent<LedgerDataChangedDetail>(LEDGER_DATA_CHANGED_EVENT, {
+          detail: { source: 'assistant', kind: approval.kind },
+        }));
+      } catch {
+        // Non-browser environments; nothing to notify.
+      }
       toast({ variant: 'success', title: 'Confirmed', description: result.message });
     } catch (error) {
+      const status = error instanceof ApiError ? error.status : 0;
+      // 409: already used elsewhere (other tab / earlier click). 410: expired. Otherwise allow a retry.
+      if (status === 409) markApproval(approval.id, 'done');
+      else if (status === 410) markApproval(approval.id, 'expired');
+      else setApprovalStatus((current) => {
+        const next = { ...current };
+        delete next[approval.id];
+        return next;
+      });
       toast({
         variant: 'destructive',
         title: 'Confirmation failed',
         description: error instanceof Error ? error.message : 'Ask the assistant to prepare it again.',
       });
     } finally {
+      inFlight.current.delete(approval.id);
       setBusy(false);
     }
+  };
+
+  const decline = (approval: AssistantApprovalRequest) => {
+    if (approvalStatus[approval.id] || inFlight.current.has(approval.id)) return;
+    markApproval(approval.id, 'declined');
+    setPendingActionResults((current) => [...current, `The user declined: ${approval.title}. ${approval.detail} Nothing was changed.`]);
+  };
+
+  const newChat = () => {
+    if (busy) return;
+    clearConversation();
+    const fresh = emptyConversation();
+    setMessages(fresh.messages);
+    setPreviousResponseId(fresh.previousResponseId);
+    setPendingActionResults(fresh.pendingActionResults);
+    setApprovalStatus(fresh.approvalStatus);
+    setDraft('');
   };
 
   const handleUpload = async (file: File) => {
@@ -183,9 +251,15 @@ export function AssistantPage({ user, onViewChange, onLogout }: Props) {
           </aside>
 
           <section className="flex min-h-0 flex-col rounded-xl border border-ink2/10 bg-paper shadow-sm">
-            <div className="border-b border-ink2/10 px-4 py-3">
-              <div className="font-display text-lg font-bold">Ask anything about finances</div>
-              <div className="text-sm text-dim">Transactions, balances, cash flow, receipts, categories, and owner insights.</div>
+            <div className="flex items-start gap-3 border-b border-ink2/10 px-4 py-3">
+              <div className="flex-1">
+                <div className="font-display text-lg font-bold">Ask anything about finances</div>
+                <div className="text-sm text-dim">Transactions, balances, cash flow, receipts, categories, and owner insights.</div>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={newChat} disabled={busy || messages.length === 0}>
+                <MessageSquarePlus className="h-4 w-4" />
+                New chat
+              </Button>
             </div>
 
             <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
@@ -199,7 +273,16 @@ export function AssistantPage({ user, onViewChange, onLogout }: Props) {
                 </div>
               )}
               {messages.map((message) => (
-                <MessageBubble key={message.id} message={message} onConfirm={confirm} onAsk={ask} onViewChange={onViewChange} busy={busy} />
+                <MessageBubble
+                  key={message.id}
+                  message={message}
+                  approvalStatus={approvalStatus}
+                  onConfirm={confirm}
+                  onDecline={decline}
+                  onAsk={ask}
+                  onViewChange={onViewChange}
+                  busy={busy}
+                />
               ))}
               {busy && <LiveToolCallPanel live={live} />}
             </div>
@@ -239,13 +322,17 @@ export function AssistantPage({ user, onViewChange, onLogout }: Props) {
 
 function MessageBubble({
   message,
+  approvalStatus,
   onConfirm,
+  onDecline,
   onAsk,
   onViewChange,
   busy,
 }: {
   message: ChatMessage;
+  approvalStatus: Record<string, ApprovalStatus>;
   onConfirm: (approval: AssistantApprovalRequest) => void;
+  onDecline: (approval: AssistantApprovalRequest) => void;
   onAsk: (message: string) => void;
   onViewChange?: (view: AppView) => void;
   busy: boolean;
@@ -265,7 +352,14 @@ function MessageBubble({
       {message.toolEvents.length > 0 && <ToolEventStrip events={message.toolEvents} />}
       {message.artifacts.map((artifact) => <ArtifactView key={artifact.id} artifact={artifact} onViewChange={onViewChange} />)}
       {message.approvals.map((approval) => (
-        <ApprovalCard key={approval.id} approval={approval} onConfirm={onConfirm} busy={busy} />
+        <ApprovalCard
+          key={approval.id}
+          approval={approval}
+          status={approvalStatus[approval.id]}
+          onConfirm={onConfirm}
+          onDecline={onDecline}
+          busy={busy}
+        />
       ))}
       {message.followUps.length > 0 && (
         <div className="flex flex-wrap gap-2">
@@ -278,35 +372,6 @@ function MessageBubble({
       )}
     </div>
   );
-}
-
-function RichText({ text, invert = false }: { text: string; invert?: boolean }) {
-  const blocks = text.split(/\n{2,}/);
-  return (
-    <div className={cn('space-y-2 text-sm leading-relaxed', invert ? 'text-strong-foreground' : 'text-ink')}>
-      {blocks.map((block, index) => {
-        const lines = block.split('\n').filter(Boolean);
-        const isList = lines.every((line) => /^[-*]\s+/.test(line.trim()));
-        if (isList) {
-          return (
-            <ul key={index} className="list-disc space-y-1 pl-5">
-              {lines.map((line) => <li key={line}>{inline(line.replace(/^[-*]\s+/, ''))}</li>)}
-            </ul>
-          );
-        }
-        return <p key={index}>{inline(block)}</p>;
-      })}
-    </div>
-  );
-}
-
-function inline(text: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g).filter(Boolean);
-  return parts.map((part, index) => {
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith('*') && part.endsWith('*')) return <em key={index}>{part.slice(1, -1)}</em>;
-    return <span key={index}>{part}</span>;
-  });
 }
 
 function LiveToolCallPanel({ live }: { live: LiveState }) {
@@ -339,19 +404,51 @@ function ToolEventStrip({ events, compact = false }: { events: AssistantToolEven
   );
 }
 
-function ApprovalCard({ approval, onConfirm, busy }: { approval: AssistantApprovalRequest; onConfirm: (approval: AssistantApprovalRequest) => void; busy: boolean }) {
+function ApprovalCard({
+  approval,
+  status,
+  onConfirm,
+  onDecline,
+  busy,
+}: {
+  approval: AssistantApprovalRequest;
+  status?: ApprovalStatus;
+  onConfirm: (approval: AssistantApprovalRequest) => void;
+  onDecline: (approval: AssistantApprovalRequest) => void;
+  busy: boolean;
+}) {
+  const expired = status === 'expired' || (!status && new Date(approval.expiresAt).getTime() <= Date.now());
+  const settled = status === 'done' || status === 'declined' || expired;
+  const statusLabel = status === 'done'
+    ? (approval.kind === 'data_expansion' ? 'Approved' : 'Applied')
+    : status === 'declined' ? 'Declined' : expired ? 'Expired' : null;
   return (
-    <div className="rounded-xl border border-coral/35 bg-coral/10 p-4">
+    <div className={cn('rounded-xl border p-4', settled ? 'border-ink2/10 bg-cream/40 opacity-80' : 'border-coral/35 bg-coral/10')}>
       <div className="flex flex-wrap items-start gap-3">
         <div className="flex-1">
           <div className="font-display text-lg font-bold">{approval.title}</div>
           <p className="mt-1 text-sm text-dim">{approval.detail}</p>
-          <p className="mt-2 text-xs text-dim">Expires {new Date(approval.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</p>
+          {!settled && (
+            <p className="mt-2 text-xs text-dim">Expires {new Date(approval.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</p>
+          )}
         </div>
-        <Button onClick={() => onConfirm(approval)} disabled={busy}>
-          <Check className="h-4 w-4" />
-          {approval.buttonLabel}
-        </Button>
+        {statusLabel ? (
+          <Badge variant={status === 'done' ? 'success' : 'secondary'} className="gap-1">
+            {status === 'done' ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+            {statusLabel}
+          </Badge>
+        ) : (
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" onClick={() => onDecline(approval)} disabled={busy || status === 'confirming'}>
+              <X className="h-4 w-4" />
+              Decline
+            </Button>
+            <Button type="button" onClick={() => onConfirm(approval)} disabled={busy || status === 'confirming'}>
+              {status === 'confirming' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              {approval.buttonLabel}
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -62,6 +62,7 @@ export type AssistantArtifact =
       chartType: 'bar' | 'stacked_bar' | 'line' | 'donut';
       valueType: 'currency_cents' | 'count' | 'percent';
       labels: string[];
+      /** color is a theme token name (e.g. "sage", "coral"); the client maps it to a CSS variable. */
       series: Array<{ name: string; color: string | null; values: number[] }>;
     } & AssistantArtifactEvidence;
 
@@ -88,4 +89,22 @@ export interface AssistantResponse {
   followUpSuggestions: string[];
   toolEvents: AssistantToolEvent[];
   nextResponseId: string | null;
+}
+
+export interface AssistantConfirmResult {
+  ok: boolean;
+  message: string;
+  artifact?: AssistantArtifact;
+  /** Id of the consumed (single-use) approval. */
+  actionId?: string;
+  /** Summary to feed back to the model on the next turn so it knows the action happened. */
+  contextNote?: string;
+}
+
+/** Window event fired after the assistant applies a confirmed change; data hooks should refetch. */
+export const LEDGER_DATA_CHANGED_EVENT = 'ledger:data-changed';
+
+export interface LedgerDataChangedDetail {
+  source: 'assistant';
+  kind: string;
 }

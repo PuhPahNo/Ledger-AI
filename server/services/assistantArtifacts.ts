@@ -141,11 +141,123 @@ export function cashFlowChart(periods: Array<{ label: string; inflowCents: numbe
     valueType: 'currency_cents',
     labels: periods.map((period) => period.label),
     series: [
-      { name: 'Inflow', color: '#1F8A5B', values: periods.map((period) => period.inflowCents) },
-      { name: 'Outflow', color: '#D97757', values: periods.map((period) => period.outflowCents) },
-      { name: 'Net', color: '#2A6FDB', values: periods.map((period) => period.netCents) },
+      // Colors are theme token names; the client resolves them to CSS variables.
+      { name: 'Inflow', color: 'sage', values: periods.map((period) => period.inflowCents) },
+      { name: 'Outflow', color: 'coral', values: periods.map((period) => period.outflowCents) },
+      { name: 'Net', color: 'sky', values: periods.map((period) => period.netCents) },
     ],
   };
+}
+
+export function cashFlowBusinessTable(
+  periods: Array<{ businessBreakdown: Array<{ businessId: string; businessName: string; inflowCents: number; outflowCents: number; netCents: number }> }>,
+  includeTransfers: boolean,
+): AssistantArtifact | null {
+  const byBusiness = new Map<string, { name: string; inflowCents: number; outflowCents: number; netCents: number }>();
+  for (const period of periods) {
+    for (const row of period.businessBreakdown) {
+      const current = byBusiness.get(row.businessId) ?? { name: row.businessName, inflowCents: 0, outflowCents: 0, netCents: 0 };
+      current.inflowCents += row.inflowCents;
+      current.outflowCents += row.outflowCents;
+      current.netCents += row.netCents;
+      byBusiness.set(row.businessId, current);
+    }
+  }
+  if (byBusiness.size === 0) return null;
+  const rows = [...byBusiness.values()].sort((a, b) => b.inflowCents - a.inflowCents);
+  return {
+    type: 'table',
+    id: crypto.randomUUID(),
+    title: includeTransfers ? 'Cash flow by business (all movement)' : 'Cash flow by business',
+    sources: [{ type: 'cash_flow', filters: { includeTransfers } }],
+    actions: [{ label: 'Open cash flow', view: 'cash-flow', filters: { includeTransfers } }],
+    columns: [
+      { key: 'business', label: 'Business', align: 'left' },
+      { key: 'inflow', label: 'Inflow', align: 'right' },
+      { key: 'outflow', label: 'Outflow', align: 'right' },
+      { key: 'net', label: 'Net', align: 'right' },
+    ],
+    rows: rows.slice(0, 50).map((row) => ({
+      cells: [row.name, formatCents(row.inflowCents), formatCents(row.outflowCents), formatCents(row.netCents)],
+    })),
+  };
+}
+
+export function rollupArtifact(rollup: {
+  rows: number;
+  inflowCents: number;
+  outflowCents: number;
+  operatingOutflowCents: number;
+  transferCents: number;
+  netCents: number;
+  missingReceipts: number;
+}): AssistantArtifact {
+  return {
+    type: 'metric_grid',
+    id: crypto.randomUUID(),
+    title: 'Transaction totals',
+    sources: [{ type: 'transactions' }],
+    actions: [{ label: 'Open transactions', view: 'transactions' }],
+    metrics: [
+      metric('Transactions', rollup.rows.toLocaleString('en-US'), null, 'default'),
+      metric('Inflow', formatCents(rollup.inflowCents), null, 'positive'),
+      metric('Operating outflow', formatCents(rollup.operatingOutflowCents), `${formatCents(rollup.outflowCents)} all outflow`, 'default'),
+      metric('Net', formatCents(rollup.netCents), null, rollup.netCents >= 0 ? 'positive' : 'warning'),
+      metric('Transfers', formatCents(rollup.transferCents), 'Excluded from operating views', 'muted'),
+      metric('Missing receipts', rollup.missingReceipts.toLocaleString('en-US'), null, rollup.missingReceipts ? 'warning' : 'positive'),
+    ],
+  };
+}
+
+export function balancesArtifacts(balances: {
+  bankCashCents: number;
+  bankAvailableCents: number;
+  creditBalanceCents: number;
+  creditAvailableCents: number;
+  accounts: Array<{
+    name: string;
+    nickname: string | null;
+    businessName: string | null;
+    kind: string;
+    mask: string | null;
+    currentBalanceCents: number | null;
+    availableBalanceCents: number | null;
+  }>;
+}): AssistantArtifact[] {
+  return [
+    {
+      type: 'metric_grid',
+      id: crypto.randomUUID(),
+      title: 'Current balances',
+      actions: [{ label: 'Open balances', view: 'balances' }],
+      metrics: [
+        metric('Bank cash', formatCents(balances.bankCashCents), `${formatCents(balances.bankAvailableCents)} available`, 'positive'),
+        metric('Credit card balance', formatCents(balances.creditBalanceCents), `${formatCents(balances.creditAvailableCents)} available credit`, 'warning'),
+      ],
+    },
+    {
+      type: 'table',
+      id: crypto.randomUUID(),
+      title: 'Accounts',
+      actions: [{ label: 'Open balances', view: 'balances' }],
+      columns: [
+        { key: 'account', label: 'Account', align: 'left' },
+        { key: 'business', label: 'Business', align: 'left' },
+        { key: 'kind', label: 'Type', align: 'left' },
+        { key: 'current', label: 'Current', align: 'right' },
+        { key: 'available', label: 'Available', align: 'right' },
+      ],
+      rows: balances.accounts.slice(0, 50).map((row) => ({
+        cells: [
+          [row.nickname || row.name, row.mask].filter(Boolean).join(' '),
+          row.businessName ?? 'Unassigned',
+          row.kind,
+          row.currentBalanceCents == null ? '—' : formatCentsDetailed(row.currentBalanceCents),
+          row.availableBalanceCents == null ? '—' : formatCentsDetailed(row.availableBalanceCents),
+        ],
+      })),
+    },
+  ];
 }
 
 export function metric(label: string, value: string, detail: string | null, tone: 'default' | 'positive' | 'warning' | 'muted' | 'danger') {
