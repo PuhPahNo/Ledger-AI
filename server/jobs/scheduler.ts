@@ -23,11 +23,29 @@ export function isGmailWatchRenewalDue(
   return !gmailWatchExpiration || gmailWatchExpiration.getTime() - now.getTime() <= GMAIL_WATCH_RENEWAL_WINDOW_MS;
 }
 
+/**
+ * A sync blocked on unassigned accounts never updates lastSyncAt, so without this it would be
+ * re-queued every hourly check. Treat the blocked attempt as the latest sync for pacing;
+ * assigning a business queues an immediate sync anyway.
+ */
+export function plaidSyncPacingAnchor(
+  lastSyncAt: Date | null | undefined,
+  metadata: Record<string, unknown> | null | undefined,
+): Date | null {
+  const blocked = metadata?.syncBlocked as { at?: unknown } | undefined;
+  const blockedAt = typeof blocked?.at === 'string' ? new Date(blocked.at) : null;
+  const validBlockedAt = blockedAt && !Number.isNaN(blockedAt.getTime()) ? blockedAt : null;
+  if (!lastSyncAt) return validBlockedAt;
+  if (!validBlockedAt) return lastSyncAt;
+  return validBlockedAt > lastSyncAt ? validBlockedAt : lastSyncAt;
+}
+
 export async function enqueueDuePlaidSyncs(now = new Date()): Promise<number> {
   const rows = await db
     .select({
       id: connections.id,
       lastSyncAt: connections.lastSyncAt,
+      metadata: connections.metadata,
     })
     .from(connections)
     .where(and(
@@ -38,7 +56,7 @@ export async function enqueueDuePlaidSyncs(now = new Date()): Promise<number> {
 
   let queued = 0;
   for (const row of rows) {
-    if (!isPlaidConnectionDueForDailySync(row.lastSyncAt, now)) continue;
+    if (!isPlaidConnectionDueForDailySync(plaidSyncPacingAnchor(row.lastSyncAt, row.metadata), now)) continue;
     if (await hasPendingPlaidSync(row.id)) continue;
     await enqueue('plaid.sync', { connectionId: row.id }, now);
     queued += 1;
@@ -138,7 +156,7 @@ async function hasRecentReceiptRematch(now: Date): Promise<boolean> {
   return Boolean(existing);
 }
 
-async function hasPendingPlaidSync(connectionId: string): Promise<boolean> {
+export async function hasPendingPlaidSync(connectionId: string): Promise<boolean> {
   const [existing] = await db
     .select({ id: jobs.id })
     .from(jobs)

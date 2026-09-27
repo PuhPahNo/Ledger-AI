@@ -1,5 +1,13 @@
 import { closeDb } from '../db/client.js';
-import { claimNextJob, enqueue, markJobFailed, markJobSucceeded } from './queue.js';
+import {
+  JOB_HEARTBEAT_MS,
+  claimNextJob,
+  enqueue,
+  heartbeatJob,
+  markJobFailed,
+  markJobSucceeded,
+  reclaimStaleJobs,
+} from './queue.js';
 import { handleJob } from './handlers.js';
 import {
   enqueueDueCategorizationScan,
@@ -17,17 +25,31 @@ export interface WorkerLoop {
 }
 
 const SCHEDULE_CHECK_MS = 60 * 60 * 1000;
+const STALE_JOB_CHECK_MS = 5 * 60 * 1000;
 
 async function tick(logger: WorkerLogger): Promise<void> {
   const job = await claimNextJob();
   if (!job) return;
+  // Keep lockedAt fresh so reclaimStaleJobs can tell a long-running job from a dead one.
+  const heartbeat = setInterval(() => {
+    heartbeatJob(job.id, job.attempts).catch((error) => logger.error(`Job ${job.id} heartbeat failed`, error));
+  }, JOB_HEARTBEAT_MS);
   try {
     await handleJob(job.type, job.payload);
-    await markJobSucceeded(job.id);
+    await markJobSucceeded(job.id, job.attempts);
     logger.log(`Job ${job.id} (${job.type}) succeeded`);
   } catch (error) {
-    await markJobFailed(job.id, error);
+    await markJobFailed(job.id, error, job.attempts);
     logger.error(`Job ${job.id} (${job.type}) failed`, error);
+  } finally {
+    clearInterval(heartbeat);
+  }
+}
+
+async function reclaim(logger: WorkerLogger): Promise<void> {
+  const reclaimed = await reclaimStaleJobs();
+  for (const job of reclaimed) {
+    logger.log(`Reclaimed stale job ${job.id} (${job.type}) -> ${job.status}`);
   }
 }
 
@@ -36,6 +58,7 @@ export function startWorkerLoop(options: { pollMs?: number; logger?: WorkerLogge
   const logger = options.logger ?? console;
   let stopping = false;
   let nextScheduleCheckAt = 0;
+  let nextStaleJobCheckAt = 0;
 
   const done = (async () => {
     logger.log('Ledger AI worker started');
@@ -49,6 +72,12 @@ export function startWorkerLoop(options: { pollMs?: number; logger?: WorkerLogge
     }
     while (!stopping) {
       try {
+        // Runs on boot (first iteration) and every few minutes: jobs orphaned by a crash or
+        // redeploy would otherwise sit in 'running' forever and block their scheduler slot.
+        if (Date.now() >= nextStaleJobCheckAt) {
+          nextStaleJobCheckAt = Date.now() + STALE_JOB_CHECK_MS;
+          await reclaim(logger);
+        }
         if (Date.now() >= nextScheduleCheckAt) {
           nextScheduleCheckAt = Date.now() + SCHEDULE_CHECK_MS;
           const queued = await enqueueDuePlaidSyncs();

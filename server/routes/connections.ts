@@ -7,14 +7,37 @@ import { accounts, businesses, connections } from '../db/schema.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { enqueue } from '../jobs/queue.js';
 import { audit } from '../services/audit.js';
-import { PLAID_TRANSACTION_HISTORY_DAYS, createPlaidLinkToken, exchangePlaidPublicToken } from '../services/plaid.js';
+import {
+  PLAID_TRANSACTION_HISTORY_DAYS,
+  createPlaidLinkToken,
+  createPlaidUpdateLinkToken,
+  exchangePlaidPublicToken,
+  removePlaidItem,
+  resumeBlockedPlaidSync,
+} from '../services/plaid.js';
 import { GMAIL_BACKFILL_DAYS, connectGmail, gmailOAuthUrl } from '../services/gmail.js';
 import { toApiConnection } from './mappers.js';
 
 export async function connectionRoutes(app: FastifyInstance): Promise<void> {
   app.post('/connections/plaid/link-token', async (request) => {
     const user = await requireUser(request);
+    // With a connectionId this is update-mode Link (re-login for a 'reauth' Item). It reuses
+    // the existing Item, so it never counts against the new-connection cap.
+    const body = z.object({ connectionId: z.string().uuid().optional() }).parse(request.body ?? {});
+    if (body.connectionId) return createPlaidUpdateLinkToken(user.id, body.connectionId);
     return createPlaidLinkToken(user.id);
+  });
+
+  app.post('/connections/:id/plaid/reauth-complete', async (request) => {
+    const user = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const row = await db.query.connections.findFirst({ where: eq(connections.id, params.id) });
+    if (!row || row.kind === 'gmail') notFound('Plaid connection not found');
+    if (row.status === 'disconnected') badRequest('This connection was disconnected. Add it again as a new Plaid connection.');
+    // Status flips back to 'live' when this sync succeeds, which proves the new login works.
+    const jobId = await enqueue('plaid.sync', { connectionId: params.id });
+    await audit(request, user, 'reauth_plaid', 'connection', params.id);
+    return { queued: true, jobId };
   });
 
   app.post('/connections/plaid/exchange', async (request) => {
@@ -115,6 +138,7 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
     const [row] = await db.update(connections).set({ businessId: body.businessId, updatedAt: new Date() }).where(eq(connections.id, params.id)).returning();
     if (!row) notFound('Connection not found');
     await audit(request, user, 'update_connection_business', 'connection', params.id, { businessId: body.businessId });
+    if (body.businessId) await resumeBlockedPlaidSync(row.id);
     return toApiConnection(row);
   });
 
@@ -135,9 +159,18 @@ export async function connectionRoutes(app: FastifyInstance): Promise<void> {
   app.delete('/connections/:id', async (request, reply) => {
     const user = await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const existing = await db.query.connections.findFirst({ where: eq(connections.id, params.id) });
+    if (!existing) notFound('Connection not found');
+    const isPlaid = existing.kind !== 'gmail';
+    // Best-effort: revoke the Item at Plaid so it stops billing. Never blocks the disconnect.
+    if (isPlaid) await removePlaidItem(existing.encryptedAccessToken);
     const [row] = await db
       .update(connections)
-      .set({ status: 'disconnected', updatedAt: new Date() })
+      .set({
+        status: 'disconnected',
+        ...(isPlaid ? { encryptedAccessToken: null } : {}),
+        updatedAt: new Date(),
+      })
       .where(eq(connections.id, params.id))
       .returning();
     if (!row) notFound('Connection not found');

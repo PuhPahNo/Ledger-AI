@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import {
   Configuration,
   CountryCode,
@@ -19,7 +19,9 @@ import {
   type Transaction,
 } from '../db/schema.js';
 import { decryptText, encryptText } from '../lib/crypto.js';
-import { serviceUnavailable } from '../lib/errors.js';
+import { badRequest, notFound, serviceUnavailable } from '../lib/errors.js';
+import { NonRetryableJobError, enqueue } from '../jobs/queue.js';
+import { hasPendingPlaidSync } from '../jobs/scheduler.js';
 import { resolveTransactionBusinessId } from './accountAssignment.js';
 import { categorizeTransactionWithDetails, isExcludedFromSpendCategory } from './categorization.js';
 import { createAiCategorySuggestionReview } from './categorizationFeedback.js';
@@ -86,12 +88,190 @@ export async function exchangePlaidPublicToken(input: {
   return connection.id;
 }
 
+/**
+ * Update-mode Link: re-authenticates an existing Item in place (same access_token, same
+ * item_id, same cursor), so no public-token exchange and no new connection row is needed.
+ */
+export async function createPlaidUpdateLinkToken(
+  userId: string,
+  connectionId: string,
+): Promise<{ link_token: string; expiration: string }> {
+  const client = plaidClient();
+  if (!client) {
+    serviceUnavailable('Plaid is not configured. Add PLAID_CLIENT_ID and PLAID_SECRET in Render, then redeploy.');
+  }
+  const connection = await db.query.connections.findFirst({ where: eq(connections.id, connectionId) });
+  if (!connection || connection.kind === 'gmail') notFound('Plaid connection not found');
+  if (!connection.encryptedAccessToken) {
+    badRequest('This connection was disconnected. Add it again as a new Plaid connection.');
+  }
+  const env = getEnv();
+  const res = await client.linkTokenCreate({
+    user: { client_user_id: userId },
+    client_name: 'Ledger AI',
+    country_codes: [CountryCode.Us],
+    language: 'en',
+    webhook: env.PLAID_WEBHOOK_URL || undefined,
+    access_token: decryptText(connection.encryptedAccessToken),
+  });
+  return res.data;
+}
+
+/**
+ * Best-effort Plaid /item/remove so a disconnected Item stops being billed and the bank
+ * consent is revoked. Never throws: a Plaid outage must not block the local disconnect.
+ */
+export async function removePlaidItem(encryptedAccessToken: string | null | undefined): Promise<boolean> {
+  if (!encryptedAccessToken) return false;
+  const client = plaidClient();
+  if (!client) return false;
+  try {
+    await client.itemRemove({ access_token: decryptText(encryptedAccessToken) });
+    return true;
+  } catch (error) {
+    const code = (error as { response?: { data?: { error_code?: unknown } } })?.response?.data?.error_code;
+    console.warn(`Plaid itemRemove failed${typeof code === 'string' ? ` (${code})` : ''}; disconnecting locally anyway`);
+    return false;
+  }
+}
+
 export interface PlaidSyncResult {
   /** Transactions newly inserted this run. */
   added: number;
   /** Existing transactions Plaid modified or removed this run — amounts, dates, and receipt
    * links may have shifted, so unmatched receipts deserve another pass. */
   changed: number;
+}
+
+type PlaidRawTransaction = Record<string, any>;
+type PlaidRawAccount = Record<string, any>;
+
+export interface PlaidSyncPage {
+  accounts?: PlaidRawAccount[];
+  added?: PlaidRawTransaction[];
+  modified?: PlaidRawTransaction[];
+  removed?: Array<{ transaction_id?: string | null }>;
+  next_cursor: string;
+  has_more: boolean;
+}
+
+export interface PlaidSyncBatch {
+  accounts: PlaidRawAccount[];
+  added: PlaidRawTransaction[];
+  modified: PlaidRawTransaction[];
+  removed: string[];
+  nextCursor: string | undefined;
+}
+
+export interface UnassignableAccountSummary {
+  plaidAccountId: string;
+  label: string;
+  count: number;
+}
+
+/** Thrown when a batch contains transactions that no business can own. Retrying can't help
+ * until someone assigns a business, so the job queue treats it as non-retryable. */
+export class PlaidSyncBlockedError extends NonRetryableJobError {
+  constructor(readonly unassignable: UnassignableAccountSummary[]) {
+    super(plaidSyncBlockedMessage(unassignable));
+    this.name = 'PlaidSyncBlockedError';
+  }
+}
+
+export function plaidSyncBlockedMessage(unassignable: UnassignableAccountSummary[]): string {
+  const total = unassignable.reduce((sum, item) => sum + item.count, 0);
+  const labels = unassignable.map((item) => item.label).join(', ');
+  return `Sync paused: ${total} transaction${total === 1 ? '' : 's'} on ${labels} ha${total === 1 ? 's' : 've'} no business. `
+    + 'Assign a business to the account (or a default business on the connection) in Connections; '
+    + 'nothing was skipped and they will import on the next sync.';
+}
+
+const MAX_PAGINATION_RESTARTS = 3;
+
+/**
+ * Plaid's recommended /transactions/sync pattern: page through everything first, and if the
+ * Item changes mid-pagination restart from the cursor we started with. Nothing is written to
+ * the database here, so a restart never leaves half-applied pages behind.
+ */
+export async function collectPlaidSyncPages(
+  fetchPage: (cursor: string | undefined) => Promise<PlaidSyncPage>,
+  startCursor: string | undefined,
+  maxRestarts = MAX_PAGINATION_RESTARTS,
+): Promise<PlaidSyncBatch> {
+  for (let attempt = 0; ; attempt += 1) {
+    const accountsById = new Map<string, PlaidRawAccount>();
+    const batch: PlaidSyncBatch = { accounts: [], added: [], modified: [], removed: [], nextCursor: startCursor };
+    let cursor = startCursor;
+    let hasMore = true;
+    try {
+      while (hasMore) {
+        const page = await fetchPage(cursor);
+        for (const account of page.accounts ?? []) {
+          if (account?.account_id) accountsById.set(String(account.account_id), account);
+        }
+        batch.added.push(...(page.added ?? []));
+        batch.modified.push(...(page.modified ?? []));
+        for (const removed of page.removed ?? []) {
+          if (removed?.transaction_id) batch.removed.push(removed.transaction_id);
+        }
+        cursor = page.next_cursor;
+        hasMore = page.has_more;
+      }
+    } catch (error) {
+      if (plaidErrorCode(error) === 'TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION' && attempt < maxRestarts) continue;
+      throw error;
+    }
+    batch.accounts = [...accountsById.values()];
+    batch.nextCursor = cursor;
+    return batch;
+  }
+}
+
+export interface PlaidSyncSteps {
+  fetchPage: (cursor: string | undefined) => Promise<PlaidSyncPage>;
+  upsertAccounts: (accounts: PlaidRawAccount[]) => Promise<void>;
+  /** Transactions (added/modified) no business could own, grouped by account. */
+  findUnassignable: (txns: PlaidRawTransaction[]) => Promise<UnassignableAccountSummary[]>;
+  markBlocked: (unassignable: UnassignableAccountSummary[]) => Promise<void>;
+  applyAdded: (txn: PlaidRawTransaction) => Promise<boolean>;
+  applyModified: (txn: PlaidRawTransaction) => Promise<void>;
+  applyRemoved: (plaidTransactionId: string) => Promise<boolean>;
+  commit: (nextCursor: string | undefined, addedCount: number) => Promise<void>;
+}
+
+/**
+ * One sync run. Invariant: the cursor is saved only after every added/modified/removed entry
+ * in the batch has been written, so a crash, a Plaid error, or an unassignable account makes
+ * the next run re-read the same changes instead of silently dropping them.
+ */
+export async function runPlaidSync(startCursor: string | undefined, steps: PlaidSyncSteps): Promise<PlaidSyncResult> {
+  const batch = await collectPlaidSyncPages(steps.fetchPage, startCursor);
+  // Accounts first, even when blocked: unassigned accounts have to exist before the owner
+  // can pick a business for them.
+  await steps.upsertAccounts(batch.accounts);
+
+  const unassignable = await steps.findUnassignable([...batch.added, ...batch.modified]);
+  if (unassignable.length > 0) {
+    await steps.markBlocked(unassignable);
+    throw new PlaidSyncBlockedError(unassignable);
+  }
+
+  let added = 0;
+  let changed = 0;
+  // Added → modified → removed: a pending row's `removed` entry must never run before its
+  // posted replacement in `added` has adopted the receipt, notes and category.
+  for (const txn of batch.added) {
+    if (await steps.applyAdded(txn)) added += 1;
+  }
+  for (const txn of batch.modified) {
+    await steps.applyModified(txn);
+    changed += 1;
+  }
+  for (const plaidTransactionId of batch.removed) {
+    if (await steps.applyRemoved(plaidTransactionId)) changed += 1;
+  }
+  await steps.commit(batch.nextCursor, added);
+  return { added, changed };
 }
 
 export async function syncPlaidConnection(
@@ -107,63 +287,121 @@ export async function syncPlaidConnection(
   const connection = await db.query.connections.findFirst({ where: eq(connections.id, connectionId) });
   if (!connection?.encryptedAccessToken) return { added: 0, changed: 0 };
   const accessToken = decryptText(connection.encryptedAccessToken);
-
-  let cursor: string | undefined = options.resetCursor ? undefined : connection.plaidCursor ?? undefined;
-  let addedCount = 0;
-  let changedCount = 0;
-  let hasMore = true;
+  const connectionBusinessId = connection.businessId ?? undefined;
+  const startCursor = options.resetCursor ? undefined : connection.plaidCursor ?? undefined;
   // Spend dated before this cutoff isn't expected to have a receipt (imported as 'waived').
   const receiptTrackingSince = await getReceiptTrackingSince();
+  const upsertOptions = { allowAiCategorization: options.allowAiCategorization, receiptTrackingSince };
 
-  while (hasMore) {
-    let data;
-    try {
-      const res = await client.transactionsSync({
-        access_token: accessToken,
-        cursor,
-        count: 500,
-        options: options.daysRequested ? { days_requested: options.daysRequested } : undefined,
-      });
-      data = res.data;
-    } catch (error) {
-      // Expired bank credentials would otherwise fail silently forever: flag the
-      // connection so the scheduler skips it and the UI can prompt a re-link.
-      if (isPlaidReauthError(error)) {
-        await db.update(connections).set({ status: 'reauth', updatedAt: new Date() }).where(eq(connections.id, connectionId));
+  return runPlaidSync(startCursor, {
+    fetchPage: async (cursor) => {
+      try {
+        const res = await client.transactionsSync({
+          access_token: accessToken,
+          cursor,
+          count: 500,
+          options: options.daysRequested ? { days_requested: options.daysRequested } : undefined,
+        });
+        return res.data as unknown as PlaidSyncPage;
+      } catch (error) {
+        // Expired bank credentials would otherwise fail silently forever: flag the
+        // connection so the scheduler skips it and the UI can prompt a re-link.
+        if (isPlaidReauthError(error)) {
+          await db.update(connections)
+            .set({ status: 'reauth', updatedAt: new Date() })
+            .where(and(eq(connections.id, connectionId), eq(connections.status, 'live')));
+        }
+        throw error;
       }
-      throw error;
-    }
-    await upsertAccounts(connectionId, connection.businessId ?? undefined, data.accounts ?? []);
-    for (const txn of data.added ?? []) {
-      const inserted = await upsertTransaction(connectionId, connection.businessId ?? undefined, txn, {
-        allowAiCategorization: options.allowAiCategorization,
-        receiptTrackingSince,
-      });
-      if (inserted) addedCount += 1;
-    }
-    for (const txn of data.modified ?? []) {
-      await upsertTransaction(connectionId, connection.businessId ?? undefined, txn, {
-        allowAiCategorization: options.allowAiCategorization,
-        receiptTrackingSince,
-      });
-      changedCount += 1;
-    }
-    for (const removed of data.removed ?? []) {
-      const archived = await archiveRemovedPlaidTransaction(removed.transaction_id);
-      if (archived) changedCount += 1;
-    }
-    cursor = data.next_cursor;
-    hasMore = data.has_more;
+    },
+    upsertAccounts: (plaidAccounts) => upsertAccounts(connectionId, connectionBusinessId, plaidAccounts),
+    findUnassignable: (txns) => findUnassignablePlaidTransactions(connectionBusinessId, txns),
+    markBlocked: async (unassignable) => {
+      const blocked = {
+        at: new Date().toISOString(),
+        message: plaidSyncBlockedMessage(unassignable),
+        accounts: unassignable,
+      };
+      await db.update(connections).set({
+        metadata: sql`coalesce(${connections.metadata}, '{}'::jsonb) || jsonb_build_object('syncBlocked', ${JSON.stringify(blocked)}::jsonb)`,
+        updatedAt: new Date(),
+      }).where(eq(connections.id, connectionId));
+    },
+    applyAdded: (txn) => upsertTransaction(connectionId, connectionBusinessId, txn, upsertOptions),
+    applyModified: async (txn) => {
+      await upsertTransaction(connectionId, connectionBusinessId, txn, upsertOptions);
+    },
+    applyRemoved: (plaidTransactionId) => archiveRemovedPlaidTransaction(plaidTransactionId),
+    commit: async (nextCursor, addedCount) => {
+      await db.update(connections).set({
+        plaidCursor: nextCursor,
+        lastSyncAt: new Date(),
+        syncedTransactionCount: sql`${connections.syncedTransactionCount} + ${addedCount}`,
+        // A full successful sync proves the credentials work again (e.g. after update-mode
+        // Link). Never resurrect a connection the owner disconnected.
+        status: sql`CASE WHEN ${connections.status} = 'reauth' THEN 'live'::connection_status ELSE ${connections.status} END`,
+        metadata: sql`coalesce(${connections.metadata}, '{}'::jsonb) - 'syncBlocked'`,
+        updatedAt: new Date(),
+      }).where(eq(connections.id, connectionId));
+    },
+  });
+}
+
+/**
+ * After an owner assigns a business, retry a sync that was paused for lack of one right away
+ * instead of waiting for the daily scheduler. No-op for connections that aren't blocked.
+ */
+export async function resumeBlockedPlaidSync(connectionId: string | null | undefined): Promise<string | null> {
+  if (!connectionId) return null;
+  const connection = await db.query.connections.findFirst({ where: eq(connections.id, connectionId) });
+  if (!connection || connection.kind === 'gmail' || connection.status === 'disconnected') return null;
+  if (!connection.metadata?.syncBlocked) return null;
+  if (await hasPendingPlaidSync(connectionId)) return null;
+  return enqueue('plaid.sync', { connectionId });
+}
+
+/**
+ * Which transactions would have no owning business: the account's business, else the
+ * connection default, else (for rows we already stored) the row's current business.
+ */
+async function findUnassignablePlaidTransactions(
+  connectionBusinessId: string | undefined,
+  txns: PlaidRawTransaction[],
+): Promise<UnassignableAccountSummary[]> {
+  if (connectionBusinessId || txns.length === 0) return [];
+  const plaidAccountIds = [...new Set(txns.map((txn) => String(txn.account_id ?? '')).filter(Boolean))];
+  const accountRows = plaidAccountIds.length
+    ? await db
+      .select({ plaidAccountId: accounts.plaidAccountId, businessId: accounts.businessId, name: accounts.name, nickname: accounts.nickname, mask: accounts.mask })
+      .from(accounts)
+      .where(inArray(accounts.plaidAccountId, plaidAccountIds))
+    : [];
+  const accountById = new Map(accountRows.map((row) => [row.plaidAccountId, row]));
+  const candidates = txns.filter((txn) => !resolveTransactionBusinessId(accountById.get(txn.account_id)?.businessId, undefined));
+  if (candidates.length === 0) return [];
+
+  const candidateIds = candidates.map((txn) => txn.transaction_id).filter((id): id is string => typeof id === 'string' && id.length > 0);
+  const existingRows = candidateIds.length
+    ? await db
+      .select({ plaidTransactionId: transactions.plaidTransactionId })
+      .from(transactions)
+      .where(inArray(transactions.plaidTransactionId, candidateIds))
+    : [];
+  const existing = new Set(existingRows.map((row) => row.plaidTransactionId));
+
+  const byAccount = new Map<string, UnassignableAccountSummary>();
+  for (const txn of candidates) {
+    if (txn.transaction_id && existing.has(txn.transaction_id)) continue;
+    const plaidAccountId = String(txn.account_id ?? 'unknown');
+    const account = accountById.get(plaidAccountId);
+    const label = account
+      ? `${account.nickname ?? account.name}${account.mask ? ` ••${account.mask}` : ''}`
+      : 'an unknown account';
+    const summary = byAccount.get(plaidAccountId) ?? { plaidAccountId, label, count: 0 };
+    summary.count += 1;
+    byAccount.set(plaidAccountId, summary);
   }
-
-  await db.update(connections).set({
-    plaidCursor: cursor,
-    lastSyncAt: new Date(),
-    syncedTransactionCount: (connection.syncedTransactionCount ?? 0) + addedCount,
-    updatedAt: new Date(),
-  }).where(eq(connections.id, connectionId));
-
-  return { added: addedCount, changed: changedCount };
+  return [...byAccount.values()];
 }
 
 const PLAID_REAUTH_ERROR_CODES = new Set([
@@ -173,9 +411,14 @@ const PLAID_REAUTH_ERROR_CODES = new Set([
   'ACCESS_NOT_GRANTED',
 ]);
 
+function plaidErrorCode(error: unknown): string | null {
+  const code = (error as { response?: { data?: { error_code?: unknown } } })?.response?.data?.error_code;
+  return typeof code === 'string' ? code : null;
+}
+
 function isPlaidReauthError(error: unknown): boolean {
-  const data = (error as { response?: { data?: { error_code?: unknown } } })?.response?.data;
-  return typeof data?.error_code === 'string' && PLAID_REAUTH_ERROR_CODES.has(data.error_code);
+  const code = plaidErrorCode(error);
+  return code != null && PLAID_REAUTH_ERROR_CODES.has(code);
 }
 
 /**
@@ -244,15 +487,19 @@ async function upsertTransaction(
   options: { allowAiCategorization?: boolean; receiptTrackingSince?: string | null } = {},
 ): Promise<boolean> {
   const account = await db.query.accounts.findFirst({ where: eq(accounts.plaidAccountId, raw.account_id) });
-  const businessId = resolveTransactionBusinessId(account?.businessId, fallbackBusinessId);
-  if (!businessId) return false;
-  const amountCents = plaidAmountCents(raw);
   const existing = raw.transaction_id
     ? await db.query.transactions.findFirst({
       where: eq(transactions.plaidTransactionId, raw.transaction_id),
-      columns: { id: true },
+      columns: { id: true, businessId: true },
     })
     : null;
+  const businessId = resolveTransactionBusinessId(account?.businessId, fallbackBusinessId) ?? existing?.businessId;
+  if (!businessId) {
+    // runPlaidSync checks assignability before writing anything, so this means a business was
+    // unassigned mid-sync. Fail loudly: the cursor stays put and the next run retries.
+    throw new Error(`Plaid transaction ${raw.transaction_id ?? '(no id)'} has no business to belong to; sync aborted before saving the cursor`);
+  }
+  const amountCents = plaidAmountCents(raw);
   // When a pending transaction posts, Plaid sends a brand-new row referencing the old one.
   // Inherit protected categorization instead of re-categorizing (and re-spending AI) from scratch.
   const predecessor = typeof raw.pending_transaction_id === 'string' && raw.pending_transaction_id
@@ -313,6 +560,12 @@ async function upsertTransaction(
   }).onConflictDoUpdate({
     target: transactions.plaidTransactionId,
     set: {
+      // Backfill the account link for rows stored before the account existed, but never
+      // repoint it. businessId is deliberately NOT updated: users can move a single
+      // transaction to another business (transaction PATCH / assistant actions) and nothing
+      // records that override, so following the account here would silently undo it.
+      // Re-assigning an account's history is the explicit "apply to existing" action.
+      accountId: sql`coalesce(${transactions.accountId}, excluded.account_id)`,
       date: raw.date,
       authorizedDate: raw.authorized_date,
       merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant',

@@ -6,6 +6,7 @@ import { db } from '../db/client.js';
 import { accounts, businesses, connections, transactions } from '../db/schema.js';
 import { notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
+import { resumeBlockedPlaidSync } from '../services/plaid.js';
 
 export async function accountRoutes(app: FastifyInstance): Promise<void> {
   app.get('/accounts', async (request) => {
@@ -74,6 +75,8 @@ export async function accountRoutes(app: FastifyInstance): Promise<void> {
     }
 
     await audit(request, actor, 'update_account_business', 'account', params.id, body);
+    // A Plaid sync paused on this unassigned account can import its held transactions now.
+    if (body.businessId) await resumeBlockedPlaidSync(row.connectionId);
     return row;
   });
 

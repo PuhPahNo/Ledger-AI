@@ -4,6 +4,7 @@ import {
   GMAIL_WATCH_RENEWAL_WINDOW_MS,
   isGmailWatchRenewalDue,
   isPlaidConnectionDueForDailySync,
+  plaidSyncPacingAnchor,
 } from './scheduler.js';
 
 describe('isPlaidConnectionDueForDailySync', () => {
@@ -47,5 +48,22 @@ describe('isGmailWatchRenewalDue', () => {
       new Date(now.getTime() + GMAIL_WATCH_RENEWAL_WINDOW_MS + 1),
       now,
     )).toBe(false);
+  });
+});
+
+describe('plaidSyncPacingAnchor', () => {
+  const synced = new Date('2026-09-01T00:00:00.000Z');
+
+  it('uses lastSyncAt when the connection is not blocked', () => {
+    expect(plaidSyncPacingAnchor(synced, {})).toEqual(synced);
+    expect(plaidSyncPacingAnchor(null, null)).toBeNull();
+  });
+
+  it('paces blocked connections from the blocked attempt so they are not retried hourly', () => {
+    const blockedAt = '2026-09-26T00:00:00.000Z';
+    const anchor = plaidSyncPacingAnchor(synced, { syncBlocked: { at: blockedAt } });
+    expect(anchor?.toISOString()).toBe(blockedAt);
+    expect(isPlaidConnectionDueForDailySync(anchor, new Date('2026-09-26T12:00:00.000Z'))).toBe(false);
+    expect(plaidSyncPacingAnchor(null, { syncBlocked: { at: 'garbage' } })).toBeNull();
   });
 });

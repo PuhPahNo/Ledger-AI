@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, Building2, CreditCard, Mail, PlugZap } from 'lucide-react';
 import { usePlaidLink } from 'react-plaid-link';
 import {
   ApiError,
   backfillGmailConnection,
   backfillConnection as backfillPlaidConnection,
+  completePlaidReauth,
   createPlaidLinkToken,
   disconnectConnection,
   exchangePlaidPublicToken,
@@ -45,6 +46,8 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [pendingPlaidOpen, setPendingPlaidOpen] = useState(false);
   const [busy, setBusy] = useState<'plaid' | 'gmail' | null>(null);
+  // Set while Plaid Link runs in update mode for an existing connection (ref: read in callbacks).
+  const reauthTarget = useRef<Connection | null>(null);
   const activePlaid = useMemo(
     () => connections.filter((c) => c.kind !== 'gmail' && c.status !== 'disconnected').length,
     [connections],
@@ -62,14 +65,22 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
   const { open: openPlaid, ready, error: plaidLoadError } = usePlaidLink({
     token: linkToken,
     onSuccess: async (publicToken) => {
+      const reconnecting = reauthTarget.current;
       try {
         setBusy('plaid');
-        await exchangePlaidPublicToken(publicToken, businessId || undefined);
-        toast({ variant: 'success', title: 'Plaid connected', description: 'Initial sync is running in the background.' });
+        if (reconnecting?.id) {
+          // Update mode keeps the same Item/access token: no exchange, just resync.
+          await completePlaidReauth(reconnecting.id);
+          toast({ variant: 'success', title: `${reconnecting.label} reconnected`, description: 'A sync is running; it shows Live once it finishes.' });
+        } else {
+          await exchangePlaidPublicToken(publicToken, businessId || undefined);
+          toast({ variant: 'success', title: 'Plaid connected', description: 'Initial sync is running in the background.' });
+        }
         onRefresh();
       } catch (error) {
-        toast({ variant: 'destructive', title: 'Plaid connect failed', description: readableError(error) });
+        toast({ variant: 'destructive', title: reconnecting ? 'Reconnect failed' : 'Plaid connect failed', description: readableError(error) });
       } finally {
+        reauthTarget.current = null;
         setBusy(null);
         setLinkToken(null);
       }
@@ -82,8 +93,10 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
           description: error.display_message || error.error_message || 'Plaid was closed before connecting.',
         });
       }
+      reauthTarget.current = null;
       setPendingPlaidOpen(false);
       setBusy(null);
+      setLinkToken(null);
     },
   });
 
@@ -130,6 +143,7 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
     }
     try {
       setBusy('plaid');
+      reauthTarget.current = null;
       const token = await createPlaidLinkToken();
       setLinkToken(token.link_token);
       setPendingPlaidOpen(true);
@@ -137,6 +151,22 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
       setBusy(null);
       setPendingPlaidOpen(false);
       toast({ variant: 'destructive', title: 'Plaid setup failed', description: readableError(error) });
+    }
+  };
+
+  const reconnectPlaid = async (connection: Connection) => {
+    if (!connection.id) return;
+    try {
+      setBusy('plaid');
+      reauthTarget.current = connection;
+      const token = await createPlaidLinkToken(connection.id);
+      setLinkToken(token.link_token);
+      setPendingPlaidOpen(true);
+    } catch (error) {
+      reauthTarget.current = null;
+      setBusy(null);
+      setPendingPlaidOpen(false);
+      toast({ variant: 'destructive', title: 'Reconnect failed', description: readableError(error) });
     }
   };
 
@@ -303,6 +333,9 @@ export function ConnectionsManager({ open, businesses, connections, accounts, on
                     backfillLabel={connection.kind === 'gmail' ? '90d' : '12m'}
                     backfillTooltip={connection.kind === 'gmail' ? 'Pull 90 days of Gmail receipts' : 'Pull 12 months of Plaid history'}
                     onDisconnect={() => removeConnection(connection)}
+                    onReconnect={connection.kind !== 'gmail' && connection.status === 'reauth' && !busy
+                      ? () => reconnectPlaid(connection)
+                      : undefined}
                   />
                 ))
               ) : (

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ChevronDown, CreditCard, Mail, Pencil, RefreshCcw, Trash2 } from 'lucide-react';
+import { ChevronDown, CreditCard, KeyRound, Mail, Pencil, RefreshCcw, Trash2 } from 'lucide-react';
 import type { Business, Connection } from '@/types/domain';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,6 +25,8 @@ interface Props {
   backfillLabel?: string;
   backfillTooltip?: string;
   onDisconnect: () => void;
+  /** Present when the bank login expired; opens Plaid Link in update mode. */
+  onReconnect?: () => void;
 }
 
 export function ProviderRow({
@@ -38,6 +40,7 @@ export function ProviderRow({
   backfillLabel = '12m',
   backfillTooltip = 'Pull 12 months of Plaid history',
   onDisconnect,
+  onReconnect,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(connection.label);
@@ -127,6 +130,12 @@ export function ProviderRow({
         <div className="min-w-[180px] flex-1">
           <BusinessSelect value={connection.businessId ?? ''} businesses={businesses} onChange={onBusiness} />
         </div>
+        {onReconnect && (
+          <Button variant="default" size="sm" onClick={onReconnect} className="px-2.5">
+            <KeyRound className="h-3.5 w-3.5" />
+            Reconnect
+          </Button>
+        )}
         {onBackfillDays && connection.health?.actions.gmailBackfillDays.length ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

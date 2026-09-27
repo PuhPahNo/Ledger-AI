@@ -24,14 +24,19 @@ export async function migrate(): Promise<void> {
     if (applied.rowCount) continue;
     const sql = await fs.readFile(path.join(migrationsDir, file), 'utf8');
     console.log(`Applying migration ${file}`);
-    await pool.query('BEGIN');
+    // BEGIN/COMMIT must run on one connection: pool.query can hand each statement to a
+    // different pooled client, which would run the migration outside the transaction.
+    const client = await pool.connect();
     try {
-      await pool.query(sql);
-      await pool.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [file]);
-      await pool.query('COMMIT');
+      await client.query('BEGIN');
+      await client.query(sql);
+      await client.query('INSERT INTO schema_migrations (filename) VALUES ($1)', [file]);
+      await client.query('COMMIT');
     } catch (error) {
-      await pool.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => undefined);
       throw error;
+    } finally {
+      client.release();
     }
   }
 }

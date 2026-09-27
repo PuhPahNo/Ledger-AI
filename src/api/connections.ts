@@ -22,11 +22,24 @@ export function listConnections(params: { biz?: BusinessId | 'all' } = {}): Prom
  * Backend exchanges with Plaid and returns a short-lived link token the
  * frontend hands to Plaid Link.
  */
-export function createPlaidLinkToken(): Promise<{ link_token: string; expiration: string }> {
+export function createPlaidLinkToken(connectionId?: string): Promise<{ link_token: string; expiration: string }> {
   if (useMockApi) {
     return Promise.reject(new Error('createPlaidLinkToken requires the real backend'));
   }
-  return http('/connections/plaid/link-token', { method: 'POST' });
+  // With a connectionId the backend returns an update-mode token to re-login an existing Item.
+  return http('/connections/plaid/link-token', {
+    method: 'POST',
+    body: JSON.stringify(connectionId ? { connectionId } : {}),
+  });
+}
+
+/**
+ * POST /api/connections/:id/plaid/reauth-complete
+ * Called after update-mode Link succeeds; queues a sync that flips the connection back to live.
+ */
+export function completePlaidReauth(connectionId: string): Promise<{ queued: boolean; jobId?: string }> {
+  if (useMockApi) return Promise.resolve({ queued: true, jobId: 'mock-reauth-sync-job' });
+  return http<{ queued: boolean; jobId?: string }>(`/connections/${connectionId}/plaid/reauth-complete`, { method: 'POST' });
 }
 
 /**

@@ -5,18 +5,21 @@ import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
 import { exportJobs } from '../db/schema.js';
 import { enqueue } from '../jobs/queue.js';
-import { notFound } from '../lib/errors.js';
+import { badRequest, notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
 import { storage } from '../services/storage.js';
+import { exportDateRangeError, isIsoDate } from '../services/exporter.js';
 
 export async function exportRoutes(app: FastifyInstance): Promise<void> {
   app.post('/exports', async (request) => {
     const user = await requireUser(request);
     const body = z.object({
       businessId: z.string().uuid().nullable().optional(),
-      dateFrom: z.string(),
-      dateTo: z.string(),
+      dateFrom: z.string().refine(isIsoDate, 'dateFrom must be a valid YYYY-MM-DD date'),
+      dateTo: z.string().refine(isIsoDate, 'dateTo must be a valid YYYY-MM-DD date'),
     }).parse(request.body);
+    const rangeError = exportDateRangeError(body.dateFrom, body.dateTo);
+    if (rangeError) badRequest(rangeError);
     const [job] = await db.insert(exportJobs).values({
       requestedByUserId: user.id,
       businessId: body.businessId,
