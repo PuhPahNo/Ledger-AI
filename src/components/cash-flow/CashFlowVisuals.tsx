@@ -3,6 +3,7 @@ import type { CashFlowPeriod, Category } from '@/types/domain';
 import { Card } from '@/components/ui/card';
 import { useResolvedColor } from '@/hooks/useTheme';
 import { cn } from '@/lib/cn';
+import { chartPalette } from '@/theme/tokens';
 
 export interface ComparisonCardData {
   label: string;
@@ -179,7 +180,7 @@ export function CashFlowChart({ periods, height = 260 }: { periods: CashFlowPeri
 }
 
 export function CategoryMixCard({ categories, period }: { categories: Category[]; period: CashFlowPeriod | null }) {
-  const palette = ['#D97757', '#2A6FDB', '#1F8A5B', '#caa6f0', '#f1b6c5', '#ecd95a', '#9fc6e8', '#abc89a'];
+  const palette = chartPalette;
   return (
     <Card className="p-4">
       <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">

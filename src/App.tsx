@@ -12,6 +12,7 @@ import { AssistantPage } from './components/AssistantPage';
 import { ReceiptsPage } from './components/ReceiptsPage';
 import { TransactionsPage } from './components/TransactionsPage';
 import { clearDashboardCache } from './hooks/useDashboard';
+import { clearInboxCache } from './hooks/useInbox';
 import type { CurrentUser } from './types/domain';
 import type { AppView, TransactionViewFilters } from './types/navigation';
 
@@ -74,6 +75,7 @@ export default function App() {
   const handleLogout = async () => {
     await logout();
     clearDashboardCache();
+    clearInboxCache();
     setUser(null);
     setView('dashboard');
   };

@@ -60,6 +60,18 @@
        surfaces (money +/-, deltas, soft-tint cards) stays legible in dark mode. */
     --on-sage: 105 35% 19%;
     --on-coral: 9 78% 18%;
+
+    /* Categorical chart palette (tokens.ts chartPalette). Mid-tones that stay visible on
+       paper, cream and lemon tiles; the dark theme lifts them slightly. */
+    --chart-1: 13 85% 62%;   /* coral */
+    --chart-2: 212 62% 56%;  /* blue */
+    --chart-3: 150 45% 42%;  /* green */
+    --chart-4: 268 55% 66%;  /* purple */
+    --chart-5: 340 60% 64%;  /* pink */
+    --chart-6: 32 80% 52%;   /* amber */
+    --chart-7: 188 55% 42%;  /* teal */
+    --chart-8: 45 12% 48%;   /* stone */
+    --chart-muted: 45 14% 7%;
   }
 
   /* Dark theme — only the neutral primitives flip; shadcn aliases reference them
@@ -83,6 +95,16 @@
        shades on dark surfaces. Solid bright chips keep dark text via --on-* above. */
     --color-sage-ink: 95 40% 72%;
     --color-coral-ink: 14 95% 75%;
+
+    --chart-1: 13 90% 68%;
+    --chart-2: 212 75% 66%;
+    --chart-3: 150 45% 55%;
+    --chart-4: 268 65% 74%;
+    --chart-5: 340 70% 74%;
+    --chart-6: 36 85% 60%;
+    --chart-7: 188 55% 55%;
+    --chart-8: 45 10% 62%;
+    --chart-muted: 44 22% 92%;
   }
 
   html, body {

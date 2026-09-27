@@ -172,7 +172,8 @@ function ComparisonRow({
       </div>
       <div className="grid gap-1">
         <Bar width={currentWidth} color={accentRamp[index % accentRamp.length]} label="Current" />
-        <Bar width={previousWidth} color={colors.ink} label="Previous" muted />
+        {/* Previous period in the tile's own ink so it reads in light and dark themes. */}
+        <Bar width={previousWidth} color="hsl(var(--color-lemon-ink))" label="Previous" muted />
       </div>
     </div>
   );

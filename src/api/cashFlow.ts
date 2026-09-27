@@ -1,7 +1,9 @@
-import type { BusinessId, CashFlowGroup, CashFlowSummary, Transaction } from '@/types/domain';
+import type { BusinessId, CashFlowGroup, CashFlowSummary, Category, Transaction } from '@/types/domain';
 import { http, useMockApi } from './client';
+import { mapCategory, type ApiCategory } from './mapper';
 import { BUSINESSES, TRANSACTIONS, visibleMockTransactions } from './mocks';
-import { isExcludedFromSpend } from '@/lib/calc';
+import { isExcludedFromSpend, isTransferTransaction } from '@/lib/calc';
+import { todayIso, toLocalIsoDate } from '@/lib/dates';
 
 export interface CashFlowParams {
   from?: string;
@@ -22,6 +24,42 @@ export function getCashFlow(params: CashFlowParams = {}): Promise<CashFlowSummar
   if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
   if (params.accountIds?.length) query.set('accounts', params.accountIds.join(','));
   return http<CashFlowSummary>(`/cash-flow?${query.toString()}`);
+}
+
+/**
+ * GET /api/categories with the Cash Flow "Include transfers" toggle applied, so the category
+ * mix matches the totals above it. Sorted by outflow, largest first.
+ */
+export function listCashFlowCategoryMix(params: {
+  from: string;
+  to: string;
+  biz?: BusinessId | 'all';
+  accountIds?: string[];
+  includeTransfers?: boolean;
+}): Promise<Category[]> {
+  if (useMockApi) {
+    const totals = new Map<string, { cents: number; count: number }>();
+    filterRows(params, params.from, params.to)
+      .filter((row) => row.amount < 0)
+      .filter((row) => (params.includeTransfers ? isTransferTransaction(row) || !isExcludedFromSpend(row) : !isExcludedFromSpend(row)))
+      .forEach((row) => {
+        const name = row.cat || 'Uncategorized';
+        const entry = totals.get(name) ?? { cents: 0, count: 0 };
+        entry.cents += Math.abs(Math.round(row.amount * 100));
+        entry.count += 1;
+        totals.set(name, entry);
+      });
+    return Promise.resolve([...totals.entries()]
+      .map(([name, entry]) => ({ name, amount: entry.cents / 100, amountCents: entry.cents, count: entry.count, delta: '+0%' }))
+      .sort((a, b) => b.amountCents - a.amountCents));
+  }
+  const query = new URLSearchParams({ from: params.from, to: params.to });
+  if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
+  if (params.accountIds?.length) query.set('accounts', params.accountIds.join(','));
+  if (params.includeTransfers) query.set('includeTransfers', 'true');
+  return http<ApiCategory[]>(`/categories?${query.toString()}`)
+    .then((rows) => rows.map(mapCategory))
+    .then((rows) => rows.sort((a, b) => (b.amountCents ?? Math.round(b.amount * 100)) - (a.amountCents ?? Math.round(a.amount * 100))));
 }
 
 function mockCashFlow(params: CashFlowParams): CashFlowSummary {
@@ -129,9 +167,9 @@ function shiftYear(value: string, delta: number): string {
 }
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIso();
 }
 
 function isoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  return toLocalIsoDate(date);
 }

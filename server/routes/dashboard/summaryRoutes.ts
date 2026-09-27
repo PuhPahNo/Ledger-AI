@@ -1,20 +1,21 @@
 import type { FastifyInstance } from 'fastify';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, gte, ilike, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../../auth/session.js';
 import { db } from '../../db/client.js';
-import { businesses, transactions } from '../../db/schema.js';
+import { accounts, businesses, categories, transactions } from '../../db/schema.js';
 import {
   cashFlowBusinessBreakdown,
   cashFlowTotals,
-  movementBusinessBreakdown,
-  movementSummary,
+  dailyBusinessMovement,
+  movementForWindow,
   sumCashFlowPeriods,
 } from './cashFlowData.js';
 import {
   accountSpendFilter,
   averageCents,
   cashFlowPeriods,
+  currentMonthKey,
   dateFromIso,
   dateWindow,
   flowBucketWindows,
@@ -22,9 +23,9 @@ import {
   parseAccountIds,
   previousDateWindow,
   shiftIsoYear,
-  spendCategoryFilter,
+  categoryIsVisibleSpend,
   trailingMonthWindows,
-  transferCategoryFilter,
+  resolveSelectedBusiness,
 } from './helpers.js';
 
 export function registerSummaryRoutes(app: FastifyInstance): void {
@@ -40,48 +41,32 @@ export function registerSummaryRoutes(app: FastifyInstance): void {
       bucketPreset: z.enum(['month', 'last3', 'last12', 'ytd']).optional(),
     }).parse(request.query);
     const accountIds = parseAccountIds(query.accounts);
-    const period = query.period ?? new Date().toISOString().slice(0, 7);
+    const period = query.period ?? currentMonthKey();
     const { from, to, label } = dateWindow(period, query.from, query.to);
     const { priorFrom, priorTo } = previousDateWindow(from, to);
     const labels = trailingMonthWindows(to);
     const flowWindows = flowBucketWindows(from, to, query.bucketPreset);
-    const selectedBusiness = query.biz && query.biz !== 'all'
-      ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
-      : null;
+    const selectedBusiness = await resolveSelectedBusiness(query.biz);
     const businessFilter = selectedBusiness ? eq(transactions.businessId, selectedBusiness.id) : sql`true`;
-    const movementFilters = [businessFilter, accountSpendFilter(accountIds)] as const;
-    const spendFilters = [
-      ...movementFilters,
-      sql`${transactions.amountCents} < 0`,
-      spendCategoryFilter(),
-    ] as const;
-    const inflowFilters = [
-      ...movementFilters,
-      sql`${transactions.amountCents} > 0`,
-      sql`NOT (${transferCategoryFilter()})`,
-    ] as const;
-    const current = await movementSummary(from, to, spendFilters, inflowFilters);
-    const prior = await movementSummary(priorFrom, priorTo, spendFilters, inflowFilters);
-    const [flowRows, flowOutflowBusinessRows, flowInflowBusinessRows] = await Promise.all([
-      Promise.all(flowWindows.windows.map((window) => movementSummary(window.from, window.to, spendFilters, inflowFilters))),
-      Promise.all(flowWindows.windows.map(({ from: bucketFrom, to: bucketTo }) => (
-        movementBusinessBreakdown(bucketFrom, bucketTo, spendFilters, sql`abs(sum(${transactions.amountCents}))`)
-      ))),
-      Promise.all(flowWindows.windows.map(({ from: bucketFrom, to: bucketTo }) => (
-        movementBusinessBreakdown(bucketFrom, bucketTo, inflowFilters, sql`sum(${transactions.amountCents})`)
-      ))),
-    ]);
-    const trailingRows = await Promise.all(labels.map(async ({ from: monthFrom, to: monthTo }) => {
-      return movementSummary(monthFrom, monthTo, spendFilters, inflowFilters);
-    }));
-    const [trailingOutflowBusinessRows, trailingInflowBusinessRows] = await Promise.all([
-      Promise.all(labels.map(({ from: monthFrom, to: monthTo }) => (
-        movementBusinessBreakdown(monthFrom, monthTo, spendFilters, sql`abs(sum(${transactions.amountCents}))`)
-      ))),
-      Promise.all(labels.map(({ from: monthFrom, to: monthTo }) => (
-        movementBusinessBreakdown(monthFrom, monthTo, inflowFilters, sql`sum(${transactions.amountCents})`)
-      ))),
-    ]);
+    // One grouped (day × business) query covering every window below — replaces the old
+    // per-bucket / per-trailing-month fan-out (~3N + 36 queries per call).
+    const allWindows = [
+      { from, to },
+      { from: priorFrom, to: priorTo },
+      ...flowWindows.windows,
+      ...labels,
+    ];
+    const spanFrom = allWindows.reduce((min, window) => (window.from < min ? window.from : min), from);
+    const spanTo = allWindows.reduce((max, window) => (window.to > max ? window.to : max), to);
+    const daily = await dailyBusinessMovement(spanFrom, spanTo, [businessFilter, accountSpendFilter(accountIds)]);
+    const current = movementForWindow(daily, from, to);
+    const prior = movementForWindow(daily, priorFrom, priorTo);
+    const flowMovements = flowWindows.windows.map((window) => movementForWindow(daily, window.from, window.to));
+    const flowOutflowBusinessRows = flowMovements.map((row) => row.outflowBusinessCents);
+    const flowInflowBusinessRows = flowMovements.map((row) => row.inflowBusinessCents);
+    const trailingRows = labels.map(({ from: monthFrom, to: monthTo }) => movementForWindow(daily, monthFrom, monthTo));
+    const trailingOutflowBusinessRows = trailingRows.map((row) => row.outflowBusinessCents);
+    const trailingInflowBusinessRows = trailingRows.map((row) => row.inflowBusinessCents);
     const trailingOutflowRows = trailingRows.map((row) => row.outflowCents);
     const trailingInflowRows = trailingRows.map((row) => row.inflowCents);
     const trailingNetRows = trailingRows.map((row) => row.netCents);
@@ -106,9 +91,9 @@ export function registerSummaryRoutes(app: FastifyInstance): void {
         label: window.label,
         from: window.from,
         to: window.to,
-        inflowCents: flowRows[index]?.inflowCents ?? 0,
-        outflowCents: flowRows[index]?.outflowCents ?? 0,
-        netCents: flowRows[index]?.netCents ?? 0,
+        inflowCents: flowMovements[index]?.inflowCents ?? 0,
+        outflowCents: flowMovements[index]?.outflowCents ?? 0,
+        netCents: flowMovements[index]?.netCents ?? 0,
         inflowBusinessCents: flowInflowBusinessRows[index] ?? [],
         outflowBusinessCents: flowOutflowBusinessRows[index] ?? [],
       })),
@@ -132,6 +117,58 @@ export function registerSummaryRoutes(app: FastifyInstance): void {
     };
   });
 
+  /**
+   * Server-side breakdowns for the dashboard analysis/account tiles. Previously these were
+   * computed in the browser from the first 2,000 transactions, which could disagree with
+   * the hero totals; this uses the same operating-spend definition as /summary.
+   */
+  app.get('/summary/breakdowns', async (request) => {
+    await requireUser(request);
+    const query = z.object({
+      from: z.string(),
+      to: z.string(),
+      biz: z.string().optional(),
+      accounts: z.string().optional(),
+      q: z.string().optional(),
+    }).parse(request.query);
+    const accountIds = parseAccountIds(query.accounts);
+    const selectedBusiness = await resolveSelectedBusiness(query.biz);
+    const spend = sql`${transactions.amountCents} < 0 AND ${categoryIsVisibleSpend()}`;
+    const rows = await db.select({
+      businessId: businesses.key,
+      businessName: businesses.name,
+      color: businesses.color,
+      accountId: transactions.accountId,
+      receiptStatus: transactions.receiptStatus,
+      rows: sql<number>`count(${transactions.id})::int`,
+      spendCount: sql<number>`count(${transactions.id}) FILTER (WHERE ${spend})::int`,
+      spendCents: sql<number>`coalesce(abs(sum(CASE WHEN ${spend} THEN ${transactions.amountCents} ELSE 0 END)), 0)::bigint`,
+    })
+      .from(transactions)
+      .innerJoin(businesses, eq(transactions.businessId, businesses.id))
+      .leftJoin(categories, eq(transactions.categoryId, categories.id))
+      .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+      .where(and(
+        gte(transactions.date, query.from),
+        lte(transactions.date, query.to),
+        selectedBusiness ? eq(transactions.businessId, selectedBusiness.id) : sql`true`,
+        accountSpendFilter(accountIds),
+        query.q ? or(
+          ilike(transactions.merchant, `%${query.q}%`),
+          ilike(transactions.sourceLabel, `%${query.q}%`),
+          ilike(transactions.note, `%${query.q}%`),
+          ilike(categories.name, `%${query.q}%`),
+        ) : sql`true`,
+      ))
+      .groupBy(businesses.key, businesses.name, businesses.color, transactions.accountId, transactions.receiptStatus);
+    return summarizeBreakdownRows(rows.map((row) => ({
+      ...row,
+      rows: Number(row.rows ?? 0),
+      spendCount: Number(row.spendCount ?? 0),
+      spendCents: Number(row.spendCents ?? 0),
+    })));
+  });
+
   app.get('/cash-flow', async (request) => {
     await requireUser(request);
     const query = z.object({
@@ -146,9 +183,7 @@ export function registerSummaryRoutes(app: FastifyInstance): void {
     const from = query.from ?? isoDate(new Date(dateFromIso(to).getFullYear(), 0, 1));
     const accountIds = parseAccountIds(query.accounts);
     const includeTransfers = query.includeTransfers === 'true';
-    const selectedBusiness = query.biz && query.biz !== 'all'
-      ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
-      : null;
+    const selectedBusiness = await resolveSelectedBusiness(query.biz);
     const periods = cashFlowPeriods(from, to, query.group);
     const rows = await Promise.all(periods.map(async (period) => {
       const [current, previous, businessBreakdown, previousBusinessBreakdown] = await Promise.all([
@@ -186,4 +221,51 @@ export function registerSummaryRoutes(app: FastifyInstance): void {
       periods: rows,
     };
   });
+}
+
+export interface BreakdownRow {
+  businessId: string;
+  businessName: string;
+  color: string;
+  accountId: string | null;
+  receiptStatus: string;
+  rows: number;
+  spendCount: number;
+  spendCents: number;
+}
+
+interface BreakdownBucket { key: string; label: string; color?: string; cents: number; count: number }
+
+/** Fold (business × account × receipt status) rows into the three dashboard breakdowns. */
+export function summarizeBreakdownRows(rows: BreakdownRow[]) {
+  const byBusiness = new Map<string, BreakdownBucket>();
+  const byAccount = new Map<string, BreakdownBucket>();
+  const byReceipt = new Map<string, BreakdownBucket>();
+  let totalRows = 0;
+  let spendCents = 0;
+  let spendCount = 0;
+  const add = (map: Map<string, BreakdownBucket>, key: string, label: string, row: BreakdownRow, color?: string) => {
+    const bucket = map.get(key) ?? { key, label, color, cents: 0, count: 0 };
+    bucket.cents += row.spendCents;
+    bucket.count += row.spendCount;
+    map.set(key, bucket);
+  };
+  for (const row of rows) {
+    totalRows += row.rows;
+    if (!row.spendCount) continue;
+    spendCents += row.spendCents;
+    spendCount += row.spendCount;
+    add(byBusiness, row.businessId, row.businessName, row, row.color);
+    if (row.accountId) add(byAccount, row.accountId, row.accountId, row);
+    add(byReceipt, row.receiptStatus, row.receiptStatus, row);
+  }
+  const sorted = (map: Map<string, BreakdownBucket>) => [...map.values()].sort((a, b) => b.cents - a.cents);
+  return {
+    rows: totalRows,
+    spendCents,
+    spendCount,
+    byBusiness: sorted(byBusiness),
+    byAccount: sorted(byAccount),
+    byReceipt: sorted(byReceipt),
+  };
 }

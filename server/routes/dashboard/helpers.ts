@@ -1,5 +1,7 @@
-import { inArray, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
+import { db } from '../../db/client.js';
 import { accounts, businesses, categories, transactions } from '../../db/schema.js';
+import { badRequest } from '../../lib/errors.js';
 
 export type TransactionDirection = 'all' | 'inflow' | 'outflow' | 'operating-outflow' | 'transfer';
 export type FlowBucketPreset = 'month' | 'last3' | 'last12' | 'ytd';
@@ -15,13 +17,24 @@ export function normalizeInsightMetric(row?: { count?: number | null; cents?: nu
   };
 }
 
+/**
+ * Resolve a `biz` query value. 'all'/empty means no business filter; an unknown key is a
+ * 400 rather than silently widening the query to every business.
+ */
+export async function resolveSelectedBusiness(key?: string | null) {
+  if (!key || key === 'all') return null;
+  const row = await db.query.businesses.findFirst({ where: eq(businesses.key, key) });
+  if (!row) badRequest(`Unknown business "${key}".`);
+  return row;
+}
+
 export function averageCents(values: number[]): number {
   return Math.round(values.reduce((sum, value) => sum + value, 0) / Math.max(values.length, 1));
 }
 
 export function dateWindow(period?: string, from?: string, to?: string) {
   if (from && to) return { from, to, label: rangeLabel(from, to) };
-  return monthWindow(period ?? new Date().toISOString().slice(0, 7));
+  return monthWindow(period ?? currentMonthKey());
 }
 
 export function comparisonWindow(period: string, basis: 'month' | 'year') {
@@ -222,8 +235,14 @@ export function dateFromIso(value: string): Date {
   return new Date(`${value}T00:00:00`);
 }
 
+/** YYYY-MM-DD from the local calendar fields (toISOString would shift to UTC first). */
 export function isoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+export function currentMonthKey(now: Date = new Date()): string {
+  return isoDate(now).slice(0, 7);
 }
 
 export function parseAccountIds(value?: string): string[] {
@@ -249,6 +268,14 @@ export function spendCategoryFilter() {
 export function categoryIsVisibleSpend() {
   return sql`NOT (${transferCategoryFilter()})
     AND NOT (
+      coalesce(${categories.taxCode}, '') = 'income'
+      OR lower(coalesce(${categories.name}, '')) IN ('income', 'revenue')
+    )`;
+}
+
+/** Outflow categories for a mix that includes transfers: everything except income. */
+export function categoryIsNotIncome() {
+  return sql`NOT (
       coalesce(${categories.taxCode}, '') = 'income'
       OR lower(coalesce(${categories.name}, '')) IN ('income', 'revenue')
     )`;

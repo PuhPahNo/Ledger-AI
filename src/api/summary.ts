@@ -1,8 +1,8 @@
-import type { BusinessId, SpendSummary } from '@/types/domain';
+import type { Business, BusinessId, SpendSummary, Transaction } from '@/types/domain';
 import { isSpendTransaction } from '@/lib/calc';
 import { http, useMockApi } from './client';
 import { mapSummary, type ApiSpendSummary } from './mapper';
-import { SUMMARY, TRANSACTIONS, visibleMockTransactions } from './mocks';
+import { BUSINESSES, SUMMARY, TRANSACTIONS, visibleMockTransactions } from './mocks';
 
 /**
  * GET /api/summary?period=YYYY-MM
@@ -44,4 +44,88 @@ export function getSummary(params: {
   if (params.accountIds?.length) query.set('accounts', params.accountIds.join(','));
   if (params.bucketPreset) query.set('bucketPreset', params.bucketPreset);
   return http<ApiSpendSummary>(`/summary?${query.toString()}`).then(mapSummary);
+}
+
+export interface BreakdownBucket {
+  /** Business key, account id, or receipt status depending on the breakdown. */
+  key: string;
+  label: string;
+  color?: string;
+  cents: number;
+  count: number;
+}
+
+export interface SummaryBreakdowns {
+  /** Every matching transaction (any direction) — "of N" counts. */
+  rows: number;
+  /** Operating spend (same definition as the hero outflow). */
+  spendCents: number;
+  spendCount: number;
+  byBusiness: BreakdownBucket[];
+  byAccount: BreakdownBucket[];
+  byReceipt: BreakdownBucket[];
+}
+
+export interface SummaryBreakdownParams {
+  from: string;
+  to: string;
+  biz?: BusinessId | 'all';
+  accountIds?: string[];
+  q?: string;
+}
+
+/**
+ * GET /api/summary/breakdowns — server-side spend by business / account / receipt status
+ * for the dashboard tiles, so they agree with the hero totals instead of summing a
+ * capped page of transactions in the browser.
+ */
+export function getSummaryBreakdowns(params: SummaryBreakdownParams): Promise<SummaryBreakdowns> {
+  if (useMockApi) {
+    const q = params.q?.toLowerCase();
+    const rows = visibleMockTransactions(TRANSACTIONS, params.accountIds)
+      .filter((txn) => !params.biz || params.biz === 'all' || txn.biz === params.biz)
+      .filter((txn) => txn.date >= params.from && txn.date <= params.to)
+      .filter((txn) => !q || [txn.merchant, txn.cat, txn.src, txn.note ?? ''].some((value) => value.toLowerCase().includes(q)));
+    return Promise.resolve(summarizeBreakdowns(rows, BUSINESSES));
+  }
+  const query = new URLSearchParams({ from: params.from, to: params.to });
+  if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
+  if (params.accountIds?.length) query.set('accounts', params.accountIds.join(','));
+  if (params.q) query.set('q', params.q);
+  return http<SummaryBreakdowns>(`/summary/breakdowns?${query.toString()}`);
+}
+
+/** Client-side mirror of the server fold, used by mock mode. */
+export function summarizeBreakdowns(rows: Transaction[], businesses: Business[]): SummaryBreakdowns {
+  const businessById = new Map(businesses.map((business) => [business.id, business]));
+  const byBusiness = new Map<string, BreakdownBucket>();
+  const byAccount = new Map<string, BreakdownBucket>();
+  const byReceipt = new Map<string, BreakdownBucket>();
+  const add = (map: Map<string, BreakdownBucket>, key: string, label: string, cents: number, color?: string) => {
+    const bucket = map.get(key) ?? { key, label, color, cents: 0, count: 0 };
+    bucket.cents += cents;
+    bucket.count += 1;
+    map.set(key, bucket);
+  };
+  let spendCents = 0;
+  let spendCount = 0;
+  for (const txn of rows) {
+    if (!isSpendTransaction(txn)) continue;
+    const cents = Math.abs(Math.round(txn.amount * 100));
+    spendCents += cents;
+    spendCount += 1;
+    const business = businessById.get(txn.biz);
+    add(byBusiness, txn.biz, business?.name ?? txn.biz, cents, business?.color);
+    if (txn.accountId) add(byAccount, txn.accountId, txn.accountId, cents);
+    add(byReceipt, txn.receipt, txn.receipt, cents);
+  }
+  const sorted = (map: Map<string, BreakdownBucket>) => [...map.values()].sort((a, b) => b.cents - a.cents);
+  return {
+    rows: rows.length,
+    spendCents,
+    spendCount,
+    byBusiness: sorted(byBusiness),
+    byAccount: sorted(byAccount),
+    byReceipt: sorted(byReceipt),
+  };
 }

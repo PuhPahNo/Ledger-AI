@@ -1,9 +1,17 @@
-import { and, desc, eq, gte, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, isNull, like, lte, or, sql } from 'drizzle-orm';
 import { db } from '../../db/client.js';
-import { accounts, businesses, categories, exportJobs, receipts, transactions } from '../../db/schema.js';
-import { getSetting } from '../../services/appSettings.js';
+import { accounts, appSettings, businesses, categories, exportJobs, receipts, transactions } from '../../db/schema.js';
+import { getSetting, setSetting } from '../../services/appSettings.js';
 import { listCategorizationReviewItems } from '../../services/categorizationFeedback.js';
-import { accountSpendFilter, categoryIsVisibleSpend, normalizeInsightMetric, transferCategoryFilter } from './helpers.js';
+import {
+  accountSpendFilter,
+  categoryIsVisibleSpend,
+  dateFromIso,
+  isoDate,
+  normalizeInsightMetric,
+  resolveSelectedBusiness,
+  transferCategoryFilter,
+} from './helpers.js';
 import { failedSyncCountForBusiness } from './connectionHealth.js';
 
 export async function buildCloseReadiness(input: {
@@ -12,9 +20,7 @@ export async function buildCloseReadiness(input: {
   biz?: string;
   accountIds: string[];
 }) {
-  const selectedBusiness = input.biz && input.biz !== 'all'
-    ? await db.query.businesses.findFirst({ where: eq(businesses.key, input.biz) })
-    : null;
+  const selectedBusiness = await resolveSelectedBusiness(input.biz);
   const biz = selectedBusiness?.key ?? 'all';
   const baseTransactionFilters = [
     gte(transactions.date, input.from),
@@ -137,13 +143,19 @@ export async function buildCloseReadiness(input: {
     filters: { tab: 'exports' },
   });
 
-  const signoff = await readCloseSignoff(biz, input.from, input.to);
+  // Sign-off is per business + calendar month, so it survives the "to = today" default
+  // moving forward and is shared by every range inside that month.
+  const closeMonth = closeMonthForRange(input.from, input.to);
+  const signoff = closeMonth ? await readCloseSignoff(biz, closeMonth) : emptySignoff;
+  const changedSinceSignOff = closeMonth && signoff.signedOffAt
+    ? await countChangedSince(closeMonth, selectedBusiness?.id ?? null, signoff.signedOffAt)
+    : 0;
   const blockers = items.filter((item) => item.severity === 'blocker' && item.count > 0);
-  const canSignOff = blockers.length === 0 && !signoff.signedOff;
+  const canSignOff = Boolean(closeMonth) && blockers.length === 0 && !signoff.signedOff;
   if (canSignOff) {
     items.push({
       id: 'sign-off',
-      label: 'Sign off period close',
+      label: `Sign off ${monthLabel(closeMonth!)}`,
       detail: 'All blocking close items are clear.',
       severity: 'ready',
       count: 1,
@@ -156,15 +168,84 @@ export async function buildCloseReadiness(input: {
     from: input.from,
     to: input.to,
     biz,
+    closeMonth,
     signedOff: signoff.signedOff,
     signedOffAt: signoff.signedOffAt,
+    changedSinceSignOff,
     canSignOff,
     items,
   };
 }
 
-export function closeSignoffKey(biz: string, from: string, to: string): string {
-  return `close_signoff:${biz}:${from}:${to}`;
+const emptySignoff = { signedOff: false, signedOffAt: null } as const;
+
+/** Setting key for a month-close sign-off: `close_signoff:<biz|all>:<YYYY-MM>`. */
+export function closeSignoffKey(biz: string, month: string): string {
+  return `close_signoff:${biz}:${month}`;
+}
+
+/** The calendar month (YYYY-MM) a range belongs to, or null when it spans several months. */
+export function closeMonthForRange(from: string, to: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) return null;
+  return from.slice(0, 7) === to.slice(0, 7) ? from.slice(0, 7) : null;
+}
+
+export function closeMonthBounds(month: string): { from: string; to: string } {
+  const start = dateFromIso(`${month}-01`);
+  return { from: isoDate(start), to: isoDate(new Date(start.getFullYear(), start.getMonth() + 1, 0)) };
+}
+
+/**
+ * Legacy keys were `close_signoff:<biz>:<from>:<to>`. Returns the month such a key belongs
+ * to (only when the range sat inside one month), else null.
+ */
+export function legacyCloseSignoffMonth(key: string, biz: string): string | null {
+  const prefix = `close_signoff:${biz}:`;
+  if (!key.startsWith(prefix)) return null;
+  const [from, to, extra] = key.slice(prefix.length).split(':');
+  if (!from || !to || extra !== undefined) return null;
+  return closeMonthForRange(from, to);
+}
+
+export function parseCloseSignoff(raw: string | null): { signedOff: boolean; signedOffAt: string | null } {
+  if (!raw) return { signedOff: false, signedOffAt: null };
+  try {
+    const parsed = JSON.parse(raw) as { signedOffAt?: unknown };
+    return { signedOff: true, signedOffAt: typeof parsed.signedOffAt === 'string' ? parsed.signedOffAt : null };
+  } catch {
+    return { signedOff: true, signedOffAt: null };
+  }
+}
+
+export async function readCloseSignoff(biz: string, month: string): Promise<{ signedOff: boolean; signedOffAt: string | null }> {
+  const current = await getSetting(closeSignoffKey(biz, month));
+  if (current) return parseCloseSignoff(current);
+  // Fall back to legacy range-keyed sign-offs inside this month, and migrate the newest one.
+  const legacyRows = await db.select().from(appSettings)
+    .where(like(appSettings.key, `close_signoff:${biz}:${month}-%`))
+    .orderBy(desc(appSettings.updatedAt));
+  const legacy = legacyRows.find((row) => legacyCloseSignoffMonth(row.key, biz) === month);
+  if (!legacy) return { signedOff: false, signedOffAt: null };
+  await setSetting(closeSignoffKey(biz, month), legacy.value);
+  return parseCloseSignoff(legacy.value);
+}
+
+/** Transactions in the month that were created or edited after the sign-off timestamp. */
+async function countChangedSince(month: string, businessId: string | null, signedOffAt: string): Promise<number> {
+  const { from, to } = closeMonthBounds(month);
+  const [row] = await db.select({ count: sql<number>`count(*)::int` })
+    .from(transactions)
+    .where(and(
+      gte(transactions.date, from),
+      lte(transactions.date, to),
+      businessId ? eq(transactions.businessId, businessId) : sql`true`,
+      sql`greatest(${transactions.createdAt}, ${transactions.updatedAt}) > ${signedOffAt}::timestamptz`,
+    ));
+  return Number(row?.count ?? 0);
+}
+
+function monthLabel(month: string): string {
+  return dateFromIso(`${month}-01`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 }
 
 function closeItem(input: {
@@ -189,17 +270,6 @@ function closeItem(input: {
     actionView: input.actionView,
     filters: input.filters,
   };
-}
-
-async function readCloseSignoff(biz: string, from: string, to: string): Promise<{ signedOff: boolean; signedOffAt: string | null }> {
-  const raw = await getSetting(closeSignoffKey(biz, from, to));
-  if (!raw) return { signedOff: false, signedOffAt: null };
-  try {
-    const parsed = JSON.parse(raw) as { signedOffAt?: unknown };
-    return { signedOff: true, signedOffAt: typeof parsed.signedOffAt === 'string' ? parsed.signedOffAt : null };
-  } catch {
-    return { signedOff: true, signedOffAt: null };
-  }
 }
 
 function formatCentsForClose(cents: number): string {

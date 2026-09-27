@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownRight, ArrowUpRight, Download } from 'lucide-react';
 import {
   bulkCategorizeTransactions,
@@ -26,6 +26,7 @@ import type { AppView, TransactionViewFilters } from '@/types/navigation';
 import { accountLabel } from '@/lib/account';
 import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { AppShell } from './AppShell';
 import { TransactionDrawer } from './TransactionDrawer';
 import {
@@ -62,7 +63,8 @@ const SAVED_VIEWS: SavedView[] = [
   { id: 'all', label: 'All', filter: () => ({ direction: 'all', receipts: [] }) },
   { id: 'needs-receipt', label: 'Needs receipt', filter: () => ({ direction: 'outflow', receipts: ['missing'] }) },
   { id: 'this-month', label: 'This month', filter: () => ({ direction: 'all', receipts: [], range: 'this-month' }) },
-  { id: 'large', label: 'Large outflows', filter: () => ({ direction: 'outflow', receipts: [] }) },
+  // Sorted biggest-first rather than filtered by a threshold — labelled for what it does.
+  { id: 'large', label: 'Largest outflows', filter: () => ({ direction: 'outflow', receipts: [] }) },
   { id: 'inflows', label: 'Inflows', filter: () => ({ direction: 'inflow', receipts: [] }) },
 ];
 
@@ -129,8 +131,15 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
       .catch((loadError: Error) => setError(loadError.message));
   }, []);
 
+  // Search typing shouldn't fire a request per keystroke.
+  const debouncedQuery = useDebouncedValue(query.trim(), 300);
+  // Only the latest request may write state; slower stale responses are dropped.
+  const requestSeq = useRef(0);
+
   useEffect(() => {
     const categoryNames = categoryName === 'all' ? [] : [categoryName];
+    const requestId = ++requestSeq.current;
+    const isCurrent = () => requestSeq.current === requestId;
     setLoading(true);
     setError('');
     const sortKey = activeView === 'large' ? 'largest' : 'date';
@@ -142,7 +151,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
         receipts,
         tagIds,
         direction,
-        q: query || undefined,
+        q: debouncedQuery || undefined,
         from: from || undefined,
         to: to || undefined,
         sort: sortKey,
@@ -157,26 +166,36 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
         receipts,
         tagIds,
         direction,
-        q: query || undefined,
+        q: debouncedQuery || undefined,
         from: from || undefined,
         to: to || undefined,
       }),
     ])
       .then(([transactionRows, summary]) => {
+        if (!isCurrent()) return;
         setRows(transactionRows);
         setRollup(summary);
         setSelectedIds(new Set());
       })
-      .catch((loadError: Error) => setError(loadError.message))
-      .finally(() => setLoading(false));
-  }, [accountIds, activeView, business, categoryName, direction, from, offset, query, receipts, refreshKey, tagIds, to]);
+      .catch((loadError: Error) => {
+        if (isCurrent()) setError(loadError.message);
+      })
+      .finally(() => {
+        if (isCurrent()) setLoading(false);
+      });
+  }, [accountIds, activeView, business, categoryName, debouncedQuery, direction, from, offset, receipts, refreshKey, tagIds, to]);
 
-  // Independently track "needs receipt" count so the saved-view badge stays live.
+  // Independently track the "Needs receipt" count so the saved-view badge stays live. It
+  // follows the same business/account scope as the table so the badge matches the view.
   useEffect(() => {
-    getTransactionRollup({ from, to, direction: 'outflow', receipts: ['missing'] })
-      .then((summary) => setMissingOutflowCount(summary.rows))
-      .catch(() => setMissingOutflowCount(0));
-  }, [from, to, refreshKey]);
+    let cancelled = false;
+    getTransactionRollup({ biz: business, accountIds, from, to, direction: 'outflow', receipts: ['missing'] })
+      .then((summary) => !cancelled && setMissingOutflowCount(summary.rows))
+      .catch(() => !cancelled && setMissingOutflowCount(0));
+    return () => {
+      cancelled = true;
+    };
+  }, [accountIds, business, from, to, refreshKey]);
 
   const handleWaiveOld = async () => {
     if (!waiveBefore) return;
@@ -332,7 +351,6 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
     resetToFirstPage();
   };
   const toggleGroup = (key: keyof typeof openGroups) => setOpenGroups((g) => ({ ...g, [key]: !g[key] }));
-  const activeViewLabel = SAVED_VIEWS.find((v) => v.id === activeView)?.label ?? 'All';
 
   return (
     <AppShell
@@ -383,10 +401,6 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
             })}
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            <span className="hidden text-xs text-dim lg:inline" title={`${activeViewLabel} view`}>
-              {rollup.rows} txns · {fmt$(rollup.operatingOutflowCents / 100)} out / {fmt$(rollup.operatingInflowCents / 100)} in
-              {rollup.transferCents > 0 && ` · ${fmt$(rollup.transferCents / 100)} transfers (excluded)`}
-            </span>
             <DateRangePill from={from} to={to} onChange={({ from: f, to: t }) => { setFrom(f); setTo(t); setOffset(0); }} />
             <Button variant="outline" size="sm" onClick={exportCsv}>
               <Download className="h-3.5 w-3.5" />
@@ -433,7 +447,7 @@ export function TransactionsPage({ user, onViewChange, onLogout, initialFilters 
               <Metric
                 label="Outflow"
                 value={fmt$(rollup.operatingOutflowCents / 100)}
-                detail={rollup.transferCents > 0 ? 'Excludes transfers' : 'Operating spend'}
+                detail={rollup.transferCents > 0 ? `Excludes ${fmt$(rollup.transferCents / 100)} transfers` : 'Operating spend'}
                 icon={<ArrowUpRight className="h-3.5 w-3.5 text-dim" />}
               />
               <Metric

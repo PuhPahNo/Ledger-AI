@@ -1,8 +1,8 @@
 import { CreditCard, EyeOff, Landmark } from 'lucide-react';
-import type { Account, Business, Transaction } from '@/types/domain';
+import type { Account, Business } from '@/types/domain';
+import type { BreakdownBucket } from '@/api';
 import { fmt$k } from '@/lib/format';
 import { accountLabel } from '@/lib/account';
-import { isSpendTransaction } from '@/lib/calc';
 import { Tile } from '@/components/ui/tile';
 import { Button } from '@/components/ui/button';
 import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
@@ -11,7 +11,8 @@ import { cn } from '@/lib/cn';
 interface Props {
   accounts: Account[];
   businesses: Business[];
-  transactions: Transaction[];
+  /** Server-side operating spend per account for the current window/filters. */
+  byAccount: BreakdownBucket[];
   selectedAccountIds: string[];
   onToggleAccount: (accountId: string) => void;
   onClearAccounts: () => void;
@@ -21,21 +22,16 @@ interface Props {
 export function AccountSpendTile({
   accounts,
   businesses,
-  transactions,
+  byAccount,
   selectedAccountIds,
   onToggleAccount,
   onClearAccounts,
   onManageAccounts,
 }: Props) {
   const selected = new Set(selectedAccountIds);
-  const spendByAccount = transactions.reduce<Record<string, { amount: number; count: number }>>((acc, txn) => {
-    if (!txn.accountId || !isSpendTransaction(txn)) return acc;
-    const row = acc[txn.accountId] ?? { amount: 0, count: 0 };
-    row.amount += Math.abs(txn.amount);
-    row.count += 1;
-    acc[txn.accountId] = row;
-    return acc;
-  }, {});
+  const spendByAccount = Object.fromEntries(
+    byAccount.map((bucket) => [bucket.key, { amount: bucket.cents / 100, count: bucket.count }]),
+  ) as Record<string, { amount: number; count: number }>;
   const watched = accounts.filter((account) => account.enabled).length;
   const ignored = accounts.length - watched;
   const sortedAccounts = [...accounts].sort((a, b) => {

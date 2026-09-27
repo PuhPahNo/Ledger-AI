@@ -13,7 +13,7 @@ interface Props {
 }
 
 export function LoginPage({ onLogin }: Props) {
-  const [username, setUsername] = useState('admin');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [totpCode, setTotpCode] = useState('');
   const [needsTotp, setNeedsTotp] = useState(false);

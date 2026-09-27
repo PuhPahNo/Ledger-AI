@@ -10,11 +10,13 @@ import {
   categoryIsVisibleSpend,
   comparisonWindow,
   comparisonWindowForRange,
+  currentMonthKey,
   dateFromIso,
   isoDate,
   normalizeInsightMetric,
   parseAccountIds,
   transferCategoryFilter,
+  resolveSelectedBusiness,
 } from './helpers.js';
 
 export function registerInsightRoutes(app: FastifyInstance): void {
@@ -30,13 +32,11 @@ export function registerInsightRoutes(app: FastifyInstance): void {
       accounts: z.string().optional(),
     }).parse(request.query);
     const accountIds = parseAccountIds(query.accounts);
-    const period = query.period ?? new Date().toISOString().slice(0, 7);
+    const period = query.period ?? currentMonthKey();
     const window = query.from && query.to
       ? comparisonWindowForRange(query.from, query.to, query.basis)
       : comparisonWindow(period, query.basis);
-    const selectedBusiness = query.biz && query.biz !== 'all'
-      ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
-      : null;
+    const selectedBusiness = await resolveSelectedBusiness(query.biz);
     const rows = await db.execute(sql`
       WITH category_totals AS (
         SELECT coalesce(${categories.name}, 'Uncategorized') AS category,
@@ -92,9 +92,7 @@ export function registerInsightRoutes(app: FastifyInstance): void {
     const to = query.to ?? isoDate(new Date());
     const from = query.from ?? isoDate(new Date(dateFromIso(to).getFullYear(), dateFromIso(to).getMonth(), 1));
     const accountIds = parseAccountIds(query.accounts);
-    const selectedBusiness = query.biz && query.biz !== 'all'
-      ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
-      : null;
+    const selectedBusiness = await resolveSelectedBusiness(query.biz);
     const baseFilters = [
       gte(transactions.date, from),
       lte(transactions.date, to),

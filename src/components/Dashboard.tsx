@@ -5,6 +5,8 @@ import type { AppView, TransactionViewFilters } from '@/types/navigation';
 import { clearDashboardCache, useDashboard } from '@/hooks/useDashboard';
 import { uploadReceipt } from '@/api';
 import { useToast } from '@/hooks/useToast';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { currentMonthKey, parseMonthKey, shiftMonthKey, toLocalIsoDate } from '@/lib/dates';
 import { Button } from '@/components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Input } from '@/components/ui/input';
@@ -31,7 +33,9 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
   const { toast } = useToast();
   const [businessFilter, setBusinessFilter] = useState('all');
   const [query, setQuery] = useState('');
-  const [anchorMonth, setAnchorMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  // The input updates immediately; dashboard calls wait until typing pauses.
+  const debouncedQuery = useDebouncedValue(query.trim(), 300);
+  const [anchorMonth, setAnchorMonth] = useState(() => currentMonthKey());
   const [timePreset, setTimePreset] = useState<TimePreset>('month');
   const [comparisonBasis, setComparisonBasis] = useState<'month' | 'year'>('month');
   const [dashboardFlowMode, setDashboardFlowMode] = useState<DashboardFlowMode>('outflow');
@@ -47,7 +51,7 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
   const timeWindow = buildTimeWindow(anchorMonth, timePreset);
   const { data, loading, error } = useDashboard({
     business: businessFilter,
-    query,
+    query: debouncedQuery,
     refreshKey,
     comparisonBasis,
     accountIds: selectedAccountIds,
@@ -73,6 +77,7 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
   const {
     businesses,
     transactions,
+    breakdowns,
     categories,
     categoryComparisons,
     connections,
@@ -127,7 +132,7 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
     onOpenTransactions?.({
       business: businessFilter,
       accountIds: selectedAccountIds,
-      query,
+      query: debouncedQuery,
       from: timeWindow.from,
       to: timeWindow.to,
     });
@@ -179,15 +184,22 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
           />
           <AnalysisTile
             businesses={businesses}
-            accounts={accounts}
-            transactions={transactions}
+            categories={categories}
+            breakdowns={breakdowns}
+            filters={{
+              from: timeWindow.from,
+              to: timeWindow.to,
+              business: businessFilter,
+              accountIds: selectedAccountIds,
+              query: debouncedQuery,
+            }}
             onOpenTransactions={openTransactions}
           />
 
           <ActivityTile
             transactions={transactions}
             businesses={businesses}
-            totalCount={transactions.length}
+            totalCount={breakdowns.rows}
             onSelect={setSelectedTransaction}
             onViewAll={openTransactions}
           />
@@ -196,7 +208,7 @@ export function Dashboard({ onViewChange, onOpenTransactions, onLogout, user }: 
           <AccountSpendTile
             accounts={accounts}
             businesses={businesses}
-            transactions={transactions}
+            byAccount={breakdowns.byAccount}
             selectedAccountIds={selectedAccountIds}
             onToggleAccount={toggleAccountFilter}
             onClearAccounts={() => setSelectedAccountIds([])}
@@ -237,11 +249,7 @@ function TimeframeControls({
   onMonthChange: (month: string) => void;
   onPresetChange: (preset: TimePreset) => void;
 }) {
-  const shiftMonth = (delta: number) => {
-    const current = new Date(`${month}-01T00:00:00`);
-    current.setMonth(current.getMonth() + delta);
-    onMonthChange(current.toISOString().slice(0, 7));
-  };
+  const shiftMonth = (delta: number) => onMonthChange(shiftMonthKey(month, delta));
 
   return (
     <div className="flex flex-wrap items-center gap-3 px-1">
@@ -252,7 +260,7 @@ function TimeframeControls({
         <Input
           type="month"
           value={month}
-          onChange={(event) => onMonthChange(event.target.value)}
+          onChange={(event) => event.target.value && onMonthChange(event.target.value)}
           className="h-7 w-auto rounded-full border-transparent bg-transparent px-2 text-xs font-bold focus-visible:bg-cream"
         />
         <Button variant="ghost" size="icon-sm" onClick={() => shiftMonth(1)} title="Next month">
@@ -275,7 +283,7 @@ function TimeframeControls({
 }
 
 function buildTimeWindow(month: string, preset: TimePreset) {
-  const start = new Date(`${month}-01T00:00:00`);
+  const start = parseMonthKey(month);
   const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
   let fromDate = new Date(start);
   let label = start.toLocaleString('en-US', { month: 'short' }).toUpperCase();
@@ -308,7 +316,7 @@ function formatRangeMonth(date: Date): string {
 }
 
 function isoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  return toLocalIsoDate(date);
 }
 
 function StateScreen({ children, tone }: { children: React.ReactNode; tone?: 'error' }) {

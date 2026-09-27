@@ -4,7 +4,6 @@
 // Delete this file once VITE_USE_MOCK_API is false in every environment.
 
 import type {
-  Alert,
   Business,
   Category,
   Connection,
@@ -16,6 +15,7 @@ import type {
   Account,
 } from '@/types/domain';
 import { isSpendTransaction } from '@/lib/calc';
+import type { AlertItem } from './alerts';
 
 export const BUSINESSES: Business[] = [
   { id: 'draft-sharks', name: 'Draft Sharks', short: 'DS', color: '#D97757', hue: 24 },
@@ -74,11 +74,11 @@ export function visibleMockTransactions(rows: Transaction[] = TRANSACTIONS, acco
     .filter((txn) => accountIds.length === 0 || Boolean(txn.accountId && accountIds.includes(txn.accountId)));
 }
 
-export const ALERTS: Alert[] = [
-  { id:'a1', kind:'dup',     title:'Possible duplicate subscription', detail:'Notion is billed on both Draft Sharks ($16/mo) and PointsNav ($192/yr).',  severity:'warn' },
-  { id:'a2', kind:'missing', title:'3 transactions need receipts',     detail:'Sweetgreen, Lyft, and one Amex charge from May 19.',               severity:'todo' },
-  { id:'a3', kind:'orphan',  title:'2 receipts without transactions',  detail:'Apple Store and Office Depot emails — likely personal cards.',    severity:'info' },
-  { id:'a4', kind:'spike',   title:'Equipment spend up 22% MoM',       detail:'Womens Net equipment order was 2x usual size.', severity:'info' },
+export const ALERTS: AlertItem[] = [
+  { id:'a1', kind:'dup',     biz: null,         title:'Possible duplicate subscription: Notion', detail:'Notion is billed across 2 businesses in the last 45 days.', severity:'warn' },
+  { id:'a2', kind:'missing', biz:'draft-sharks', title:'3 transactions need receipts',          detail:'Transactions are past the 7-day receipt SLA.',             severity:'todo' },
+  { id:'a3', kind:'orphan',  biz:'pointsnav',    title:'2 receipts without transactions',       detail:'Receipts have not matched a transaction after 14 days.',    severity:'info' },
+  { id:'a4', kind:'spike',   biz:'womens-net',   title:'Equipment spend up 122% this month',    detail:'Womens Net: $2,104 so far vs $947 last month.',              severity:'info' },
 ];
 
 export const SUMMARY: SpendSummary = {
