@@ -8,6 +8,8 @@ import { notFound } from '../../lib/errors.js';
 import { audit } from '../../services/audit.js';
 import { GENERATED_ALERT_KINDS } from '../../services/insights.js';
 import { listCategorizationReviewItems, resolveCategorizationReviewItem } from '../../services/categorizationFeedback.js';
+import { listReviewGroups, resolveReviewGroup } from '../../services/categorizationReviewGroups.js';
+import { getAutomationSummary } from '../../services/automationStats.js';
 import {
   toApiAlert,
   toApiBusiness,
@@ -184,5 +186,47 @@ export function registerReferenceRoutes(app: FastifyInstance): void {
       appliedCount: result.appliedCount,
       conflictCount: result.conflictCount,
     };
+  });
+
+  // Grouped review: one decision per (business, merchant, proposed category).
+  app.get('/categorization/review-groups', async (request) => {
+    await requireUser(request);
+    const query = z.object({ biz: z.string().optional() }).parse(request.query);
+    return listReviewGroups({ businessKey: query.biz });
+  });
+
+  for (const action of ['accept', 'dismiss'] as const) {
+    app.post(`/categorization/review-groups/${action}`, async (request) => {
+      const user = await requireUser(request);
+      const body = z.object({
+        groupKey: z.string().min(3).max(600),
+        itemIds: z.array(z.string().uuid()).max(2000).optional(),
+      }).parse(request.body);
+      const result = await resolveReviewGroup({
+        groupKey: body.groupKey,
+        action,
+        itemIds: body.itemIds,
+        userId: user.id,
+      });
+      if (!result) notFound('Review group not found');
+      await audit(request, user, `${action}_categorization_review_group`, 'categorization_review_group', undefined, {
+        groupKey: body.groupKey,
+        resolvedCount: result.resolvedCount,
+        appliedCount: result.appliedCount,
+        learnedRuleId: result.learnedRuleId,
+        relabelledCount: result.relabelledCount,
+      });
+      return result;
+    });
+  }
+
+  // Home summary line: "23 handled automatically, 4 need you".
+  app.get('/automation/summary', async (request) => {
+    await requireUser(request);
+    const query = z.object({
+      biz: z.string().optional(),
+      days: z.coerce.number().int().min(1).max(90).optional(),
+    }).parse(request.query);
+    return getAutomationSummary({ days: query.days ?? 7, businessKey: query.biz });
   });
 }

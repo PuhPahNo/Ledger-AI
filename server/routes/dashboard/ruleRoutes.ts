@@ -15,12 +15,16 @@ import {
 } from '../../services/categorization.js';
 import { PROTECTED_CATEGORY_SOURCES, updateTransactionCategory } from '../../services/categorizationReviewActions.js';
 import { plaidCategoryHints } from '../../services/receiptCategoryEvidence.js';
+import { listLearnedRules, undoLearnedRule } from '../../services/categorizationLearning.js';
+import { AUTOMATION_SETTING_LIMITS, getAutomationSettings, setAutomationSettings } from '../../services/appSettings.js';
 
 /**
  * The rules engine was previously write-only: rules were learned from review prompts but
  * never visible, editable, or re-appliable. These routes back the Rules page.
  */
 export function registerRuleRoutes(app: FastifyInstance): void {
+  registerLearnedRuleRoutes(app);
+
   app.get('/categorization/rules', async (request) => {
     await requireUser(request);
     const query = z.object({ biz: z.string().optional() }).parse(request.query);
@@ -165,6 +169,68 @@ export function registerRuleRoutes(app: FastifyInstance): void {
       includeProtected: body.includeProtected,
     });
     return { appliedCount, skippedProtected };
+  });
+}
+
+export function registerLearnedRuleRoutes(app: FastifyInstance): void {
+  // Digest: rules the system learned on its own (or, with via=all, from review accepts).
+  app.get('/categorization/learned-rules', async (request) => {
+    await requireUser(request);
+    const query = z.object({
+      biz: z.string().optional(),
+      days: z.coerce.number().int().min(1).max(365).optional(),
+      includeUndone: z.enum(['true', 'false']).optional(),
+      via: z.enum(['auto', 'all']).optional(),
+    }).parse(request.query);
+    return listLearnedRules({
+      businessKey: query.biz,
+      days: query.days ?? 14,
+      includeUndone: query.includeUndone === 'true',
+      via: query.via ?? 'auto',
+    });
+  });
+
+  // Undo: delete (or restore) the rule and put back exactly what it relabelled, skipping
+  // any transaction someone has changed since.
+  app.post('/categorization/learned-rules/:id/undo', async (request) => {
+    const user = await requireUser(request);
+    const params = z.object({ id: z.string().uuid() }).parse(request.params);
+    const result = await undoLearnedRule({ id: params.id, userId: user.id });
+    if (!result) notFound('Learned rule not found');
+    if (!result.alreadyUndone) {
+      await audit(request, user, 'undo_learned_category_rule', 'categorization_learned_rule', params.id, {
+        ruleAction: result.ruleAction,
+        restoredCount: result.restoredCount,
+        skippedCount: result.skippedCount,
+      });
+    }
+    return {
+      id: result.learnedRule.id,
+      alreadyUndone: result.alreadyUndone,
+      ruleAction: result.ruleAction,
+      restoredCount: result.restoredCount,
+      skippedCount: result.skippedCount,
+      undoneAt: result.learnedRule.undoneAt?.toISOString() ?? null,
+    };
+  });
+
+  app.get('/categorization/automation-settings', async (request) => {
+    await requireUser(request);
+    return { ...(await getAutomationSettings()), limits: AUTOMATION_SETTING_LIMITS };
+  });
+
+  app.patch('/categorization/automation-settings', async (request) => {
+    const user = await requireUser(request);
+    const limits = AUTOMATION_SETTING_LIMITS;
+    const body = z.object({
+      autoLearnMinCorrections: z.number().int()
+        .min(limits.autoLearnMinCorrections.min).max(limits.autoLearnMinCorrections.max).optional(),
+      externalSignalAutoApplyConfidence: z.number()
+        .min(limits.externalSignalAutoApplyConfidence.min).max(limits.externalSignalAutoApplyConfidence.max).optional(),
+    }).parse(request.body ?? {});
+    const settings = await setAutomationSettings(body);
+    await audit(request, user, 'update_automation_settings', 'app_settings', undefined, body);
+    return { ...settings, limits };
   });
 }
 

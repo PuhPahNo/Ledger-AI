@@ -286,6 +286,10 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
 
     const rows = await db.select().from(transactions).where(inArray(transactions.id, body.transactionIds));
     const seenMerchants = new Set<string>();
+    // One learning signal per merchant, carrying every same-merchant row the edit changed:
+    // selecting two+ of a merchant's transactions and categorizing them counts as
+    // consistent corrections (and can auto-learn the rule).
+    const learningByMerchant = new Map<string, { first: Transaction; previousCategoryId: string | null; ids: string[] }>();
     let updated = 0;
     let skipped = 0;
     for (const transaction of rows) {
@@ -323,15 +327,21 @@ export function registerTransactionRoutes(app: FastifyInstance): void {
         userId: user.id,
         invalidateAiCache: firstForMerchant,
       });
-      if (firstForMerchant && shouldLearnFromManualCategory(saved.amountCents, isIncomeCategory(selectedCategory))) {
-        await createManualCategorizationFeedback({
-          transaction: saved,
-          previousCategoryId,
-          newCategoryId: body.categoryId,
-          userId: user.id,
-        });
+      if (shouldLearnFromManualCategory(saved.amountCents, isIncomeCategory(selectedCategory))) {
+        const entry = learningByMerchant.get(merchantKey);
+        if (entry) entry.ids.push(saved.id);
+        else learningByMerchant.set(merchantKey, { first: saved, previousCategoryId, ids: [saved.id] });
       }
       await applyTagRulesBestEffort(saved);
+    }
+    for (const entry of learningByMerchant.values()) {
+      await createManualCategorizationFeedback({
+        transaction: entry.first,
+        transactionIds: entry.ids,
+        previousCategoryId: entry.previousCategoryId,
+        newCategoryId: body.categoryId,
+        userId: user.id,
+      });
     }
 
     await audit(request, user, 'bulk_categorize_transactions', 'transaction', undefined, {

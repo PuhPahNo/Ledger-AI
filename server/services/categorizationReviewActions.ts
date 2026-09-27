@@ -6,6 +6,7 @@ import {
   categoryRules,
   transactionCategoryEvents,
   transactions,
+  type CategoryRule,
   type CategorySource,
   type CategorizationReviewItem,
   type CategorizationReviewPayload,
@@ -21,75 +22,6 @@ import {
 import { applyTagRulesBestEffort } from './tagging.js';
 
 export { PROTECTED_CATEGORY_SOURCES };
-
-export async function acceptLearningRule(item: CategorizationReviewItem, userId?: string): Promise<{
-  appliedCount: number;
-  conflictCount: number;
-}> {
-  const payload = item.payload;
-  if (!payload.proposedCategoryId || !payload.proposedRule?.pattern) {
-    return { appliedCount: 0, conflictCount: 0 };
-  }
-  await upsertMerchantRule({
-    businessId: item.businessId,
-    categoryId: payload.proposedCategoryId,
-    pattern: payload.proposedRule.pattern,
-  });
-
-  const matches = await matchingTransactions(item.businessId, payload.proposedRule.pattern);
-  const uncategorizedIds = matches
-    .filter((match) => !match.categoryId || match.categoryName === 'Uncategorized')
-    .map((match) => match.id);
-  const mismatched = matches
-    .filter((match) => match.categoryId && match.categoryId !== payload.proposedCategoryId && match.categoryName !== 'Uncategorized');
-  // The user just declared the truth for this merchant — fix machine-guessed history
-  // immediately; only human-set categories are held back for explicit review.
-  const autoFixableIds = mismatched
-    .filter((match) => !PROTECTED_CATEGORY_SOURCES.has(match.categorySource))
-    .map((match) => match.id);
-  const conflictIds = mismatched
-    .filter((match) => PROTECTED_CATEGORY_SOURCES.has(match.categorySource))
-    .map((match) => match.id);
-
-  let appliedCount = 0;
-  const applyIds = [...uncategorizedIds, ...autoFixableIds];
-  if (applyIds.length) {
-    const affected = await db.select().from(transactions).where(inArray(transactions.id, applyIds));
-    for (const transaction of affected) {
-      await updateTransactionCategory({
-        transaction,
-        newCategoryId: payload.proposedCategoryId,
-        source: 'user_confirmed_rule',
-        confidence: 1,
-        evidence: { reviewItemId: item.id, rulePattern: payload.proposedRule.pattern },
-        userId,
-      });
-      appliedCount += 1;
-    }
-  }
-
-  if (conflictIds.length) {
-    const category = await db.query.categories.findFirst({ where: eq(categories.id, payload.proposedCategoryId) });
-    await upsertReviewItem({
-      businessId: item.businessId,
-      type: 'rule_conflict_review',
-      fingerprint: `conflict:${payload.proposedRule.pattern}:${payload.proposedCategoryId}:${conflictIds.sort().join(',')}`,
-      title: `Review ${conflictIds.length} existing ${payload.merchant ?? 'merchant'} transaction${conflictIds.length === 1 ? '' : 's'}`,
-      detail: `A new rule points to ${category?.name ?? 'the selected category'}, but these transactions already have categories.`,
-      payload: {
-        transactionIds: conflictIds,
-        merchant: payload.merchant,
-        normalizedMerchant: payload.proposedRule.pattern,
-        proposedCategoryId: payload.proposedCategoryId,
-        proposedCategoryName: category?.name ?? payload.proposedCategoryName,
-        confidence: 1,
-        evidence: { sourceReviewItemId: item.id },
-      },
-    });
-  }
-
-  return { appliedCount, conflictCount: conflictIds.length };
-}
 
 export async function applyReviewItemCategory(
   item: CategorizationReviewItem,
@@ -251,8 +183,8 @@ export async function upsertMerchantRule(input: {
   businessId: string;
   categoryId: string;
   pattern: string;
-}): Promise<void> {
-  await db
+}): Promise<CategoryRule> {
+  const [rule] = await db
     .insert(categoryRules)
     .values({
       businessId: input.businessId,
@@ -272,10 +204,12 @@ export async function upsertMerchantRule(input: {
         userConfirmed: true,
         updatedAt: new Date(),
       },
-    });
+    })
+    .returning();
+  return rule;
 }
 
-async function matchingTransactions(businessId: string, normalizedMerchant: string): Promise<Array<{
+export async function matchingTransactions(businessId: string, normalizedMerchant: string): Promise<Array<{
   id: string;
   categoryId: string | null;
   categoryName: string | null;

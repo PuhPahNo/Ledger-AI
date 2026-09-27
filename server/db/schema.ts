@@ -35,13 +35,15 @@ export type CategorySource =
   | 'plaid_signal'
   | 'ai_suggested'
   | 'receipt_evidence'
+  | 'external_signal'
   | 'uncategorized';
 
 export type CategorizationReviewType =
   | 'learn_rule_prompt'
   | 'ai_category_suggestion'
   | 'receipt_category_override'
-  | 'rule_conflict_review';
+  | 'rule_conflict_review'
+  | 'external_category_suggestion';
 
 export type CategorizationReviewStatus = 'open' | 'accepted' | 'dismissed' | 'expired';
 
@@ -514,6 +516,65 @@ export const businessRelations = relations(businesses, ({ many }) => ({
   transactions: many(transactions),
   receipts: many(receipts),
 }));
+
+export type LearnedRuleVia =
+  | 'consistent_corrections'
+  | 'learn_prompt_accepted'
+  | 'review_group_accepted'
+  | 'rule_conflict_accepted';
+
+export interface LearnedRulePreviousState {
+  categoryId: string;
+  priority: number;
+  userConfirmed: boolean;
+  createdByAi: boolean;
+}
+
+// Migration 0027: rules the system learned (or a person confirmed in bulk), with the
+// corrections that triggered it and the rule's prior state for undo.
+export const categorizationLearnedRules = pgTable('categorization_learned_rules', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  businessId: uuid('business_id').notNull().references(() => businesses.id, { onDelete: 'cascade' }),
+  ruleId: uuid('rule_id').references(() => categoryRules.id, { onDelete: 'set null' }),
+  merchant: text('merchant').notNull(),
+  normalizedMerchant: text('normalized_merchant').notNull(),
+  categoryId: uuid('category_id').notNull().references(() => categories.id, { onDelete: 'cascade' }),
+  learnedVia: text('learned_via').$type<LearnedRuleVia>().notNull(),
+  previousRule: jsonb('previous_rule').$type<LearnedRulePreviousState | null>(),
+  feedbackIds: uuid('feedback_ids').array().notNull().default(sql`'{}'::uuid[]`),
+  sourceTransactionIds: uuid('source_transaction_ids').array().notNull().default(sql`'{}'::uuid[]`),
+  appliedCount: integer('applied_count').notNull().default(0),
+  skippedProtectedCount: integer('skipped_protected_count').notNull().default(0),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  undoneAt: timestamp('undone_at', { withTimezone: true }),
+  undoneByUserId: uuid('undone_by_user_id').references(() => users.id, { onDelete: 'set null' }),
+  undoRestoredCount: integer('undo_restored_count'),
+  undoSkippedCount: integer('undo_skipped_count'),
+}, (table) => ({
+  merchantIdx: index('categorization_learned_rules_merchant_idx').on(table.businessId, table.normalizedMerchant, table.createdAt),
+  createdIdx: index('categorization_learned_rules_created_idx').on(table.createdAt),
+}));
+
+// Migration 0027: each transaction a learned rule relabelled, with its exact prior state.
+export const categorizationRuleRelabels = pgTable('categorization_rule_relabels', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  learnedRuleId: uuid('learned_rule_id').notNull().references(() => categorizationLearnedRules.id, { onDelete: 'cascade' }),
+  transactionId: uuid('transaction_id').notNull().references(() => transactions.id, { onDelete: 'cascade' }),
+  previousCategoryId: uuid('previous_category_id').references(() => categories.id, { onDelete: 'set null' }),
+  previousCategorySource: text('previous_category_source').$type<CategorySource>().notNull(),
+  previousCategoryConfidence: numeric('previous_category_confidence', { precision: 5, scale: 4 }),
+  previousCategoryEvidence: jsonb('previous_category_evidence').$type<Record<string, unknown>>().notNull().default({}),
+  newCategoryId: uuid('new_category_id').notNull().references(() => categories.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  restoredAt: timestamp('restored_at', { withTimezone: true }),
+}, (table) => ({
+  eventTxnIdx: uniqueIndex('categorization_rule_relabels_event_txn_idx').on(table.learnedRuleId, table.transactionId),
+  txnIdx: index('categorization_rule_relabels_txn_idx').on(table.transactionId),
+}));
+
+export type CategorizationLearnedRule = typeof categorizationLearnedRules.$inferSelect;
+export type CategorizationRuleRelabel = typeof categorizationRuleRelabels.$inferSelect;
 
 export type User = typeof users.$inferSelect;
 export type Business = typeof businesses.$inferSelect;

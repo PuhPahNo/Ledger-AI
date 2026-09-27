@@ -17,12 +17,18 @@ import {
   shouldAutoApplyAiSuggestion,
 } from './categorization.js';
 import {
-  acceptLearningRule,
   applyReviewItemCategory,
-  countRuleMatches,
   updateTransactionCategory,
   upsertReviewItem,
 } from './categorizationReviewActions.js';
+import {
+  acceptLearningRule,
+  acceptRuleContradiction,
+  evaluateMerchantLearning,
+  isLearnableMerchant,
+  isRuleContradictionItem,
+  type LearningOutcome,
+} from './categorizationLearning.js';
 import {
   inferReceiptCategory,
   latestReceiptMatchScore,
@@ -41,23 +47,31 @@ export interface CategorizationReviewSummary {
 }
 
 /**
- * Learning side of a manual outflow correction: store the feedback example the AI prompt
- * uses and open a "learn this merchant?" prompt. The caller records the category event
- * (one per changed transaction) itself.
+ * Learning side of a manual outflow correction. Stores the feedback example the AI prompt
+ * uses, then lets the learning loop decide: a single correction only teaches the AI;
+ * consistent corrections auto-learn a trusted merchant rule; a correction contradicting a
+ * trusted rule opens one conflict item. No per-edit "learn this merchant?" prompt anymore.
+ * The caller records the category event (one per changed transaction) itself.
+ *
+ * `transactionIds` lets a bulk edit count every same-merchant row it changed as a
+ * correction while writing a single feedback example (so one bulk edit doesn't flood
+ * the AI prompt's example window).
  */
 export async function createManualCategorizationFeedback(input: {
   transaction: Transaction;
+  transactionIds?: string[];
   previousCategoryId: string | null;
   newCategoryId: string;
   userId?: string;
-}): Promise<CategorizationReviewItem | null> {
+}): Promise<LearningOutcome | null> {
   if (input.transaction.amountCents >= 0) return null;
   const category = await db.query.categories.findFirst({ where: eq(categories.id, input.newCategoryId) });
   if (!category || categoryMatchesTransactionDirection(category, input.transaction.amountCents) === false) return null;
 
   const normalizedMerchant = normalize(input.transaction.merchant);
-  if (!normalizedMerchant || normalizedMerchant === 'unknown merchant') return null;
+  if (!isLearnableMerchant(normalizedMerchant)) return null;
 
+  const transactionIds = [...new Set([input.transaction.id, ...(input.transactionIds ?? [])])];
   await db.insert(categorizationFeedback).values({
     businessId: input.transaction.businessId,
     transactionId: input.transaction.id,
@@ -66,34 +80,20 @@ export async function createManualCategorizationFeedback(input: {
     previousCategoryId: input.previousCategoryId,
     newCategoryId: input.newCategoryId,
     source: 'manual',
-    payload: { reason: 'transaction_category_edit' },
+    payload: {
+      reason: 'transaction_category_edit',
+      ...(transactionIds.length > 1 ? { transactionIds } : {}),
+    },
     createdByUserId: input.userId,
   });
 
-  const counts = await countRuleMatches(input.transaction.businessId, normalizedMerchant, input.newCategoryId);
-  return upsertReviewItem({
+  return evaluateMerchantLearning({
     businessId: input.transaction.businessId,
-    type: 'learn_rule_prompt',
-    fingerprint: `learn:${normalizedMerchant}:${input.newCategoryId}`,
-    title: `Learn ${input.transaction.merchant}`,
-    detail: `Use ${category.name} for matching future ${input.transaction.merchant} transactions?`,
-    payload: {
-      transactionId: input.transaction.id,
-      transactionIds: [input.transaction.id],
-      merchant: input.transaction.merchant,
-      normalizedMerchant,
-      currentCategoryId: input.previousCategoryId,
-      proposedCategoryId: input.newCategoryId,
-      proposedCategoryName: category.name,
-      proposedRule: {
-        matchKind: 'merchant_exact',
-        pattern: normalizedMerchant,
-        priority: 1,
-      },
-      confidence: 1,
-      evidence: { source: 'manual_transaction_edit' },
-      matchCounts: counts,
-    },
+    merchant: input.transaction.merchant,
+    categoryId: input.newCategoryId,
+    transactionIds,
+    userId: input.userId,
+    human: true,
   });
 }
 
@@ -122,6 +122,8 @@ export async function resolveCategorizationReviewItem(input: {
   id: string;
   action: ReviewResolutionAction;
   userId?: string;
+  /** Group accepts learn the merchant rule once for the whole group instead of per item. */
+  skipLearning?: boolean;
 }): Promise<CategorizationReviewSummary | null> {
   const item = await db.query.categorizationReviewItems.findFirst({
     where: eq(categorizationReviewItems.id, input.id),
@@ -142,9 +144,19 @@ export async function resolveCategorizationReviewItem(input: {
         confidence: 1,
         evidence: acceptedAiSuggestionEvidence(item.payload.confidence),
       });
-      await recordAcceptedAiSuggestionFeedback(item, input.userId);
+      await recordAcceptedSuggestionFeedback(item, 'ai_suggestion_accepted', input.userId, !input.skipLearning);
+    } else if (item.type === 'external_category_suggestion') {
+      appliedCount = await applyReviewItemCategory(item, 'manual', input.userId, {
+        confidence: 1,
+        evidence: { acceptedExternalSignal: true, externalConfidence: item.payload.confidence ?? null, source: 'review_center' },
+        invalidateAiCache: true,
+      });
+      await recordAcceptedSuggestionFeedback(item, 'external_suggestion_accepted', input.userId, !input.skipLearning);
     } else if (item.type === 'receipt_category_override') {
       appliedCount = await applyReviewItemCategory(item, 'receipt_evidence', input.userId, { invalidateAiCache: true });
+    } else if (isRuleContradictionItem(item)) {
+      // The listed transactions are already set by hand; accepting switches the rule itself.
+      appliedCount = await acceptRuleContradiction(item, input.userId);
     } else if (item.type === 'rule_conflict_review') {
       appliedCount = await applyReviewItemCategory(item, 'user_confirmed_rule', input.userId, { invalidateAiCache: true });
     }
@@ -177,15 +189,23 @@ export function acceptedAiSuggestionEvidence(aiConfidence: number | null | undef
   };
 }
 
-/** An accepted suggestion is a human confirmation — feed it back as an AI example. */
-async function recordAcceptedAiSuggestionFeedback(item: CategorizationReviewItem, userId?: string): Promise<void> {
+/**
+ * An accepted suggestion is a human confirmation — feed it back as an AI example, and let
+ * it count toward auto-learning the merchant (two accepted suggestions ⇒ a rule).
+ */
+async function recordAcceptedSuggestionFeedback(
+  item: CategorizationReviewItem,
+  source: 'ai_suggestion_accepted' | 'external_suggestion_accepted',
+  userId: string | undefined,
+  evaluateLearning: boolean,
+): Promise<void> {
   const categoryId = item.payload.proposedCategoryId;
   const transactionId = item.payload.transactionId ?? item.payload.transactionIds?.[0];
   if (!categoryId || !transactionId) return;
   const transaction = await db.query.transactions.findFirst({ where: eq(transactions.id, transactionId) });
-  if (!transaction) return;
+  if (!transaction || transaction.amountCents >= 0) return;
   const normalizedMerchant = normalize(transaction.merchant);
-  if (!normalizedMerchant || normalizedMerchant === 'unknown merchant') return;
+  if (!isLearnableMerchant(normalizedMerchant)) return;
   await db.insert(categorizationFeedback).values({
     businessId: transaction.businessId,
     transactionId: transaction.id,
@@ -193,10 +213,20 @@ async function recordAcceptedAiSuggestionFeedback(item: CategorizationReviewItem
     normalizedMerchant,
     previousCategoryId: item.payload.currentCategoryId ?? null,
     newCategoryId: categoryId,
-    source: 'ai_suggestion_accepted',
+    source,
     payload: { reviewItemId: item.id },
     createdByUserId: userId,
   });
+  if (evaluateLearning) {
+    await evaluateMerchantLearning({
+      businessId: transaction.businessId,
+      merchant: transaction.merchant,
+      categoryId,
+      transactionIds: [transaction.id],
+      userId,
+      human: true,
+    });
+  }
 }
 
 export async function scanUncategorizedTransactions(input: { businessId?: string; limit?: number } = {}): Promise<number> {

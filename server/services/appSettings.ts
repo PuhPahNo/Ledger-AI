@@ -89,3 +89,69 @@ export async function decrementDailyCounter(key: string): Promise<void> {
     WHERE key = ${key} AND ${storedDate} = ${today}::text
   `);
 }
+
+// ---------------------------------------------------------------------------
+// Categorization automation settings
+// ---------------------------------------------------------------------------
+
+export const AUTO_LEARN_MIN_CORRECTIONS = 'categorization_auto_learn_min_corrections';
+export const EXTERNAL_SIGNAL_AUTO_APPLY_CONFIDENCE = 'categorization_external_signal_auto_apply_confidence';
+
+export interface AutomationSettings {
+  /** Consistent manual corrections (distinct transactions) before a merchant rule is learned. */
+  autoLearnMinCorrections: number;
+  /** External signals (QuickBooks etc.) at or above this confidence apply without review. */
+  externalSignalAutoApplyConfidence: number;
+}
+
+export const DEFAULT_AUTOMATION_SETTINGS: AutomationSettings = {
+  autoLearnMinCorrections: 2,
+  externalSignalAutoApplyConfidence: 0.9,
+};
+
+export const AUTOMATION_SETTING_LIMITS = {
+  autoLearnMinCorrections: { min: 1, max: 10 },
+  externalSignalAutoApplyConfidence: { min: 0.5, max: 1 },
+} as const;
+
+/** Stored values are strings; anything missing, corrupt, or out of range falls back to the default. */
+export function parseAutomationSettings(raw: {
+  autoLearnMinCorrections?: string | null;
+  externalSignalAutoApplyConfidence?: string | null;
+}): AutomationSettings {
+  const minCorrections = Number(raw.autoLearnMinCorrections);
+  const confidence = Number(raw.externalSignalAutoApplyConfidence);
+  const limits = AUTOMATION_SETTING_LIMITS;
+  return {
+    autoLearnMinCorrections: raw.autoLearnMinCorrections != null
+      && Number.isInteger(minCorrections)
+      && minCorrections >= limits.autoLearnMinCorrections.min
+      && minCorrections <= limits.autoLearnMinCorrections.max
+      ? minCorrections
+      : DEFAULT_AUTOMATION_SETTINGS.autoLearnMinCorrections,
+    externalSignalAutoApplyConfidence: raw.externalSignalAutoApplyConfidence != null
+      && Number.isFinite(confidence)
+      && confidence >= limits.externalSignalAutoApplyConfidence.min
+      && confidence <= limits.externalSignalAutoApplyConfidence.max
+      ? confidence
+      : DEFAULT_AUTOMATION_SETTINGS.externalSignalAutoApplyConfidence,
+  };
+}
+
+export async function getAutomationSettings(): Promise<AutomationSettings> {
+  const [autoLearnMinCorrections, externalSignalAutoApplyConfidence] = await Promise.all([
+    getSetting(AUTO_LEARN_MIN_CORRECTIONS),
+    getSetting(EXTERNAL_SIGNAL_AUTO_APPLY_CONFIDENCE),
+  ]);
+  return parseAutomationSettings({ autoLearnMinCorrections, externalSignalAutoApplyConfidence });
+}
+
+export async function setAutomationSettings(input: Partial<AutomationSettings>): Promise<AutomationSettings> {
+  if (input.autoLearnMinCorrections !== undefined) {
+    await setSetting(AUTO_LEARN_MIN_CORRECTIONS, String(input.autoLearnMinCorrections));
+  }
+  if (input.externalSignalAutoApplyConfidence !== undefined) {
+    await setSetting(EXTERNAL_SIGNAL_AUTO_APPLY_CONFIDENCE, String(input.externalSignalAutoApplyConfidence));
+  }
+  return getAutomationSettings();
+}

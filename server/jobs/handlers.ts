@@ -17,6 +17,7 @@ import {
   reviewReceiptCategoryEvidence,
   scanUncategorizedTransactions,
 } from '../services/categorizationFeedback.js';
+import { sweepOpenLearnPrompts } from '../services/categorizationLearning.js';
 import { syncPlaidConnection } from '../services/plaid.js';
 import { backfillGmail, gmailBackfillQuery, renewGmailWatch, syncGmailConnection } from '../services/gmail.js';
 import { regenerateInsights } from '../services/insights.js';
@@ -68,6 +69,13 @@ export async function handleJob(type: string, payload: Record<string, unknown>):
       businessId: typeof payload.businessId === 'string' ? payload.businessId : undefined,
       limit: typeof payload.limit === 'number' ? payload.limit : undefined,
     });
+    // Nightly: answer legacy learn prompts (expire satisfied ones, auto-learn consistent
+    // merchants). Rides on the daily scan so it needs no scheduler entry of its own.
+    await sweepOpenLearnPrompts();
+    return;
+  }
+  if (type === 'categorization.learn-sweep') {
+    await sweepOpenLearnPrompts(typeof payload.limit === 'number' ? payload.limit : undefined);
     return;
   }
   if (type === 'categorization.receipt-evidence-review') {
