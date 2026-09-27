@@ -35,12 +35,16 @@ export function isTroubledConnection(connection: Connection): boolean {
     || Boolean(connection.health?.lastJobError);
 }
 
-/** Number of things waiting in the Inbox — the same items, counted the same way, as the page shows. */
+/**
+ * Number of things waiting in the Inbox — the same items, counted the same way, as the page
+ * shows. Missing receipts are one summary line on the page, so they count once; counting every
+ * transaction would pin the badge at "9+" for as long as any receipt is outstanding.
+ */
 export function inboxAttentionCount(data: InboxData): number {
   return data.receipts.length
     + data.reviewItems.length
     + data.troubledConnections.length
-    + data.missingReceipts.rows
+    + (data.missingReceipts.rows > 0 ? 1 : 0)
     + data.alerts.length;
 }
 
