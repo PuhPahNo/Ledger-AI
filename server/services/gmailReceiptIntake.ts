@@ -130,6 +130,20 @@ export function sanitizeFileName(fileName: string): string {
   return `${base}${ext}`;
 }
 
+/**
+ * Storage key for a Gmail-sourced receipt file. The content-hash prefix keeps two attachments
+ * that share a filename in one message (e.g. two "invoice.pdf") from overwriting each other,
+ * while identical bytes map to the same key (re-ingest is idempotent).
+ */
+export function gmailReceiptStorageKey(input: {
+  connectionId: string;
+  messageId: string;
+  fileName: string;
+  contentSha256: string;
+}): string {
+  return `receipts/gmail/${input.connectionId}/${input.messageId}/${input.contentSha256.slice(0, 16)}-${sanitizeFileName(input.fileName)}`;
+}
+
 function collectBodyText(part: GmailMimePart | undefined | null, mimeType: 'text/plain' | 'text/html'): string[] {
   if (!part) return [];
   const current = part.mimeType === mimeType && part.body?.data

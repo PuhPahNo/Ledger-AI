@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildEmailBodyCandidate,
   collectReceiptAttachments,
+  gmailReceiptStorageKey,
   looksLikeReceiptOrInvoiceText,
   messageReceiptSignal,
   type GmailMimePart,
@@ -127,5 +128,23 @@ describe('gmail receipt intake', () => {
 
   it('rejects ordinary email text without receipt evidence', () => {
     expect(looksLikeReceiptOrInvoiceText('Can we move the team meeting to 3pm?')).toBe(false);
+  });
+});
+
+describe('gmailReceiptStorageKey', () => {
+  const base = { connectionId: 'conn', messageId: 'msg', fileName: 'invoice.pdf' };
+
+  it('keeps same-named attachments in one message from colliding', () => {
+    const a = gmailReceiptStorageKey({ ...base, contentSha256: 'a'.repeat(64) });
+    const b = gmailReceiptStorageKey({ ...base, contentSha256: 'b'.repeat(64) });
+    expect(a).not.toBe(b);
+    expect(a).toBe(`receipts/gmail/conn/msg/${'a'.repeat(16)}-invoice.pdf`);
+  });
+
+  it('is stable for identical content and sanitizes the filename', () => {
+    const key = gmailReceiptStorageKey({ ...base, fileName: '../May invoice.pdf', contentSha256: 'c'.repeat(64) });
+    expect(key).toBe(gmailReceiptStorageKey({ ...base, fileName: '../May invoice.pdf', contentSha256: 'c'.repeat(64) }));
+    expect(key).not.toContain('..');
+    expect(key.startsWith('receipts/gmail/conn/msg/')).toBe(true);
   });
 });

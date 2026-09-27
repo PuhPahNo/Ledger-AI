@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Save } from 'lucide-react';
-import { addTransactionTag, removeTransactionTag, updateTransaction } from '@/api';
+import { ExternalLink, FileText, Plus, Save, Unlink } from 'lucide-react';
+import {
+  addTransactionTag,
+  getReceipt,
+  receiptFileUrl,
+  removeTransactionTag,
+  unpairReceipt,
+  updateTransaction,
+} from '@/api';
 import { categorySourceLabel, isGuessedCategorySource } from '@/lib/categorySource';
 import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
-import type { Business, Category, Tag, Transaction, TransactionTag } from '@/types/domain';
+import type { Business, Category, ReceiptInboxItem, ReceiptStatus, Tag, Transaction, TransactionTag } from '@/types/domain';
 import { TagChip } from '@/components/ui/tag-chip';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Label } from '@/components/ui/label';
@@ -14,6 +21,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { MoneyDisplay } from '@/components/ui/money-display';
+import { receiptLabel } from './receipts/ReceiptWorkbenchParts';
 
 interface Props {
   transaction: Transaction | null;
@@ -38,6 +46,12 @@ export function TransactionDrawer({ transaction, businesses, categories, allTags
   const [tags, setTags] = useState<TransactionTag[]>([]);
   const [tagBusy, setTagBusy] = useState(false);
   const [tagsDirty, setTagsDirty] = useState(false);
+  // The paired receipt; unpairing applies immediately, like tag edits.
+  const [receiptId, setReceiptId] = useState<string | null>(null);
+  const [receiptStatus, setReceiptStatus] = useState<ReceiptStatus>('missing');
+  const [receipt, setReceipt] = useState<ReceiptInboxItem | null>(null);
+  const [unpairing, setUnpairing] = useState(false);
+  const [receiptDirty, setReceiptDirty] = useState(false);
 
   useEffect(() => {
     setBusinessId(resolvedBusinessId);
@@ -45,12 +59,51 @@ export function TransactionDrawer({ transaction, businesses, categories, allTags
     setNote(transaction?.note ?? '');
     setTags(transaction?.tags ?? []);
     setTagsDirty(false);
+    setReceiptId(transaction?.receiptId ?? null);
+    setReceiptStatus(transaction?.receipt ?? 'missing');
+    setReceiptDirty(false);
   }, [resolvedBusinessId, transaction]);
 
-  // Tag edits apply immediately (no Save needed), so refresh the list when closing after one.
+  useEffect(() => {
+    let cancelled = false;
+    setReceipt(null);
+    if (!receiptId) return;
+    getReceipt(receiptId)
+      .then((row) => {
+        if (!cancelled) setReceipt(row);
+      })
+      .catch(() => {
+        // The View link still works without the details.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [receiptId]);
+
+  // Tag/receipt edits apply immediately (no Save needed), so refresh the list when closing after one.
   const close = () => {
-    if (tagsDirty) onSaved();
+    if (tagsDirty || receiptDirty) onSaved();
     onClose();
+  };
+
+  const handleUnpair = async () => {
+    if (!receiptId) return;
+    setUnpairing(true);
+    try {
+      await unpairReceipt(receiptId);
+      setReceiptId(null);
+      setReceiptStatus('missing');
+      setReceiptDirty(true);
+      toast({ title: 'Receipt unpaired', description: 'It is back in the Receipts queue and won’t be re-paired here.' });
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not unpair receipt',
+        description: error instanceof Error ? error.message : 'Try again.',
+      });
+    } finally {
+      setUnpairing(false);
+    }
   };
 
   const addableTags = (allTags ?? []).filter(
@@ -130,7 +183,7 @@ export function TransactionDrawer({ transaction, businesses, categories, allTags
               <SheetTitle className="text-2xl">{transaction.merchant}</SheetTitle>
               <SheetDescription className="flex items-center gap-2">
                 <Badge variant="muted">{transaction.cat || 'Uncategorized'}</Badge>
-                <Badge variant={receiptVariant(transaction.receipt)}>{transaction.receipt}</Badge>
+                <Badge variant={receiptVariant(receiptStatus)}>{receiptStatus}</Badge>
               </SheetDescription>
             </SheetHeader>
 
@@ -211,6 +264,37 @@ export function TransactionDrawer({ transaction, businesses, categories, allTags
               </div>
             )}
 
+            {receiptId && (
+              <div className="grid gap-1.5">
+                <Label>Receipt</Label>
+                <div className="flex items-center gap-2 rounded-md border border-ink2/10 p-2">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-cream">
+                    <FileText className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-bold">{receipt ? receiptLabel(receipt) : 'Attached receipt'}</div>
+                    {receipt && (receipt.receiptDate || receipt.totalCents != null) && (
+                      <div className="truncate text-xs text-dim">
+                        {[receipt.receiptDate, receipt.totalCents != null ? fmt$(receipt.totalCents / 100) : null]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </div>
+                    )}
+                  </div>
+                  <Button asChild variant="outline" size="sm">
+                    <a href={receiptFileUrl(receiptId)} target="_blank" rel="noopener noreferrer">
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      View
+                    </a>
+                  </Button>
+                  <Button variant="ghost" size="sm" disabled={unpairing} onClick={handleUnpair} title="Detach this receipt">
+                    <Unlink className="h-3.5 w-3.5" />
+                    Unpair
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <div className="grid gap-1.5">
               <Label htmlFor="drawer-note">Note</Label>
               <Textarea
@@ -237,10 +321,6 @@ export function TransactionDrawer({ transaction, businesses, categories, allTags
               {categoryReason(transaction) && (
                 <div className="text-[11px] leading-snug text-dim">{categoryReason(transaction)}</div>
               )}
-              <div className="flex justify-between">
-                <span className="text-dim">Receipt status</span>
-                <span className="font-bold">{transaction.receipt}</span>
-              </div>
               <div className="flex justify-between">
                 <span className="text-dim">Source</span>
                 <span className="font-bold">{transaction.src}</span>

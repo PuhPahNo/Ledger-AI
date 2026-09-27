@@ -7,11 +7,13 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { fmt$ } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { matchScoreTone } from './matchThresholds';
 
 export function ReceiptRow({
   receipt,
   active,
   busy,
+  extracting = false,
   checked,
   onSelect,
   onDismiss,
@@ -21,6 +23,8 @@ export function ReceiptRow({
   receipt: ReceiptInboxItem;
   active: boolean;
   busy: boolean;
+  /** Extraction is still running for this receipt (fresh upload). */
+  extracting?: boolean;
   /** Multi-select for bulk dismiss; omit onToggleChecked to hide the checkbox. */
   checked?: boolean;
   onSelect: () => void;
@@ -63,7 +67,9 @@ export function ReceiptRow({
           <Badge variant={receipt.source === 'gmail' ? 'secondary' : 'muted'} className="whitespace-nowrap">
             {receipt.source}
           </Badge>
-          {receiptNeedsDetails(receipt) && (
+          {extracting ? (
+            <Badge variant="muted" className="whitespace-nowrap">Reading…</Badge>
+          ) : receiptNeedsDetails(receipt) && (
             <Badge variant="warning" className="whitespace-nowrap">Needs details</Badge>
           )}
         </div>
@@ -213,8 +219,7 @@ export function Metric({
 }
 
 function MatchBadge({ score }: { score: number }) {
-  const variant = score >= 0.82 ? 'success' : score >= 0.55 ? 'warning' : 'muted';
-  return <Badge variant={variant}>{Math.round(score * 100)}%</Badge>;
+  return <Badge variant={matchScoreTone(score)}>{Math.round(score * 100)}%</Badge>;
 }
 
 export function receiptLabel(receipt: ReceiptInboxItem): string {

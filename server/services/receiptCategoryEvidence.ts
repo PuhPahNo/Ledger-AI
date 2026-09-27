@@ -18,8 +18,9 @@ import {
   normalize,
 } from './categorization.js';
 import { trackOpenAiCall } from './aiUsageTelemetry.js';
+import { AUTO_ATTACH_THRESHOLD } from './receiptMatchThresholds.js';
 
-const receiptAutoMatchThreshold = 0.82;
+const receiptAutoMatchThreshold = AUTO_ATTACH_THRESHOLD;
 const receiptExtractionThreshold = 0.85;
 const receiptCategoryThreshold = 0.8;
 

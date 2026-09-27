@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import { zodTextFormat } from 'openai/helpers/zod';
 import { getEnv } from '../config/env.js';
+import type { Receipt } from '../db/schema.js';
 import { trackOpenAiCall } from './aiUsageTelemetry.js';
 
 const receiptExtractionSchema = z.object({
@@ -24,11 +25,51 @@ const receiptExtractionSchema = z.object({
 
 export type ReceiptExtraction = z.infer<typeof receiptExtractionSchema>;
 
+/**
+ * An extraction failure that retrying can't fix (unsupported format, a file the model rejects).
+ * The job handler records the message for the user and does not rethrow, so the queue doesn't
+ * re-bill the same doomed request.
+ */
+export class PermanentExtractionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PermanentExtractionError';
+  }
+}
+
+/** Image formats the AI extractor accepts. Anything else would be billed and rejected. */
+const supportedImageMimeTypes = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/gif']);
+
+/** A user-facing reason this file can never be extracted, or null when it can be attempted. */
+export function unsupportedReceiptFileReason(input: { mimeType: string; fileName: string }): string | null {
+  const mimeType = effectiveMimeType(input).toLowerCase();
+  if (/^image\/hei[cf](-sequence)?$/.test(mimeType) || /\.hei[cf]$/i.test(input.fileName)) {
+    return "HEIC photos aren't supported yet — upload a JPG or PNG, or enter the total and date manually.";
+  }
+  if (mimeType.startsWith('image/') && !supportedImageMimeTypes.has(mimeType)) {
+    return "This image format isn't supported — upload a JPG, PNG, or PDF, or enter the total and date manually.";
+  }
+  return null;
+}
+
+/**
+ * Whether an extraction error is permanent (don't retry). Our own format rejections, plus
+ * provider 4xx responses that mean "this input is invalid" — not rate limits or timeouts.
+ */
+export function isPermanentExtractionFailure(error: unknown): boolean {
+  if (error instanceof PermanentExtractionError) return true;
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === 'number' && [400, 413, 415, 422].includes(status);
+}
+
 export async function extractReceipt(input: {
   buffer: Buffer;
   mimeType: string;
   fileName: string;
 }): Promise<ReceiptExtraction> {
+  const unsupported = unsupportedReceiptFileReason(input);
+  if (unsupported) throw new PermanentExtractionError(unsupported);
+
   const env = getEnv();
   if (!env.OPENAI_API_KEY || !canSendToOpenAI(input)) {
     return fallbackExtraction(input);
@@ -53,6 +94,46 @@ export async function extractReceipt(input: {
   const message = response.output.find((item) => item.type === 'message');
   const parsed = message?.content.find((item) => item.type === 'output_text')?.parsed;
   return receiptExtractionSchema.parse(parsed);
+}
+
+/**
+ * The receipt columns an extraction result should write. Fields the user corrected by hand are
+ * never overwritten (a late retry used to clobber them), and a Gmail non-receipt is only
+ * auto-dismissed while it's untouched — never once the user edited or paired it.
+ */
+export function receiptExtractionUpdate(
+  current: Pick<Receipt, 'source' | 'status' | 'transactionId' | 'merchant' | 'totalCents' | 'receiptDate' | 'ocrJson'>
+    & { userEditedFields?: string[] | null },
+  extraction: ReceiptExtraction,
+): Partial<Pick<Receipt, 'status' | 'merchant' | 'totalCents' | 'receiptDate' | 'confidence' | 'ocrJson' | 'extractionError'>> {
+  const edited = new Set(current.userEditedFields ?? []);
+  // Keep ingest metadata (email subject/from, uploader) alongside the extracted fields.
+  const ocrJson = { ...(current.ocrJson ?? {}), ...extraction };
+  const confidence = String(extraction.confidence);
+
+  if (!extraction.isReceipt && current.source === 'gmail' && current.status === 'pending'
+    && !current.transactionId && edited.size === 0) {
+    // The extractor read the actual file and says it isn't purchase evidence, so don't
+    // park it in the review queue. Uploads are exempt — the user chose those on purpose.
+    // Dismissed rows keep the extraction and stay visible under the n/a status filter.
+    return { status: 'n/a', merchant: extraction.merchant, confidence, ocrJson, extractionError: null };
+  }
+
+  const update: ReturnType<typeof receiptExtractionUpdate> = { confidence, ocrJson };
+  if (!edited.has('merchant')) update.merchant = extraction.merchant;
+  if (!edited.has('totalCents')) update.totalCents = extraction.totalCents;
+  if (!edited.has('receiptDate')) update.receiptDate = extraction.receiptDate;
+
+  const totalCents = edited.has('totalCents') ? current.totalCents : extraction.totalCents;
+  const receiptDate = edited.has('receiptDate') ? current.receiptDate : extraction.receiptDate;
+  const missing = [
+    totalCents == null ? 'total' : null,
+    receiptDate == null ? 'date' : null,
+  ].filter((field): field is string => field !== null);
+  update.extractionError = missing.length > 0
+    ? `Could not read the receipt ${missing.join(' or ')} — add ${missing.length > 1 ? 'them' : 'it'} manually to enable matching.`
+    : null;
+  return update;
 }
 
 type ReceiptInputContent =
@@ -114,7 +195,7 @@ function receiptInputContent(input: { buffer: Buffer; mimeType: string; fileName
 
 function canSendToOpenAI(input: { mimeType: string; fileName: string }): boolean {
   const mimeType = effectiveMimeType(input);
-  return mimeType.startsWith('image/')
+  return supportedImageMimeTypes.has(mimeType.toLowerCase())
     || mimeType === 'application/pdf'
     || mimeType.startsWith('text/');
 }
@@ -167,6 +248,9 @@ function effectiveMimeType(input: { mimeType: string; fileName: string }): strin
   if (/\.png$/i.test(input.fileName)) return 'image/png';
   if (/\.jpe?g$/i.test(input.fileName)) return 'image/jpeg';
   if (/\.webp$/i.test(input.fileName)) return 'image/webp';
+  if (/\.gif$/i.test(input.fileName)) return 'image/gif';
+  if (/\.heic$/i.test(input.fileName)) return 'image/heic';
+  if (/\.heif$/i.test(input.fileName)) return 'image/heif';
   if (/\.txt$/i.test(input.fileName)) return 'text/plain';
   if (/\.html?$/i.test(input.fileName)) return 'text/html';
   return input.mimeType;
