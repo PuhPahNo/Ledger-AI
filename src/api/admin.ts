@@ -42,6 +42,13 @@ export interface AuditLogRow {
   metadata?: Record<string, unknown>;
 }
 
+/** Mock-mode export queue so Reports › Close and Settings › Data show what was queued. */
+const mockExports: AdminOverview['exports'] = [];
+const mockAudit: AuditLogRow[] = [
+  { id: 'audit-1', action: 'rule.created', entityType: 'categorization_rule', entityId: 'upwork', createdAt: new Date(Date.now() - 2 * 86_400_000).toISOString() },
+  { id: 'audit-2', action: 'close.signed_off', entityType: 'close_period', entityId: 'all', createdAt: new Date(Date.now() - 20 * 86_400_000).toISOString() },
+];
+
 export function getAdminOverview(): Promise<AdminOverview> {
   if (useMockApi) {
     return Promise.resolve({
@@ -57,13 +64,18 @@ export function getAdminOverview(): Promise<AdminOverview> {
       })),
       users: [{ id: 'mock-admin', username: 'admin', displayName: 'Ledger Admin', active: true, totpEnabled: false }],
       receiptUploaders: [],
-      exports: [],
+      exports: [...mockExports],
     });
   }
   return http<AdminOverview>('/admin/overview');
 }
 
 export function createExport(dateFrom: string, dateTo: string, businessId?: string | null) {
+  if (useMockApi) {
+    const job = { id: `export-${mockExports.length + 1}`, status: 'queued', dateFrom, dateTo, createdAt: new Date().toISOString() };
+    mockExports.unshift(job);
+    return Promise.resolve({ id: job.id, status: job.status });
+  }
   return http<{ id: string; status: string }>('/exports', {
     method: 'POST',
     body: JSON.stringify({ dateFrom, dateTo, businessId }),
@@ -71,7 +83,7 @@ export function createExport(dateFrom: string, dateTo: string, businessId?: stri
 }
 
 export function listAuditLog(): Promise<AuditLogRow[]> {
-  if (useMockApi) return Promise.resolve([]);
+  if (useMockApi) return Promise.resolve([...mockAudit]);
   return http<AuditLogRow[]>('/admin/audit-log');
 }
 

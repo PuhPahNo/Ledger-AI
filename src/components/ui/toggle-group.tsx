@@ -40,9 +40,9 @@ const ToggleGroupItem = React.forwardRef<
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/30 focus-visible:ring-offset-2 focus-visible:ring-offset-paper',
         'disabled:pointer-events-none disabled:opacity-50',
         ctx.variant === 'pill'
-          ? 'rounded-full px-3 py-1.5 text-xs font-bold text-dim hover:text-ink data-[state=on]:bg-inverse data-[state=on]:text-inverse-foreground'
+          ? 'min-h-10 rounded-full px-3 py-1.5 text-xs font-bold sm:min-h-0 text-dim hover:text-ink data-[state=on]:bg-inverse data-[state=on]:text-inverse-foreground'
           : 'rounded-md border border-ink2/30 bg-transparent px-3 py-2 text-sm text-ink hover:bg-ink/5 data-[state=on]:bg-inverse data-[state=on]:text-inverse-foreground',
-        ctx.size === 'sm' && 'px-2 py-1 text-[11px]',
+        ctx.size === 'sm' && 'px-2 py-1 text-[11px] sm:min-h-0',
         className,
       )}
       {...props}

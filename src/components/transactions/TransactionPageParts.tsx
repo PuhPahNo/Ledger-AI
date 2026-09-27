@@ -33,39 +33,6 @@ export function FacetGroup({
   );
 }
 
-export function Metric({
-  label,
-  value,
-  tone = 'default',
-  detail,
-  icon,
-}: {
-  label: string;
-  value: string;
-  tone?: 'default' | 'positive' | 'warning' | 'muted';
-  detail?: string;
-  icon?: ReactNode;
-}) {
-  return (
-    <div
-      className={cn(
-        'rounded-xl border px-4 py-3 shadow-sm',
-        tone === 'positive' && 'border-sage/40 bg-sage/10 text-sage-ink',
-        tone === 'warning' && 'border-coral/40 bg-coral/10 text-coral-ink',
-        tone === 'muted' && 'border-ink2/10 bg-paper text-dim',
-        tone === 'default' && 'border-ink2/10 bg-paper',
-      )}
-    >
-      <div className="flex items-center justify-between">
-        <div className="font-mono text-[10px] uppercase tracking-wider text-dim">{label}</div>
-        {icon}
-      </div>
-      <div className="mt-1 font-display text-xl font-bold tabular-nums">{value}</div>
-      {detail && <div className="mt-1 truncate text-xs font-medium text-dim">{detail}</div>}
-    </div>
-  );
-}
-
 export function ReceiptPill({ status }: { status: ReceiptStatus }) {
   const variant =
     status === 'missing'
@@ -85,17 +52,27 @@ export function AccountTypeIcon({ kind, className }: { kind: Account['kind']; cl
   return <Boxes className={className} />;
 }
 
+export interface DateRangePreset {
+  label: string;
+  from: string;
+  to: string;
+}
+
 export function DateRangePill({
   from,
   to,
   onChange,
+  presets: customPresets,
 }: {
   from: string;
   to: string;
   onChange: (range: { from: string; to: string }) => void;
+  /** Replaces the default rolling-window presets (e.g. month-aligned ones for Reports). */
+  presets?: DateRangePreset[];
 }) {
   const [open, setOpen] = useState(false);
   const presets = useMemo(() => {
+    if (customPresets) return customPresets;
     const t = today();
     return [
       { label: 'Last 7 days', from: shiftDays(t, -7), to: t },
@@ -105,7 +82,7 @@ export function DateRangePill({
       { label: 'YTD', from: `${t.slice(0, 4)}-01-01`, to: t },
       { label: 'Last 12 months', from: shiftMonths(t, -12), to: t },
     ];
-  }, []);
+  }, [customPresets]);
   const matched = presets.find((p) => p.from === from && p.to === to);
   const label = matched ? matched.label : `${from} → ${to}`;
   return (
@@ -113,7 +90,9 @@ export function DateRangePill({
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="inline-flex h-9 items-center gap-2 rounded-full border border-ink2/15 bg-paper px-3 text-xs font-bold text-ink hover:border-ink2/30"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        className="inline-flex h-10 items-center gap-2 rounded-full border border-ink2/15 bg-paper px-3 text-xs font-bold text-ink hover:border-ink2/30 sm:h-9"
       >
         <Calendar className="h-3.5 w-3.5 text-dim" />
         {label}
@@ -122,7 +101,7 @@ export function DateRangePill({
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full z-40 mt-1 w-[280px] rounded-xl border border-ink2/10 bg-paper p-2 shadow-lg">
+          <div className="absolute left-0 top-full z-40 mt-1 w-[280px] max-w-[calc(100vw-2rem)] rounded-xl border border-ink2/10 bg-paper p-2 shadow-lg sm:left-auto sm:right-0">
             {presets.map((preset) => (
               <button
                 key={preset.label}
@@ -132,7 +111,7 @@ export function DateRangePill({
                   setOpen(false);
                 }}
                 className={cn(
-                  'flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs font-bold transition-colors',
+                  'flex min-h-10 w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-xs font-bold transition-colors sm:min-h-0',
                   from === preset.from && to === preset.to ? 'bg-cream' : 'hover:bg-cream',
                 )}
               >
@@ -149,7 +128,7 @@ export function DateRangePill({
                   type="date"
                   value={from}
                   onChange={(event) => onChange({ from: event.target.value, to })}
-                  className="h-8 rounded-md border border-ink2/10 bg-paper px-2 text-xs"
+                  className="h-10 rounded-md border border-ink2/10 bg-paper px-2 text-xs sm:h-8"
                 />
               </label>
               <label className="grid gap-1">
@@ -158,7 +137,7 @@ export function DateRangePill({
                   type="date"
                   value={to}
                   onChange={(event) => onChange({ from, to: event.target.value })}
-                  className="h-8 rounded-md border border-ink2/10 bg-paper px-2 text-xs"
+                  className="h-10 rounded-md border border-ink2/10 bg-paper px-2 text-xs sm:h-8"
                 />
               </label>
             </div>

@@ -1,140 +1,107 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Tags as TagsIcon } from 'lucide-react';
 import { getTagTrends, listTags } from '@/api';
-import type { Tag, TagTrendSeries } from '@/types/domain';
-import type { AppView } from '@/types/navigation';
+import type { TagTrendSeries } from '@/types/domain';
 import { cn } from '@/lib/cn';
-import { fmt$ } from '@/lib/format';
-import { Button } from '@/components/ui/button';
+import { fmt$, fmtCompactCents } from '@/lib/format';
+import { useElementWidth } from '@/hooks/useElementWidth';
 import { Card } from '@/components/ui/card';
 import { ChartTooltip, useChartTooltip } from '@/components/ui/chart-tooltip';
-import { EmptyState } from '@/components/ui/empty-state';
-import { fmtCompactCents } from './CashFlowVisuals';
 
 const MAX_SERIES = 10;
 const DEFAULT_SERIES = 5;
 
 interface Props {
+  /** Trend window (the same trailing year as the cash-flow chart). */
   from: string;
   to: string;
-  onViewChange?: (view: AppView) => void;
+  /** The report period: the card only appears when a tag has spend inside it. */
+  period: { from: string; to: string };
 }
 
 /**
- * Monthly outflow per custom tag (e.g. "AI") across the selected date range.
+ * Monthly outflow per custom tag (e.g. "AI"). Renders nothing unless at least one tag has
+ * spend in the report period — no empty card for workspaces that don't use tags.
  * The tag chips are both the legend and the series toggles.
  */
-export function TagTrendsCard({ from, to, onViewChange }: Props) {
-  const [tags, setTags] = useState<Tag[]>([]);
-  const [selectedIds, setSelectedIds] = useState<string[] | null>(null); // null = not yet initialized
-  const [series, setSeries] = useState<TagTrendSeries[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+export function TagTrendsCard({ from, to, period }: Props) {
+  const [series, setSeries] = useState<TagTrendSeries[] | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   useEffect(() => {
-    listTags()
-      .then((rows) => {
-        const active = rows.filter((tag) => tag.active);
-        setTags(active);
-        setSelectedIds((current) => current ?? active.slice(0, DEFAULT_SERIES).map((tag) => tag.id));
-      })
-      .catch((loadError: Error) => setError(loadError.message))
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    if (!selectedIds || selectedIds.length === 0) {
-      setSeries([]);
-      return;
-    }
-    // Toggling chips or the date range fires overlapping requests; only the latest
-    // one may write state, or a slow stale response would repaint the old selection.
+    // Overlapping range changes fire several requests; only the latest may write state.
     let cancelled = false;
-    getTagTrends({ tagIds: selectedIds, from, to })
+    listTags()
+      .then((tags) => {
+        const active = tags.filter((tag) => tag.active).slice(0, 50);
+        if (!active.length) return [];
+        return getTagTrends({ tagIds: active.map((tag) => tag.id), from, to });
+      })
       .then((rows) => {
         if (cancelled) return;
         setSeries(rows);
-        setError('');
+        const periodMonths = (month: string) => month >= period.from.slice(0, 7) && month <= period.to.slice(0, 7);
+        const ranked = rows
+          .map((row) => ({ id: row.tagId, cents: row.points.filter((point) => periodMonths(point.month)).reduce((sum, point) => sum + point.totalCents, 0) }))
+          .filter((row) => row.cents > 0)
+          .sort((a, b) => b.cents - a.cents);
+        setSelectedIds(ranked.slice(0, DEFAULT_SERIES).map((row) => row.id));
       })
-      .catch((loadError: Error) => {
-        if (!cancelled) setError(loadError.message);
-      });
+      .catch(() => !cancelled && setSeries([]));
     return () => {
       cancelled = true;
     };
-  }, [from, selectedIds, to]);
+  }, [from, to, period.from, period.to]);
+
+  const withSpend = useMemo(
+    () => (series ?? []).filter((row) => row.points.some((point) => point.totalCents > 0)),
+    [series],
+  );
+  // Nothing tagged in the period (or tags aren't used): omit the card entirely.
+  if (!series || selectedIds.length === 0) return null;
 
   const toggleTag = (tagId: string) => {
-    setSelectedIds((current) => {
-      const ids = current ?? [];
+    setSelectedIds((ids) => {
       if (ids.includes(tagId)) return ids.filter((id) => id !== tagId);
       if (ids.length >= MAX_SERIES) return ids;
       return [...ids, tagId];
     });
   };
-
-  if (!loading && tags.length === 0 && !error) {
-    return (
-      <Card className="p-5">
-        <CardHeading />
-        <EmptyState
-          title="No tags yet"
-          description={'Create custom tags (e.g. "AI" for OpenAI + Anthropic spend) under Admin → Tags, then watch them trend here.'}
-          icon={<TagsIcon className="h-5 w-5" />}
-          action={onViewChange && (
-            <Button variant="outline" size="sm" onClick={() => onViewChange('admin')}>
-              Open Admin
-            </Button>
-          )}
-        />
-      </Card>
-    );
-  }
+  const visible = withSpend.filter((row) => selectedIds.includes(row.tagId));
 
   return (
-    <Card className="p-5">
+    <Card className="p-4 sm:p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <CardHeading />
-        <div className="flex flex-wrap items-center gap-1.5">
-          {tags.map((tag) => {
-            const active = selectedIds?.includes(tag.id) ?? false;
+        <div>
+          <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">Tags</div>
+          <h2 className="font-display text-lg font-bold text-ink">Tagged spend by month</h2>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5" aria-label="Tags to chart">
+          {withSpend.map((row) => {
+            const active = selectedIds.includes(row.tagId);
             return (
               <button
-                key={tag.id}
+                key={row.tagId}
                 type="button"
-                onClick={() => toggleTag(tag.id)}
+                aria-pressed={active}
+                onClick={() => toggleTag(row.tagId)}
                 className={cn(
-                  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold transition-colors',
+                  'inline-flex min-h-10 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold transition-colors sm:min-h-0',
                   active ? 'border-inverse bg-inverse text-inverse-foreground' : 'border-ink2/20 bg-cream/70 text-ink hover:border-ink2/40',
                 )}
               >
-                <span className="h-1.5 w-1.5 rounded-full" style={{ background: tag.color }} />
-                {tag.name}
+                <span className="h-1.5 w-1.5 rounded-full" style={{ background: row.color }} />
+                {row.name}
               </button>
             );
           })}
         </div>
       </div>
-
-      {error ? (
-        <div className="rounded-lg border border-coral/30 bg-coral/10 p-4 text-sm font-bold text-coral-ink">{error}</div>
-      ) : !selectedIds || selectedIds.length === 0 ? (
-        <div className="flex h-[220px] items-center justify-center text-sm text-dim">
-          Pick a tag above to chart its spend.
-        </div>
+      {visible.length === 0 ? (
+        <div className="flex h-[200px] items-center justify-center text-sm text-dim">Pick a tag above to chart its spend.</div>
       ) : (
-        <TagTrendChart series={series} />
+        <TagTrendChart series={visible} />
       )}
     </Card>
-  );
-}
-
-function CardHeading() {
-  return (
-    <div>
-      <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">Tag trends</div>
-      <h2 className="font-display text-xl font-bold text-ink">Tagged spend over time</h2>
-    </div>
   );
 }
 
@@ -148,21 +115,8 @@ interface HoverData {
 
 function TagTrendChart({ series }: { series: TagTrendSeries[] }) {
   const { tip, containerRef, show, hide } = useChartTooltip<HoverData>();
-  // Callback ref, not a ref+mount effect: the measured div appears only once data
-  // arrives, so the observer must attach whenever the node does.
-  const [measureNode, setMeasureNode] = useState<HTMLDivElement | null>(null);
-  const [width, setWidth] = useState(0);
+  const [setMeasureNode, width] = useElementWidth<HTMLDivElement>();
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-
-  useEffect(() => {
-    if (!measureNode) return;
-    setWidth(measureNode.getBoundingClientRect().width);
-    const observer = new ResizeObserver((entries) => {
-      setWidth(entries[0]?.contentRect.width ?? 0);
-    });
-    observer.observe(measureNode);
-    return () => observer.disconnect();
-  }, [measureNode]);
 
   const months = series[0]?.points.map((point) => point.month) ?? [];
   const maxCents = Math.max(...series.flatMap((row) => row.points.map((point) => point.totalCents)), 1);

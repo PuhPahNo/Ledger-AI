@@ -1,11 +1,14 @@
 import type { BusinessId, CategorizationReviewItem } from '@/types/domain';
 import { http, useMockApi } from './client';
+import { MOCK_REVIEW_ITEMS } from './mocks';
 
 export function listCategorizationReviewItems(params: {
   biz?: BusinessId | 'all';
   status?: CategorizationReviewItem['status'];
 } = {}): Promise<CategorizationReviewItem[]> {
-  if (useMockApi) return Promise.resolve([]);
+  if (useMockApi) {
+    return Promise.resolve(MOCK_REVIEW_ITEMS.filter((item) => !params.biz || params.biz === 'all' || item.biz === params.biz));
+  }
   const query = new URLSearchParams({ status: params.status ?? 'open' });
   if (params.biz && params.biz !== 'all') query.set('biz', params.biz);
   return http<CategorizationReviewItem[]>(`/categorization/review-items?${query.toString()}`);
@@ -16,6 +19,8 @@ export function resolveCategorizationReviewItem(
   action: 'accept' | 'dismiss',
 ): Promise<{ item: CategorizationReviewItem; appliedCount: number; conflictCount: number }> {
   if (useMockApi) {
+    const index = MOCK_REVIEW_ITEMS.findIndex((item) => item.id === id);
+    if (index >= 0) MOCK_REVIEW_ITEMS.splice(index, 1);
     return Promise.resolve({
       item: {
         id,

@@ -30,12 +30,21 @@ export function registerInsightRoutes(app: FastifyInstance): void {
       basis: z.enum(['month', 'year']).default('month'),
       q: z.string().optional(),
       accounts: z.string().optional(),
+      // Explicit comparison window (e.g. month-to-date vs the same days last month).
+      prevFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      prevTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      limit: z.coerce.number().int().min(1).max(50).default(12),
     }).parse(request.query);
     const accountIds = parseAccountIds(query.accounts);
     const period = query.period ?? currentMonthKey();
-    const window = query.from && query.to
+    const baseWindow = query.from && query.to
       ? comparisonWindowForRange(query.from, query.to, query.basis)
       : comparisonWindow(period, query.basis);
+    const window = query.prevFrom && query.prevTo && query.prevFrom <= query.prevTo
+      ? { ...baseWindow, previousFrom: query.prevFrom, previousTo: query.prevTo }
+      : baseWindow;
+    const spanFrom = window.previousFrom < window.currentFrom ? window.previousFrom : window.currentFrom;
+    const spanTo = window.previousTo > window.currentTo ? window.previousTo : window.currentTo;
     const selectedBusiness = await resolveSelectedBusiness(query.biz);
     const rows = await db.execute(sql`
       WITH category_totals AS (
@@ -58,8 +67,8 @@ export function registerInsightRoutes(app: FastifyInstance): void {
         LEFT JOIN ${accounts} ON ${transactions.accountId} = ${accounts.id}
         WHERE ${transactions.amountCents} < 0
           AND ${categoryIsVisibleSpend()}
-          AND ${transactions.date} >= ${window.previousFrom}
-          AND ${transactions.date} <= ${window.currentTo}
+          AND ${transactions.date} >= ${spanFrom}
+          AND ${transactions.date} <= ${spanTo}
           AND ${accountSpendFilter(accountIds)}
           AND (${selectedBusiness?.id ?? null}::uuid IS NULL OR ${transactions.businessId} = ${selectedBusiness?.id ?? null}::uuid)
           AND (${query.q ?? null}::text IS NULL OR coalesce(${categories.name}, 'Uncategorized') ILIKE ${`%${query.q ?? ''}%`})
@@ -68,8 +77,8 @@ export function registerInsightRoutes(app: FastifyInstance): void {
       SELECT category, current_cents, previous_cents
       FROM category_totals
       WHERE current_cents > 0 OR previous_cents > 0
-      ORDER BY (current_cents + previous_cents) DESC
-      LIMIT 12
+      ORDER BY current_cents DESC, previous_cents DESC
+      LIMIT ${query.limit}
     `);
     return (rows.rows as Array<{ category: string; current_cents: number; previous_cents: number }>).map((row) => ({
       category: row.category,

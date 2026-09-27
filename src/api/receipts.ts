@@ -1,6 +1,7 @@
 import type { BusinessId, ReceiptInboxItem, ReceiptMatchCandidate, ReceiptSource, ReceiptStatus, Transaction } from '@/types/domain';
 import { API_BASE, ApiError, http, useMockApi } from './client';
 import { mapTransaction, type ApiTransaction } from './mapper';
+import { toLocalIsoDate } from '@/lib/dates';
 
 export interface UploadReceiptResult {
   receiptId: string;
@@ -46,6 +47,7 @@ export interface ListReceiptsParams {
 export function listReceipts(params: ListReceiptsParams = {}): Promise<ReceiptInboxItem[]> {
   if (useMockApi) {
     const now = new Date().toISOString();
+    const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000);
     const rows: ReceiptInboxItem[] = [
       {
         id: 'receipt-gmail-apple',
@@ -55,10 +57,10 @@ export function listReceipts(params: ListReceiptsParams = {}): Promise<ReceiptIn
         status: 'pending',
         merchant: 'Apple Store',
         totalCents: 12900,
-        receiptDate: '2026-05-22',
+        receiptDate: toLocalIsoDate(daysAgo(3)),
         fileName: 'Apple Store receipt.pdf',
         confidence: 0.91,
-        createdAt: now,
+        createdAt: daysAgo(2).toISOString(),
         updatedAt: now,
       },
       {
@@ -69,10 +71,10 @@ export function listReceipts(params: ListReceiptsParams = {}): Promise<ReceiptIn
         status: 'pending',
         merchant: 'Office Depot',
         totalCents: 8742,
-        receiptDate: '2026-05-20',
+        receiptDate: toLocalIsoDate(daysAgo(18)),
         fileName: 'office-depot.jpg',
         confidence: 0.86,
-        createdAt: now,
+        createdAt: daysAgo(17).toISOString(),
         updatedAt: now,
       },
     ];

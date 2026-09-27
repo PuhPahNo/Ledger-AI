@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { FileText, Link2, Search, XCircle } from 'lucide-react';
 import {
   attachReceipt,
@@ -14,22 +15,21 @@ import {
   updateReceipt,
   uploadReceipt,
 } from '@/api';
-import type { AppView } from '@/types/navigation';
+import type { NavigateFn } from '@/types/navigation';
 import type { Business, CurrentUser, ReceiptInboxItem, ReceiptMatchCandidate, ReceiptSource, Transaction } from '@/types/domain';
 import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
-import { AppShell } from './AppShell';
+import { AppShell } from '../AppShell';
 import { Button } from '@/components/ui/button';
 import { ToastAction } from '@/components/ui/toast';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ReceiptPreview } from './receipts/ReceiptPreview';
+import { ReceiptPreview } from './ReceiptPreview';
 import {
   CandidateRow,
   Field,
-  Metric,
   ReceiptEditForm,
   ReceiptRow,
   candidateMatchesQuery,
@@ -37,7 +37,7 @@ import {
   parseDollarInput,
   receiptLabel,
   receiptNeedsDetails,
-} from './receipts/ReceiptWorkbenchParts';
+} from './ReceiptWorkbenchParts';
 
 const PAGE_SIZE = 100;
 const EXTRACTION_POLL_TIMEOUT_MS = 90_000;
@@ -46,8 +46,12 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface Props {
   user?: CurrentUser;
-  onViewChange?: (view: AppView) => void;
+  onViewChange?: NavigateFn;
   onLogout?: () => void;
+  /** The Transactions | Receipts segmented control, rendered above the workbench. */
+  modeSwitch?: ReactNode;
+  /** Called after anything that changes the unmatched count (pair, dismiss, upload). */
+  onReceiptsChanged?: () => void;
 }
 
 function groupReceiptsByMonth(receipts: ReceiptInboxItem[]): Array<{ month: string; rows: ReceiptInboxItem[] }> {
@@ -67,7 +71,11 @@ function monthLabel(month: string): string {
   return date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 }
 
-export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
+/**
+ * Receipts mode of the Transactions page: unmatched receipts on the left, preview / pairing
+ * on the right. (Phase 2 redesigns this; it was the standalone Receipts page.)
+ */
+export function ReceiptsWorkbench({ user, onViewChange, onLogout, modeSwitch, onReceiptsChanged }: Props) {
   const { toast } = useToast();
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [business, setBusiness] = useState('all');
@@ -117,8 +125,6 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
       ? candidates.filter((candidate) => candidateMatchesQuery(candidate, candidateQuery))
       : []
   ), [candidateQuery, candidates, receiptForMatching]);
-  const gmailCount = receipts.filter((receipt) => receipt.source === 'gmail').length;
-  const uploadCount = receipts.filter((receipt) => receipt.source === 'upload').length;
 
   useEffect(() => {
     listBusinesses().then(setBusinesses).catch((loadError: Error) => setError(loadError.message));
@@ -190,7 +196,10 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
       .finally(() => setLoadingCandidates(false));
   }, [candidatesVersion, selectedReceipt?.id, toast]);
 
-  const refresh = () => setRefreshKey((key) => key + 1);
+  const refresh = () => {
+    setRefreshKey((key) => key + 1);
+    onReceiptsChanged?.();
+  };
 
   const replaceReceipt = (updated: ReceiptInboxItem) => {
     setReceipts((rows) => rows.map((receipt) => (receipt.id === updated.id ? updated : receipt)));
@@ -432,26 +441,17 @@ export function ReceiptsPage({ user, onViewChange, onLogout }: Props) {
 
   return (
     <AppShell
-      currentView="receipts"
+      currentView="transactions"
       onViewChange={onViewChange}
       onLogout={onLogout}
       user={user}
       onUploadReceipt={handleUpload}
       contextEyebrow="Workspace"
-      contextTitle="Receipts"
+      contextTitle="Transactions"
       search={{ query, onQueryChange: setQuery, placeholder: 'Search merchants…' }}
     >
       <div className="flex flex-col gap-4">
-        <div className="grid gap-3 md:grid-cols-3">
-          <Metric
-            label="Unmatched"
-            value={`${receipts.length}${hasMore ? '+' : ''}`}
-            tone={receipts.length ? 'warning' : 'positive'}
-          />
-          <Metric label="Gmail" value={String(gmailCount)} />
-          <Metric label="Manual uploads" value={String(uploadCount)} />
-        </div>
-
+        {modeSwitch}
         <div className="grid items-end gap-3 rounded-xl border border-ink2/10 bg-paper p-3 shadow-sm md:grid-cols-[220px_180px_1fr_auto]">
           <Field label="Business">
             <Select value={business} onValueChange={setBusiness}>

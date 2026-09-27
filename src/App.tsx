@@ -1,42 +1,32 @@
 import { useEffect, useState } from 'react';
 import { getCurrentUser, logout, useMockApi } from './api';
-import { AdminPage } from './components/admin/AdminPage';
-import { AccountBalancesPage } from './components/AccountBalancesPage';
-import { CashFlowPage } from './components/CashFlowPage';
 import { LoginPage } from './components/auth/LoginPage';
-import { Dashboard } from './components/Dashboard';
 import { EmployeeReceiptUploadPage } from './components/receipt-upload/EmployeeReceiptUploadPage';
-import { InboxPage } from './components/InboxPage';
-import { OwnerInsightsPage } from './components/OwnerInsightsPage';
-import { AssistantPage } from './components/AssistantPage';
-import { ReceiptsPage } from './components/ReceiptsPage';
+import { HomePage } from './components/home/HomePage';
 import { TransactionsPage } from './components/TransactionsPage';
-import { clearDashboardCache } from './hooks/useDashboard';
+import { ReportsPage } from './components/reports/ReportsPage';
+import { AssistantPage } from './components/AssistantPage';
+import { SettingsPage } from './components/settings/SettingsPage';
+import { clearHomeCache } from './hooks/useHome';
 import { clearInboxCache } from './hooks/useInbox';
 import { clearConversation } from './components/assistant/conversationStorage';
+import { parseHash, resolveNavTarget, routeToHash } from './lib/routes';
 import { LEDGER_DATA_CHANGED_EVENT } from './types/assistant';
 import type { CurrentUser } from './types/domain';
-import type { AppView, TransactionViewFilters } from './types/navigation';
+import type { AppRoute, NavTarget, TransactionViewFilters } from './types/navigation';
 
-const views = new Set<AppView>(['dashboard', 'inbox', 'transactions', 'receipts', 'cash-flow', 'balances', 'insights', 'assistant', 'admin']);
-
-function viewFromHash(): AppView {
-  if (typeof window === 'undefined') return 'dashboard';
-  const value = window.location.hash.replace(/^#\/?/, '') as AppView;
-  return views.has(value) ? value : 'dashboard';
+function routeFromLocation(): AppRoute {
+  if (typeof window === 'undefined') return { view: 'home' };
+  return parseHash(window.location.hash);
 }
 
-function writeViewHash(view: AppView) {
+function writeRouteHash(route: AppRoute, mode: 'push' | 'replace' = 'push') {
   if (typeof window === 'undefined') return;
-  const nextHash = view === 'dashboard' ? '' : `#${view}`;
-  const currentHash = window.location.hash;
-  if (currentHash === nextHash || (!currentHash && !nextHash)) return;
-
-  if (nextHash) {
-    window.history.pushState(null, '', nextHash);
-  } else {
-    window.history.pushState(null, '', window.location.pathname + window.location.search);
-  }
+  const nextHash = routeToHash(route);
+  if (window.location.hash === nextHash || (!window.location.hash && !nextHash)) return;
+  const url = nextHash || window.location.pathname + window.location.search;
+  if (mode === 'replace') window.history.replaceState(null, '', url);
+  else window.history.pushState(null, '', url);
 }
 
 function isReceiptUploadPortal(): boolean {
@@ -53,12 +43,16 @@ export default function App() {
     totpEnabled: false,
   } : null);
   const [checking, setChecking] = useState(!useMockApi);
-  const [view, setViewState] = useState<AppView>(() => viewFromHash());
+  const [route, setRouteState] = useState<AppRoute>(() => routeFromLocation());
   const [transactionFilters, setTransactionFilters] = useState<TransactionViewFilters | undefined>();
 
-  const setView = (nextView: AppView) => {
-    setViewState(nextView);
-    writeViewHash(nextView);
+  const navigate = (target: NavTarget, filters?: Record<string, unknown> | null) => {
+    const next = resolveNavTarget(target, filters);
+    // Deep-link filters belong to one trip into Transactions; leaving drops them.
+    if (next.view !== 'transactions') setTransactionFilters(undefined);
+    setRouteState(next);
+    writeRouteHash(next);
+    window.scrollTo?.({ top: 0 });
   };
 
   useEffect(() => {
@@ -69,16 +63,26 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const syncView = () => setViewState(viewFromHash());
-    window.addEventListener('hashchange', syncView);
-    return () => window.removeEventListener('hashchange', syncView);
+    // Old bookmarks and links (#inbox, #cash-flow, #admin…) are rewritten to their new address.
+    const syncRoute = () => {
+      const next = routeFromLocation();
+      writeRouteHash(next, 'replace');
+      setRouteState(next);
+    };
+    syncRoute();
+    window.addEventListener('hashchange', syncRoute);
+    window.addEventListener('popstate', syncRoute);
+    return () => {
+      window.removeEventListener('hashchange', syncRoute);
+      window.removeEventListener('popstate', syncRoute);
+    };
   }, []);
 
   // Assistant-applied changes (recategorize, pair receipts, new rules) make cached page
   // data stale; drop the caches so the next page visit refetches.
   useEffect(() => {
     const invalidate = () => {
-      clearDashboardCache();
+      clearHomeCache();
       clearInboxCache();
     };
     window.addEventListener(LEDGER_DATA_CHANGED_EVENT, invalidate);
@@ -87,30 +91,53 @@ export default function App() {
 
   const handleLogout = async () => {
     await logout();
-    clearDashboardCache();
+    clearHomeCache();
     clearInboxCache();
     // The saved assistant chat holds financial answers; don't leave it for the next login.
     clearConversation();
     setUser(null);
-    setView('dashboard');
+    navigate('home');
   };
   const openTransactions = (filters?: TransactionViewFilters) => {
     setTransactionFilters(filters);
-    setView('transactions');
+    navigate({ view: 'transactions', mode: 'transactions' });
   };
 
   if (isReceiptUploadPortal()) return <EmployeeReceiptUploadPage />;
   if (checking) return null;
   if (!user) return <LoginPage onLogin={setUser} />;
-  if (view === 'admin') return <AdminPage user={user} onViewChange={setView} onLogout={handleLogout} />;
-  if (view === 'balances') return <AccountBalancesPage user={user} onViewChange={setView} onLogout={handleLogout} />;
-  if (view === 'cash-flow') return <CashFlowPage user={user} onViewChange={setView} onLogout={handleLogout} />;
-  if (view === 'insights') return <OwnerInsightsPage user={user} onViewChange={setView} onOpenTransactions={openTransactions} onLogout={handleLogout} />;
-  if (view === 'assistant') return <AssistantPage user={user} onViewChange={setView} onLogout={handleLogout} />;
-  if (view === 'inbox') return <InboxPage user={user} onViewChange={setView} onOpenTransactions={openTransactions} onLogout={handleLogout} />;
-  if (view === 'receipts') return <ReceiptsPage user={user} onViewChange={setView} onLogout={handleLogout} />;
-  if (view === 'transactions') {
-    return <TransactionsPage initialFilters={transactionFilters} user={user} onViewChange={setView} onLogout={handleLogout} />;
+
+  const shared = { user, onViewChange: navigate, onLogout: handleLogout };
+  switch (route.view) {
+    case 'transactions':
+      return (
+        <TransactionsPage
+          {...shared}
+          mode={route.mode}
+          initialFilters={transactionFilters}
+          onModeChange={(mode) => navigate({ view: 'transactions', mode })}
+        />
+      );
+    case 'reports':
+      return (
+        <ReportsPage
+          {...shared}
+          tab={route.tab}
+          onTabChange={(tab) => navigate({ view: 'reports', tab })}
+          onOpenTransactions={openTransactions}
+        />
+      );
+    case 'assistant':
+      return <AssistantPage {...shared} />;
+    case 'settings':
+      return (
+        <SettingsPage
+          {...shared}
+          section={route.section}
+          onSectionChange={(section) => navigate({ view: 'settings', section })}
+        />
+      );
+    default:
+      return <HomePage {...shared} onOpenTransactions={openTransactions} />;
   }
-  return <Dashboard user={user} onViewChange={setView} onOpenTransactions={openTransactions} onLogout={handleLogout} />;
 }
