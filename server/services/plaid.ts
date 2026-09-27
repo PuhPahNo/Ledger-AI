@@ -23,7 +23,12 @@ import { badRequest, notFound, serviceUnavailable } from '../lib/errors.js';
 import { NonRetryableJobError, enqueue } from '../jobs/queue.js';
 import { hasPendingPlaidSync } from '../jobs/scheduler.js';
 import { resolveTransactionBusinessId } from './accountAssignment.js';
-import { categorizeTransactionWithDetails, isExcludedFromSpendCategory } from './categorization.js';
+import {
+  categorizeTransactionWithDetails,
+  isExcludedFromSpendCategory,
+  isProtectedCategorySource,
+  shouldAutoApplyAiSuggestion,
+} from './categorization.js';
 import { createAiCategorySuggestionReview } from './categorizationFeedback.js';
 import { applyTagRulesBestEffort } from './tagging.js';
 import { getReceiptTrackingSince } from './appSettings.js';
@@ -525,7 +530,7 @@ async function upsertTransaction(
       plaidCategory: plaidCategoryHints(raw),
       allowAi: options.allowAiCategorization,
     });
-  const shouldReviewAi = categorization.source === 'ai_suggested' && (categorization.confidence ?? 0) < 0.85;
+  const shouldReviewAi = categorization.source === 'ai_suggested' && !shouldAutoApplyAiSuggestion(categorization);
   const uncategorizedCategoryId = shouldReviewAi ? await fallbackUncategorizedCategoryId() : null;
   const appliedCategoryId = shouldReviewAi ? uncategorizedCategoryId : categorization.categoryId;
   const appliedCategorySource = shouldReviewAi ? 'uncategorized' : categorization.source;
@@ -615,11 +620,6 @@ async function upsertTransaction(
   return !existing;
 }
 
-const PROTECTED_CATEGORY_SOURCES = new Set(['manual', 'user_confirmed_rule', 'receipt_evidence']);
-
-function isProtectedCategorySource(source: string | null | undefined): boolean {
-  return source != null && PROTECTED_CATEGORY_SOURCES.has(source);
-}
 
 /**
  * Carry the user's work from a pending transaction onto its posted replacement: the matched
