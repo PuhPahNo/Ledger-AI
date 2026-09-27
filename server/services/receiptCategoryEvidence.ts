@@ -30,11 +30,19 @@ const receiptCategorySchema = z.object({
   evidence: z.string().nullable(),
 });
 
+/** Below this extraction confidence the receipt is a regex fallback and says nothing about category. */
+export const MIN_RECEIPT_CONFIDENCE_FOR_CATEGORY = 0.5;
+
 export async function inferReceiptCategory(receipt: Receipt, transaction: Transaction): Promise<{
   categoryId: string | null;
   confidence: number;
   evidence: Record<string, unknown>;
 }> {
+  // An unreadable receipt (fallback extraction) carries no category evidence, only its filename
+  // and a system note; keyword-matching that text produced nonsense like "CPA invoice → Software".
+  if (parseConfidence(receipt.confidence) < MIN_RECEIPT_CONFIDENCE_FOR_CATEGORY) {
+    return { categoryId: null, confidence: 0, evidence: { reason: 'receipt_unreadable' } };
+  }
   const availableCategories = await db
     .select()
     .from(categories)
