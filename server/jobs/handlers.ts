@@ -21,6 +21,7 @@ import { syncPlaidConnection } from '../services/plaid.js';
 import { backfillGmail, gmailBackfillQuery, renewGmailWatch, syncGmailConnection } from '../services/gmail.js';
 import { regenerateInsights } from '../services/insights.js';
 import { buildExport } from '../services/exporter.js';
+import { relinkQuickbooksConnection, syncQuickbooksConnection } from '../services/quickbooksSync.js';
 
 export async function handleJob(type: string, payload: Record<string, unknown>): Promise<void> {
   if (type === 'plaid.sync') {
@@ -86,6 +87,16 @@ export async function handleJob(type: string, payload: Record<string, unknown>):
     const exportId = String(payload.exportJobId);
     await db.update(exportJobs).set({ status: 'running', updatedAt: new Date() }).where(eq(exportJobs.id, exportId));
     await buildExport(exportId);
+    return;
+  }
+  if (type === 'quickbooks.sync') {
+    const result = await syncQuickbooksConnection(String(payload.connectionId), { full: Boolean(payload.full) });
+    // New QBO links can pair receipts; newly imported QBO receipts may match other transactions.
+    if (result && (result.linksCreated > 0 || result.receiptsImported > 0)) await enqueue('receipt.rematch', {});
+    return;
+  }
+  if (type === 'quickbooks.relink') {
+    await relinkQuickbooksConnection(String(payload.connectionId));
     return;
   }
   throw new Error(`Unknown job type: ${type}`);

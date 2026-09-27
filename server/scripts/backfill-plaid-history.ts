@@ -13,7 +13,7 @@ async function main(): Promise<void> {
     throw new Error('Pass --all or one or more --connection=<uuid> values.');
   }
 
-  const [{ and, isNotNull, ne }, dbClient, { connections }, { PLAID_TRANSACTION_HISTORY_DAYS, syncPlaidConnection }] = await Promise.all([
+  const [{ and, inArray, isNotNull, ne }, dbClient, { connections }, { PLAID_TRANSACTION_HISTORY_DAYS, syncPlaidConnection }] = await Promise.all([
     import('drizzle-orm'),
     import('../db/client.js'),
     import('../db/schema.js'),
@@ -23,7 +23,7 @@ async function main(): Promise<void> {
   try {
     const rows = await dbClient.db.query.connections.findMany({
       where: and(
-        ne(connections.kind, 'gmail'),
+        inArray(connections.kind, ['bank', 'card']),
         ne(connections.status, 'disconnected'),
         isNotNull(connections.encryptedAccessToken),
       ),

@@ -22,6 +22,7 @@
     "receipts:cleanup": "tsx server/scripts/dismiss-non-receipts.ts",
     "assistant:eval": "tsx server/scripts/eval-assistant.ts",
     "admin:reset": "tsx server/scripts/reset-admin.ts",
+    "qbo:mock": "tsx server/scripts/qbo-mock-server.ts",
     "test": "vitest run"
   },
   "dependencies": {

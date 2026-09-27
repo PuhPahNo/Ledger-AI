@@ -13,6 +13,7 @@ import {
   enqueueDueCategorizationScan,
   enqueueDueGmailWatchRenewals,
   enqueueDuePlaidSyncs,
+  enqueueDueQuickbooksSyncs,
   enqueueDueReceiptRematch,
   enqueuePendingReceiptExtractions,
 } from './scheduler.js';
@@ -92,6 +93,8 @@ export function startWorkerLoop(options: { pollMs?: number; logger?: WorkerLogge
           }
           const receiptRematchQueued = await enqueueDueReceiptRematch();
           if (receiptRematchQueued > 0) logger.log('Queued receipt re-match sweep');
+          const quickbooksQueued = await enqueueDueQuickbooksSyncs();
+          if (quickbooksQueued > 0) logger.log(`Queued ${quickbooksQueued} daily QuickBooks sync job${quickbooksQueued === 1 ? '' : 's'}`);
         }
         await tick(logger);
       } catch (error) {

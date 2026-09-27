@@ -45,6 +45,15 @@ const envSchema = z.object({
   GOOGLE_REDIRECT_URI: z.string().optional().default(''),
   GOOGLE_PUBSUB_TOPIC: z.string().optional().default(''),
   GOOGLE_PUBSUB_WEBHOOK_SECRET: z.string().optional().default(''),
+  // QuickBooks Online (read-only). Leave CLIENT_ID/SECRET empty to keep the feature off
+  // ("not configured"). REDIRECT_URI must exactly match the Intuit app's redirect URI.
+  QUICKBOOKS_CLIENT_ID: z.string().optional().default(''),
+  QUICKBOOKS_CLIENT_SECRET: z.string().optional().default(''),
+  QUICKBOOKS_REDIRECT_URI: z.string().optional().default(''),
+  QUICKBOOKS_ENV: z.enum(['sandbox', 'production']).default('production'),
+  // Local-testing overrides (npm run qbo:mock): Accounting API base and OAuth base.
+  QUICKBOOKS_API_BASE: z.string().optional().default(''),
+  QUICKBOOKS_AUTH_BASE: z.string().optional().default(''),
   LEDGER_ADMIN_USERNAME: z.string().default('admin'),
   LEDGER_ADMIN_PASSWORD: z.string().default('change-me-before-production'),
 });

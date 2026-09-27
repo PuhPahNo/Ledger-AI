@@ -171,6 +171,42 @@ Run periodically (nightly is fine to start):
 
 Persist each finding as an `Alert` row so dismissal sticks.
 
+### 7. QuickBooks Online (read-only)
+
+**Why:** see which contractors get paid, and use the books to link bank/card transactions and
+receipts. One QBO company per existing business; nothing is ever written to QuickBooks.
+
+- **Auth:** OAuth 2.0 code flow, scope `com.intuit.quickbooks.accounting`. `POST /quickbooks/connect
+  {businessId}` returns the Intuit URL; Intuit redirects to `GET /quickbooks/callback` (admin session
+  + signed single-use state). Tokens are AES-GCM encrypted on the `connections` row (kind
+  `quickbooks`); realm, expiries and sync cursors live in `qbo_companies`. Access tokens (1h) refresh
+  under a row lock and every rotated refresh token is persisted; `invalid_grant` → status `reauth`.
+  `DELETE /quickbooks/:id` revokes the token and keeps synced history (reconnecting the same realm
+  reuses the row, so mappings/links survive).
+- **Sync** (`quickbooks.sync` job: on connect, daily, manual `POST /quickbooks/:id/sync {full?}`):
+  first run pulls 24 months (query paging, `MAXRESULTS 1000`); afterwards ChangeDataCapture (falls
+  back to a full pull if the last sync is >29 days old; re-queries an entity whose CDC page hit the
+  1000 cap). Entities: CompanyInfo, Account, Vendor (1099 flag + "tax ID on file" boolean only),
+  Purchase, BillPayment, Bill, Deposit, Transfer, VendorCredit, Attachable. ~450 req/min pacing,
+  backoff on 429/5xx. Tables: `qbo_accounts`, `qbo_vendors`, `qbo_transactions`, `qbo_attachments`.
+- **Linking:** QBO bank/card accounts map to Ledger accounts (auto by last-4, or manual via
+  `PUT /quickbooks/:id/mappings`). Each QBO bank/card leg links to a Plaid transaction on the mapped
+  account with the exact signed amount, date within ±4 days (checks: up to 10 days late), and a single
+  candidate (a matching check number breaks ties). Ambiguous → no link. Manual
+  `POST /quickbooks/links`, `DELETE /quickbooks/links/:id` (kept as `rejected`; never re-auto-linked).
+- **Receipts:** attachments on synced QBO transactions import as receipts (`source='quickbooks'`,
+  deduped by attachable id and content sha256), are paired straight to the linked Ledger transaction
+  (only into an empty slot) and queued for `receipt.extract`.
+- **Category signal:** QBO expense accounts map to Ledger categories (name/sub-type similarity or
+  manual); `quickbooksCategorySuggestion(txnId)` produces `{categoryId, confidence, evidence}`.
+- **Contractors:** `GET /quickbooks/contractors?biz&from&to` — 1099 vendors + vendors paid from
+  contract-labor accounts; period/YTD totals, methods, tax-ID-on-file, and a 1099-NEC threshold flag
+  ($600 through 2025, $2,000 from 2026; card payments excluded as 1099-K). Guidance, not tax advice.
+- **Drawer:** `GET /transactions/:id/quickbooks` — linked payee, expense accounts, memo/doc number,
+  attachments, contractor flag, category suggestion, or manual-link candidates.
+- **Local testing:** `npm run qbo:mock` (see header of `server/scripts/qbo-mock-server.ts`) with
+  `QUICKBOOKS_API_BASE` / `QUICKBOOKS_AUTH_BASE=http://localhost:8799`.
+
 ---
 
 ## Suggested data model (minimal)

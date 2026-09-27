@@ -7,6 +7,7 @@ export const DAILY_PLAID_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const DAILY_CATEGORIZATION_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000;
 export const GMAIL_WATCH_RENEWAL_WINDOW_MS = 6 * 24 * 60 * 60 * 1000;
 export const RECEIPT_REMATCH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+export const DAILY_QUICKBOOKS_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const PENDING_RECEIPT_EXTRACTION_LIMIT = 50;
 
 export function isPlaidConnectionDueForDailySync(
@@ -49,7 +50,7 @@ export async function enqueueDuePlaidSyncs(now = new Date()): Promise<number> {
     })
     .from(connections)
     .where(and(
-      sql`${connections.kind} <> 'gmail'`,
+      inArray(connections.kind, ['bank', 'card']),
       eq(connections.status, 'live'),
       sql`${connections.encryptedAccessToken} IS NOT NULL`,
     ));
@@ -215,5 +216,41 @@ async function hasReceiptExtractionJob(receiptId: string): Promise<boolean> {
     ))
     .limit(1);
 
+  return Boolean(existing);
+}
+
+/** Daily QuickBooks sync for live QBO connections (read-only pull + linking). */
+export async function enqueueDueQuickbooksSyncs(now = new Date()): Promise<number> {
+  if (!process.env.QUICKBOOKS_CLIENT_ID || !process.env.QUICKBOOKS_CLIENT_SECRET) return 0;
+  const rows = await db
+    .select({ id: connections.id, lastSyncAt: connections.lastSyncAt })
+    .from(connections)
+    .where(and(
+      eq(connections.kind, 'quickbooks'),
+      eq(connections.status, 'live'),
+      sql`${connections.encryptedRefreshToken} IS NOT NULL`,
+    ));
+
+  let queued = 0;
+  for (const row of rows) {
+    if (row.lastSyncAt && now.getTime() - row.lastSyncAt.getTime() < DAILY_QUICKBOOKS_SYNC_INTERVAL_MS) continue;
+    if (await hasPendingQuickbooksSync(row.id)) continue;
+    await enqueue('quickbooks.sync', { connectionId: row.id }, now);
+    queued += 1;
+  }
+  return queued;
+}
+
+export async function hasPendingQuickbooksSync(connectionId: string): Promise<boolean> {
+  const [existing] = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(and(
+      eq(jobs.type, 'quickbooks.sync'),
+      inArray(jobs.status, ['queued', 'running', 'failed']),
+      sql`${jobs.attempts} < ${jobs.maxAttempts}`,
+      sql`${jobs.payload} ->> 'connectionId' = ${connectionId}`,
+    ))
+    .limit(1);
   return Boolean(existing);
 }
