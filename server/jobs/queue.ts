@@ -9,6 +9,7 @@ export type JobType =
   | 'gmail.renew-watch'
   | 'receipt.extract'
   | 'receipt.rematch'
+  | 'receipt.waiver-evidence'
   | 'categorization.apply-rule'
   | 'categorization.scan-uncategorized'
   | 'categorization.receipt-evidence-review'

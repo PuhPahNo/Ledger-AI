@@ -249,6 +249,26 @@ export function isGmailNotFoundError(error: unknown): boolean {
 }
 
 async function ingestGmailMessage(connectionId: string, messageId: string): Promise<number> {
+  return (await ingestGmailMessageDetailed(connectionId, messageId)).newReceiptIds.length;
+}
+
+interface IngestOptions {
+  /** 'enqueue' (default): new receipts get a receipt.extract job. 'defer': the caller extracts. */
+  extraction?: 'enqueue' | 'defer';
+}
+
+interface IngestResult {
+  /** Receipts created from this message now. */
+  newReceiptIds: string[];
+  /** Receipts that already existed for this message (previous sync/backfill). */
+  existingReceiptIds: string[];
+}
+
+async function ingestGmailMessageDetailed(
+  connectionId: string,
+  messageId: string,
+  options: IngestOptions = {},
+): Promise<IngestResult> {
   const { gmail, connection } = await gmailClientForConnection(connectionId);
   const message = await gmail.users.messages.get({ userId: 'me', id: messageId, format: 'full' });
   const payload = message.data.payload as GmailMimePart | undefined;
@@ -263,7 +283,11 @@ async function ingestGmailMessage(connectionId: string, messageId: string): Prom
   ].filter(Boolean).join('\n');
   const messageSignal = messageReceiptSignal(messageSignalText);
   const attachments = collectReceiptAttachments(payload, messageSignal);
-  let count = 0;
+  const result: IngestResult = { newReceiptIds: [], existingReceiptIds: [] };
+  const record = (outcome: InsertOutcome) => {
+    if (outcome.created) result.newReceiptIds.push(outcome.receiptId);
+    else if (outcome.receiptId) result.existingReceiptIds.push(outcome.receiptId);
+  };
   for (const attachment of attachments) {
     const data = await gmail.users.messages.attachments.get({
       userId: 'me',
@@ -271,32 +295,34 @@ async function ingestGmailMessage(connectionId: string, messageId: string): Prom
       id: attachment.attachmentId,
     });
     const buffer = Buffer.from(data.data.data ?? '', 'base64url');
-    const inserted = await insertGmailAttachmentReceipt({
+    record(await insertGmailAttachmentReceipt({
       connectionId: connection.id,
       businessId: connection.businessId ?? undefined,
       messageId,
       attachment,
       buffer,
       emailMetadata: { subject, from, date },
-    });
-    if (inserted) count += 1;
+      extraction: options.extraction,
+    }));
   }
 
   if (attachments.length === 0) {
     const bodyCandidate = buildEmailBodyCandidate({ payload, subject, from, date });
     if (bodyCandidate) {
-      const inserted = await insertGmailBodyReceipt({
+      record(await insertGmailBodyReceipt({
         connectionId: connection.id,
         businessId: connection.businessId ?? undefined,
         messageId,
         bodyCandidate,
         emailMetadata: { subject, from, date },
-      });
-      if (inserted) count += 1;
+        extraction: options.extraction,
+      }));
     }
   }
-  return count;
+  return result;
 }
+
+type InsertOutcome = { created: true; receiptId: string } | { created: false; receiptId: string | null };
 
 async function insertGmailAttachmentReceipt(input: {
   connectionId: string;
@@ -305,7 +331,8 @@ async function insertGmailAttachmentReceipt(input: {
   attachment: GmailAttachmentCandidate;
   buffer: Buffer;
   emailMetadata: Record<string, string | undefined>;
-}): Promise<boolean> {
+  extraction?: IngestOptions['extraction'];
+}): Promise<InsertOutcome> {
   // Gmail attachment ids aren't stable across fetches, so a re-backfill would otherwise
   // re-ingest the same file — dedupe on content within the message too.
   const fileSha256 = sha256Buffer(input.buffer);
@@ -318,7 +345,7 @@ async function insertGmailAttachmentReceipt(input: {
       ),
     ),
   });
-  if (existing) return false;
+  if (existing) return { created: false, receiptId: existing.id };
 
   const fileName = sanitizeFileName(input.attachment.filename);
   const key = gmailReceiptStorageKey({
@@ -343,8 +370,8 @@ async function insertGmailAttachmentReceipt(input: {
       contentKind: 'attachment',
     },
   }).returning({ id: receipts.id });
-  await enqueue('receipt.extract', { receiptId: receipt.id });
-  return true;
+  if (input.extraction !== 'defer') await enqueue('receipt.extract', { receiptId: receipt.id });
+  return { created: true, receiptId: receipt.id };
 }
 
 async function insertGmailBodyReceipt(input: {
@@ -353,7 +380,8 @@ async function insertGmailBodyReceipt(input: {
   messageId: string;
   bodyCandidate: GmailBodyCandidate;
   emailMetadata: Record<string, string | undefined>;
-}): Promise<boolean> {
+  extraction?: IngestOptions['extraction'];
+}): Promise<InsertOutcome> {
   const bodyPartId = 'body';
   const existing = await db.query.receipts.findFirst({
     where: and(
@@ -361,7 +389,7 @@ async function insertGmailBodyReceipt(input: {
       eq(receipts.gmailAttachmentId, bodyPartId),
     ),
   });
-  if (existing) return false;
+  if (existing) return { created: false, receiptId: existing.id };
 
   const buffer = Buffer.from(input.bodyCandidate.text, 'utf8');
   const fileSha256 = sha256Buffer(buffer);
@@ -389,8 +417,44 @@ async function insertGmailBodyReceipt(input: {
       truncated: input.bodyCandidate.truncated,
     },
   }).returning({ id: receipts.id });
-  await enqueue('receipt.extract', { receiptId: receipt.id });
-  return true;
+  if (input.extraction !== 'defer') await enqueue('receipt.extract', { receiptId: receipt.id });
+  return { created: true, receiptId: receipt.id };
+}
+
+export interface GmailSearchResult {
+  /** Messages the search returned (capped at `maxMessages`). */
+  messageIds: string[];
+  newReceiptIds: string[];
+  existingReceiptIds: string[];
+}
+
+/**
+ * Run one Gmail search on a mailbox and ingest every hit through the normal intake pipeline
+ * (same receipt-likeness filters, dedupe, and storage as sync/backfill). With
+ * `extraction: 'defer'` new receipts are NOT queued for extraction — the caller extracts them
+ * inline (and must enqueue on failure). Doesn't move the mailbox's history cursor.
+ */
+export async function searchGmailAndIngest(
+  connectionId: string,
+  query: string,
+  options: { maxMessages?: number } & IngestOptions = {},
+): Promise<GmailSearchResult> {
+  return withGmailAuthGuard(connectionId, async () => {
+    const { gmail } = await gmailClientForConnection(connectionId);
+    const list = await gmail.users.messages.list({ userId: 'me', q: query, maxResults: options.maxMessages ?? 10 });
+    const messageIds = (list.data.messages ?? []).flatMap((message) => message.id ? [message.id] : []);
+    const result: GmailSearchResult = { messageIds, newReceiptIds: [], existingReceiptIds: [] };
+    for (const messageId of messageIds) {
+      try {
+        const ingested = await ingestGmailMessageDetailed(connectionId, messageId, { extraction: options.extraction });
+        result.newReceiptIds.push(...ingested.newReceiptIds);
+        result.existingReceiptIds.push(...ingested.existingReceiptIds);
+      } catch (error) {
+        if (!isGmailNotFoundError(error)) throw error;
+      }
+    }
+    return result;
+  });
 }
 
 async function gmailClientForConnection(connectionId: string) {

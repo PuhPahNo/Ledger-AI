@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  amountSearchVariants,
+  buildTransactionGmailQuery,
+  merchantSearchTerms,
   buildEmailBodyCandidate,
   collectReceiptAttachments,
   gmailReceiptStorageKey,
@@ -146,5 +149,42 @@ describe('gmailReceiptStorageKey', () => {
     expect(key).toBe(gmailReceiptStorageKey({ ...base, fileName: '../May invoice.pdf', contentSha256: 'c'.repeat(64) }));
     expect(key).not.toContain('..');
     expect(key.startsWith('receipts/gmail/conn/msg/')).toBe(true);
+  });
+});
+
+describe('buildTransactionGmailQuery', () => {
+  it('searches the amount or the merchant with receipt wording within ±7 days', () => {
+    const result = buildTransactionGmailQuery({ merchant: 'ADOBE *CREATIVE CLD', amountCents: -5499, date: '2026-09-10' });
+    expect(result.from).toBe('2026-09-03');
+    expect(result.to).toBe('2026-09-17');
+    expect(result.amountVariants).toEqual(['54.99']);
+    expect(result.merchantTerms).toEqual(['adobe', 'creative', 'cld']);
+    expect(result.query).toBe(
+      'after:2026/09/03 before:2026/09/18 ("54.99" OR (adobe (receipt OR invoice OR order OR payment OR billing OR subscription)))',
+    );
+  });
+
+  it('spans both the authorized and posted dates', () => {
+    const result = buildTransactionGmailQuery({ merchant: 'Figma', amountCents: -1500, date: '2026-09-12', authorizedDate: '2026-09-09' });
+    expect(result.from).toBe('2026-09-02');
+    expect(result.to).toBe('2026-09-19');
+  });
+
+  it('adds a thousands-separated amount spelling', () => {
+    expect(amountSearchVariants(-123450)).toEqual(['1234.50', '1,234.50']);
+    expect(amountSearchVariants(7500)).toEqual(['75.00']);
+    expect(amountSearchVariants(0)).toEqual([]);
+  });
+
+  it('extracts distinctive merchant words from bank descriptors', () => {
+    expect(merchantSearchTerms('SQ *BLUE BOTTLE #1234')).toEqual(['blue', 'bottle']);
+    expect(merchantSearchTerms('AMZN Mktp US*2K4')).toEqual(['amazon']);
+    expect(merchantSearchTerms('PAYPAL *NOTION LABS')).toEqual(['notion', 'labs']);
+    expect(merchantSearchTerms('POS DEBIT 12345')).toEqual([]);
+  });
+
+  it('falls back to the amount alone for an unsearchable merchant', () => {
+    const result = buildTransactionGmailQuery({ merchant: 'POS 4411', amountCents: -2000, date: '2026-01-02' });
+    expect(result.query).toBe('after:2025/12/26 before:2026/01/10 ("20.00")');
   });
 });

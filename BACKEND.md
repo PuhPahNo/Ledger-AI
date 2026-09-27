@@ -173,6 +173,76 @@ Persist each finding as an `Alert` row so dismissal sticks.
 
 ---
 
+## Receipt workflow API
+
+Server: `server/routes/receiptWorkflow.ts` (registered from `receiptRoutes`), services
+`receiptWorkflow.ts`, `receiptWaivers.ts`, `matchReasons.ts`. Typed client + mock fixtures:
+`src/api/receiptWorkflow.ts`, types in `src/types/receiptWorkflow.ts`. Transactions are the
+usual `ApiTransaction` (cents); receipts the usual `ReceiptInboxItem`.
+
+**Match reasons.** Every candidate/match carries `explanations: MatchReason[]`
+(`{ kind: 'amount'|'date'|'merchant'|'card'|'business', text, strength: 'strong'|'good'|'weak'|'conflict', score }`),
+e.g. "Amount exact", "Amount off by $0.40 (receipt higher)", "3 days apart", `"Adobe" ≈ "ADOBE *CREATIVE CLD"`,
+"Card ••4242 matches", "Different card ••1111 (charged to ••4002)". The numeric `score` and raw `reasons` stay.
+
+### `GET /receipts/:id/candidates`
+Unchanged list, plus `explanations` and `rejected` (the user already undid/rejected this pair) per candidate.
+`POST /receipts/:id/match` → `matched.explanations` added.
+
+### `GET /receipts/queue?limit=10&offset=0&skip=id,id&biz=&order=newest|oldest`
+**Returns:** `{ items: [{ receipt, candidates: Candidate[≤3], blockedReason: null|'missing_details'|'extraction_pending' }], total, nextOffset }`.
+Unmatched receipts (pending, no transaction); pairable ones first. Candidates exclude rejected pairs.
+`skip` = receipts skipped this session (S key).
+
+### `POST /receipts/queue/:id/pair` — body `{ transactionId, skip?: string[], biz? }`
+Manual pair (1/2/3). **Returns:** `{ receipt, transaction, next: QueueItem|null, remaining }`.
+
+### `POST /receipts/queue/:id/dismiss` — body `{ skip?, biz? }`
+Not a business receipt (N): receipt → `n/a`, its proposals rejected. **Returns:** `{ receipt, next, remaining }`.
+
+### `GET /receipts/recent-matches?days=7&mode=all|auto|manual&limit=50&offset=0&biz=`
+**Returns:** `{ items: [{ matchId, mode: 'auto'|'manual', matchedAt, score, receipt, transaction, explanations }], total }`.
+Only pairs still in place. **Undo** = `POST /receipts/:id/unpair` (pair recorded as rejected, both sides reopen,
+matcher never re-proposes it; the item drops out of this list).
+
+### `GET /receipts/counts?biz=`
+**Returns:** `{ unmatchedReceipts, missingReceipts: {count, cents}, waivedThisMonth: {count, cents}, autoMatchedThisWeek }`.
+Missing = operating outflow on enabled accounts with `receipt='missing'` (same as the close queue / Inbox).
+Waived this month = outflows dated this month with `receipt='waived'`.
+
+### "No receipt needed" rules
+Kinds: `threshold` (single global row, seeded **disabled** at $75, `excludeLodging` default true — Travel/lodging
+categories and hotel/Airbnb merchants still need receipts), `merchant` (condensed pattern, optional business scope),
+`category`. Evaluation order merchant → category → threshold; outflows only. New Plaid transactions matching an
+enabled rule import as `waived`; the `receipt.waiver-evidence` job (queued after each sync) records which rule.
+A waived transaction still accepts a receipt (auto or manual) and becomes `matched`.
+
+- `GET /receipts/waiver-rules` → `{ rules: WaiverRule[] }` (each with `label` and `waivedCount`).
+- `PUT /receipts/waiver-rules/threshold` — `{ enabled, thresholdCents?=7500, excludeLodging?=true }` → rule.
+- `POST /receipts/waiver-rules` — `{ kind:'merchant', merchant, businessId?, note?, applyToExisting? }` or
+  `{ kind:'category', categoryId, note?, applyToExisting? }` → `{ rule, created, waived }`.
+- `PATCH /receipts/waiver-rules/:id` — `{ enabled?, note? }` → rule.
+- `DELETE /receipts/waiver-rules/:id?reopen=true` → `{ deleted, reopened }` (reopen puts the rule's `waivedCount`
+  transactions back to missing). The threshold rule can only be disabled.
+- `GET /receipts/waiver-rules/apply-preview?ruleId=` → `{ count, totalCents, byRule: [{ruleId, kind, label, count, totalCents}], sampleTransactionIds }`.
+- `POST /receipts/waiver-rules/apply` — `{ ruleId? }` → `{ waived }` (existing missing operating outflow).
+
+### Missing-receipt actions on a transaction
+- `POST /transactions/:id/receipt/upload` (multipart `file`) — stores the file, pairs it to this transaction
+  (manual pair, no guessing), then extracts. Same bytes already attached elsewhere → 409.
+  **Returns:** `{ transaction, receipt, processing }`.
+- `POST /transactions/:id/receipt/find-in-gmail` — searches every live Gmail mailbox with
+  `after:… before:… ("54.99" OR (merchant (receipt OR invoice OR …)))` over ±7 days of the posted/authorized
+  dates, ingests hits via the normal intake pipeline, extracts up to 5 inline (rest queued), runs matching.
+  **Returns:** `{ search: {query, merchantTerms, amountVariants, from, to}, searchable, mailboxes: [{connectionId, email, messagesFound, newReceipts, error}], hits: [{ receipt, status: 'paired_here'|'candidate'|'processing'|'needs_details'|'paired_elsewhere'|'dismissed', isNew, score, explanations }], paired, transaction }`.
+  A `candidate` hit is paired with the existing `POST /transactions/:id/receipt`.
+- `POST /transactions/:id/receipt/waive` — `{ alwaysForMerchant?, thisBusinessOnly?, note? }` →
+  `{ transaction, rule|null, alsoWaived }` (a merchant rule also waives that merchant's other missing outflows).
+- `GET /transactions/:id/receipt/waiver` → `{ evidence: { kind: 'threshold'|'merchant'|'category'|'manual'|'tracking_cutoff'|'unknown', ruleId, label, note, createdAt } | null }`.
+- `DELETE /transactions/:id/receipt/waiver` — undo a waiver (back to missing) → `{ transaction }`.
+
+---
+
 ## Suggested data model (minimal)
 
 ```

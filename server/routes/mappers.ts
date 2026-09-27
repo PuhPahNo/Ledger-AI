@@ -5,6 +5,7 @@ import type {
   CategorizationReviewItem,
   Connection,
   Receipt,
+  ReceiptWaiverRule,
   Transaction,
 } from '../db/schema.js';
 import type { ApiTransactionTag } from '../services/tagging.js';
@@ -149,6 +150,61 @@ export function toApiCategorizationReviewItem(row: CategorizationReviewItem & { 
     title: row.title,
     detail: row.detail,
     payload: row.payload,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Receipt workflow (match queue, recent matches, waivers)
+// ---------------------------------------------------------------------------------------------
+
+export interface ApiMatchReason {
+  kind: 'amount' | 'date' | 'merchant' | 'card' | 'business';
+  text: string;
+  strength: 'strong' | 'good' | 'weak' | 'conflict';
+  score: number;
+}
+
+export function toApiMatchCandidate(candidate: {
+  transaction: Transaction & { businessKey?: string | null; categoryName?: string | null; categoryTaxCode?: string | null };
+  score: number;
+  reasons: Record<string, number | string>;
+  explanations: ApiMatchReason[];
+  exactAmount: boolean;
+  ambiguous: boolean;
+  suggested: boolean;
+  wouldAutoAttach: boolean;
+  rejected: boolean;
+}) {
+  return {
+    transaction: toApiTransaction({ ...candidate.transaction, businessKey: candidate.transaction.businessKey ?? undefined }),
+    score: candidate.score,
+    reasons: candidate.reasons,
+    explanations: candidate.explanations,
+    exactAmount: candidate.exactAmount,
+    ambiguous: candidate.ambiguous,
+    suggested: candidate.suggested,
+    wouldAutoAttach: candidate.wouldAutoAttach,
+    rejected: candidate.rejected,
+  };
+}
+
+export function toApiWaiverRule(row: ReceiptWaiverRule & { categoryName?: string | null; waivedCount?: number }, label: string) {
+  return {
+    id: row.id,
+    kind: row.kind,
+    enabled: row.enabled,
+    label,
+    businessId: row.businessId,
+    thresholdCents: row.thresholdCents,
+    excludeLodging: row.excludeLodging,
+    merchantPattern: row.merchantPattern,
+    merchantLabel: row.merchantLabel,
+    categoryId: row.categoryId,
+    categoryName: row.categoryName ?? null,
+    note: row.note,
+    waivedCount: row.waivedCount ?? 0,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };

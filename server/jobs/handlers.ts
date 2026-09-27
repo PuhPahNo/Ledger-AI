@@ -1,16 +1,9 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
-import { exportJobs, receipts } from '../db/schema.js';
-import {
-  extractReceipt,
-  isPermanentExtractionFailure,
-  PermanentExtractionError,
-  receiptExtractionUpdate,
-  unsupportedReceiptFileReason,
-  type ReceiptExtraction,
-} from '../services/receiptExtraction.js';
-import { storage } from '../services/storage.js';
-import { matchReceipt, rematchUnmatchedReceipts } from '../services/matching.js';
+import { exportJobs } from '../db/schema.js';
+import { rematchUnmatchedReceipts } from '../services/matching.js';
+import { extractAndMatchReceipt } from '../services/receiptProcessing.js';
+import { backfillWaiverEvidence } from '../services/receiptWaivers.js';
 import { enqueue } from './queue.js';
 import {
   resolveCategorizationReviewItem,
@@ -32,7 +25,11 @@ export async function handleJob(type: string, payload: Record<string, unknown>):
     });
     // New transactions may match receipts that arrived before the charge posted, and
     // modified/removed ones (pending→posted swaps, amount corrections) can free receipts up.
-    if (result.added > 0 || result.changed > 0) await enqueue('receipt.rematch', {});
+    if (result.added > 0 || result.changed > 0) {
+      await enqueue('receipt.rematch', {});
+      // The upsert path can waive receipts by rule but can't record which rule (no row id yet).
+      await enqueue('receipt.waiver-evidence', {});
+    }
     return;
   }
   if (type === 'gmail.sync') {
@@ -54,6 +51,10 @@ export async function handleJob(type: string, payload: Record<string, unknown>):
   }
   if (type === 'receipt.rematch') {
     await rematchUnmatchedReceipts();
+    return;
+  }
+  if (type === 'receipt.waiver-evidence') {
+    await backfillWaiverEvidence();
     return;
   }
   if (type === 'categorization.apply-rule') {
@@ -97,43 +98,4 @@ export async function handleJob(type: string, payload: Record<string, unknown>):
     return;
   }
   throw new Error(`Unknown job type: ${type}`);
-}
-
-async function extractAndMatchReceipt(receiptId: string): Promise<void> {
-  const receipt = await db.query.receipts.findFirst({ where: eq(receipts.id, receiptId) });
-  if (!receipt?.fileKey || !receipt.mimeType || !receipt.fileName) return;
-
-  let extraction: ReceiptExtraction;
-  try {
-    const unsupported = unsupportedReceiptFileReason({ mimeType: receipt.mimeType, fileName: receipt.fileName });
-    if (unsupported) throw new PermanentExtractionError(unsupported);
-    const chunks: Buffer[] = [];
-    const stream = await storage().getStream(receipt.fileKey);
-    for await (const chunk of stream) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    }
-    extraction = await extractReceipt({
-      buffer: Buffer.concat(chunks),
-      mimeType: receipt.mimeType,
-      fileName: receipt.fileName,
-    });
-  } catch (error) {
-    // A receipt with no total/date can never match, and the failed job isn't anywhere the
-    // user looks — leave the reason on the receipt so the workbench can ask for manual entry.
-    await db.update(receipts).set({
-      extractionError: error instanceof Error ? error.message : String(error),
-      updatedAt: new Date(),
-    }).where(eq(receipts.id, receiptId));
-    // Permanent failures (e.g. HEIC) would fail identically — and be billed — on every retry.
-    if (isPermanentExtractionFailure(error)) return;
-    throw error;
-  }
-
-  // Re-read: the user may have edited, paired, or dismissed the receipt while extraction ran.
-  const current = await db.query.receipts.findFirst({ where: eq(receipts.id, receiptId) });
-  if (!current) return;
-  await db.update(receipts)
-    .set({ ...receiptExtractionUpdate(current, extraction), updatedAt: new Date() })
-    .where(eq(receipts.id, receiptId));
-  await matchReceipt(receiptId);
 }

@@ -10,6 +10,7 @@ import { sha256Buffer } from '../lib/crypto.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
 import {
+  explainReceiptMatch,
   matchReceipt,
   mergeUserEditedFields,
   receiptMatchCandidates,
@@ -17,9 +18,14 @@ import {
   unpairReceipt,
 } from '../services/matching.js';
 import { storage, storedFileSecurityHeaders } from '../services/storage.js';
-import { toApiReceipt, toApiTransaction } from './mappers.js';
+import { withExplanations } from '../services/receiptWorkflow.js';
+import { toApiMatchCandidate, toApiReceipt, toApiTransaction } from './mappers.js';
+import { receiptWorkflowRoutes } from './receiptWorkflow.js';
 
 export async function receiptRoutes(app: FastifyInstance): Promise<void> {
+  // Match queue, recent matches, counts, waiver rules, per-transaction receipt actions.
+  await receiptWorkflowRoutes(app);
+
   app.get('/receipts', async (request) => {
     await requireUser(request);
     const query = z.object({
@@ -74,16 +80,10 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
   app.get('/receipts/:id/candidates', async (request) => {
     await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
-    const candidates = await receiptMatchCandidates(params.id);
-    return candidates.map((candidate) => ({
-      transaction: toApiTransaction(candidate.transaction as any),
-      score: candidate.score,
-      reasons: candidate.reasons,
-      exactAmount: candidate.exactAmount,
-      ambiguous: candidate.ambiguous,
-      suggested: candidate.suggested,
-      wouldAutoAttach: candidate.wouldAutoAttach,
-    }));
+    const receipt = await db.query.receipts.findFirst({ where: eq(receipts.id, params.id) });
+    if (!receipt) return [];
+    // Same shape as before plus `explanations` (human-readable reasons) and `rejected`.
+    return withExplanations(receipt, await receiptMatchCandidates(params.id)).map(toApiMatchCandidate);
   });
 
   app.patch('/receipts/:id', async (request) => {
@@ -193,6 +193,7 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
           attached: result.attached,
           score: result.score,
           transaction: toApiTransaction(result.transaction as any),
+          explanations: explainReceiptMatch(receipt, result.transaction, result.accountMask ?? null, result.reasons),
         }
         : null,
     };

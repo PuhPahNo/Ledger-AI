@@ -218,3 +218,97 @@ function subjectSlug(subject?: string): string {
     .slice(0, 48)
     .toLowerCase();
 }
+
+// ---------------------------------------------------------------------------------------------
+// "Find in Gmail" for one transaction
+// ---------------------------------------------------------------------------------------------
+
+export interface TransactionGmailQuery {
+  /** The Gmail search string. */
+  query: string;
+  /** Merchant word(s) searched for (first one is used in the query). */
+  merchantTerms: string[];
+  /** Amount spellings searched for, e.g. ["54.99"] or ["1234.50", "1,234.50"]. */
+  amountVariants: string[];
+  /** Inclusive first day searched (YYYY-MM-DD). */
+  from: string;
+  /** Inclusive last day searched (YYYY-MM-DD). */
+  to: string;
+}
+
+const descriptorPrefix = /^(sq|tst|sp|pp|paypal|py|dd|in|pos|ach|chk|debit|purchase)\s*\*\s*/i;
+const merchantStopWords = new Set([
+  'inc', 'llc', 'ltd', 'corp', 'com', 'www', 'the', 'and', 'payment', 'payments', 'purchase', 'pos',
+  'debit', 'credit', 'card', 'online', 'store', 'recurring', 'autopay', 'ach', 'bill', 'billing',
+  'subscription', 'usa', 'pmt', 'pymt', 'corporation', 'company', 'http', 'https', 'net', 'org',
+  'mktp', 'marketplace', 'intl', 'international', 'svc', 'services', 'service', 'charge', 'fee',
+  'help', 'visa', 'mastercard', 'amex', 'transaction', 'trans', 'order',
+]);
+const merchantAliases: Record<string, string> = {
+  amzn: 'amazon',
+  goog: 'google',
+  msft: 'microsoft',
+  aapl: 'apple',
+  fb: 'facebook',
+};
+
+/** Distinctive words of a bank descriptor, most useful first: "SQ *BLUE BOTTLE #12" → ["blue", "bottle"]. */
+export function merchantSearchTerms(merchant: string): string[] {
+  const words = merchant
+    .toLowerCase()
+    .replace(descriptorPrefix, '')
+    .replace(/\.(com|net|org|io|ai|co|app)\b/g, ' ')
+    .split(/[^a-z0-9]+/)
+    .map((word) => merchantAliases[word] ?? word)
+    .filter((word) => word.length >= 3 && !/\d/.test(word) && !merchantStopWords.has(word));
+  return [...new Set(words)].slice(0, 3);
+}
+
+/** How a total can appear in an email: "54.99", and with a thousands separator when ≥ $1,000. */
+export function amountSearchVariants(amountCents: number): string[] {
+  const cents = Math.abs(Math.trunc(amountCents));
+  if (cents === 0) return [];
+  const dollars = Math.floor(cents / 100);
+  const fraction = String(cents % 100).padStart(2, '0');
+  const plain = `${dollars}.${fraction}`;
+  const grouped = `${dollars.toLocaleString('en-US')}.${fraction}`;
+  return plain === grouped ? [plain] : [plain, grouped];
+}
+
+function shiftIsoDate(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function gmailDate(date: string): string {
+  return date.replace(/-/g, '/');
+}
+
+/**
+ * Gmail search for the receipt of one card transaction: within ±`windowDays` of the charge
+ * (posted or authorized date), an email mentioning the exact amount OR the merchant name alongside
+ * receipt wording. Gmail's `before:` is exclusive, hence the extra day.
+ */
+export function buildTransactionGmailQuery(input: {
+  merchant: string;
+  amountCents: number;
+  date: string;
+  authorizedDate?: string | null;
+  windowDays?: number;
+}): TransactionGmailQuery {
+  const windowDays = input.windowDays ?? 7;
+  const dates = [input.date, input.authorizedDate].filter((value): value is string => Boolean(value)).sort();
+  const from = shiftIsoDate(dates[0]!, -windowDays);
+  const to = shiftIsoDate(dates[dates.length - 1]!, windowDays);
+  const merchantTerms = merchantSearchTerms(input.merchant);
+  const amountVariants = amountSearchVariants(input.amountCents);
+
+  const clauses = [
+    ...amountVariants.map((variant) => `"${variant}"`),
+    ...(merchantTerms[0] ? [`(${merchantTerms[0]} (receipt OR invoice OR order OR payment OR billing OR subscription))`] : []),
+  ];
+  const window = `after:${gmailDate(from)} before:${gmailDate(shiftIsoDate(to, 1))}`;
+  const query = clauses.length > 0 ? `${window} (${clauses.join(' OR ')})` : window;
+  return { query, merchantTerms, amountVariants, from, to };
+}

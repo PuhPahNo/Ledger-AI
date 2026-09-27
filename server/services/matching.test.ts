@@ -371,6 +371,26 @@ describe('attach/unpair invariants', () => {
     expectConsistent(open);
   });
 
+  it('auto mode may fill a waived transaction (a receipt that turns up anyway) but not an n/a one', () => {
+    const waived = world([], ['T'], ['R']);
+    waived.transactions.get('T')!.receiptStatus = 'waived';
+    expect(attach(waived, 'R', 'T', 'auto')).toMatchObject({ ok: true });
+    expect(waived.transactions.get('T')!.receiptStatus).toBe('matched');
+    expectConsistent(waived);
+    const inflow = world([], ['T'], ['R']);
+    inflow.transactions.get('T')!.receiptStatus = 'n/a';
+    expect(attach(inflow, 'R', 'T', 'auto')).toEqual({ ok: false, reason: 'transaction_not_open' });
+  });
+
+  it('undoing an auto pair (recently matched → undo) rejects it so the matcher never re-pairs it', () => {
+    const w = world([], ['T'], ['R']);
+    attach(w, 'R', 'T', 'auto');
+    unpair(w, 'R');
+    expect(w.rejected.has('R:T')).toBe(true);
+    expect(w.receipts.get('R')).toMatchObject({ transactionId: null, status: 'pending' });
+    expectConsistent(w);
+  });
+
   it('unpair resets both sides and remembers the rejection', () => {
     const w = world([['R', 'T']]);
     unpair(w, 'R');

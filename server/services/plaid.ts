@@ -32,6 +32,7 @@ import {
 import { createAiCategorySuggestionReview } from './categorizationFeedback.js';
 import { applyTagRulesBestEffort } from './tagging.js';
 import { getReceiptTrackingSince } from './appSettings.js';
+import { receiptWaiverForNewTransaction } from './receiptWaivers.js';
 
 export const PLAID_TRANSACTION_HISTORY_DAYS = 365;
 
@@ -543,6 +544,7 @@ async function upsertTransaction(
     appliedCategoryId,
     raw.date,
     options.receiptTrackingSince ?? null,
+    { merchant: raw.merchant_name ?? raw.name ?? 'Unknown merchant', businessId },
   );
   const sourceLabel = account ? `${account.name}${account.mask ? ` ${account.mask}` : ''}` : `Plaid ${connectionId.slice(0, 8)}`;
 
@@ -669,6 +671,7 @@ async function receiptStatusForPlaidTransaction(
   categoryId: string | null,
   date: string | null | undefined,
   receiptTrackingSince: string | null,
+  subject?: { merchant: string; businessId: string },
 ): Promise<'missing' | 'n/a' | 'waived'> {
   if (amountCents >= 0) return 'n/a';
   if (categoryId) {
@@ -677,6 +680,8 @@ async function receiptStatusForPlaidTransaction(
   }
   // Spend that predates receipt tracking isn't expected to have a receipt.
   if (receiptTrackingSince && date && date < receiptTrackingSince) return 'waived';
+  // "No receipt needed" rules (under-$X, merchant, category); evidence is recorded after sync.
+  if (subject && await receiptWaiverForNewTransaction({ amountCents, categoryId, ...subject })) return 'waived';
   return 'missing';
 }
 
