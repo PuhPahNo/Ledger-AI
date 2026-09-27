@@ -24,22 +24,22 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   app.post('/auth/login', { config: { rateLimit: LOGIN_RATE_LIMIT } }, async (request, reply) => {
     const body = loginSchema.parse(request.body);
-    loginThrottle.assertNotLocked(body.username);
+    loginThrottle.assertNotLocked(body.username, request.ip);
     const user = await db.query.users.findFirst({
       where: and(eq(users.username, body.username), eq(users.active, true)),
     });
     if (!user || !(await verifyPassword(user.passwordHash, body.password))) {
-      loginThrottle.recordFailure(body.username);
+      loginThrottle.recordFailure(body.username, request.ip);
       unauthorized('Invalid username or password');
     }
     if (user.totpEnabled) {
       if (!body.totpCode) return { requiresTotp: true };
       if (!user.totpSecret || !verifyTotpForUser(user.id, user.totpSecret, body.totpCode)) {
-        loginThrottle.recordFailure(body.username);
+        loginThrottle.recordFailure(body.username, request.ip);
         unauthorized('Invalid two-factor code');
       }
     }
-    loginThrottle.recordSuccess(body.username);
+    loginThrottle.recordSuccess(body.username, request.ip);
     await createSession(reply, user);
     await db.update(users).set({ lastLoginAt: new Date(), updatedAt: new Date() }).where(eq(users.id, user.id));
     await audit(request, {

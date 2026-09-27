@@ -85,4 +85,42 @@ function normalize(username: string): string {
   return username.trim().toLowerCase();
 }
 
-export const loginThrottle = new LoginThrottle();
+/**
+ * Two layers so a stranger can't lock the owner out by typing wrong passwords from their
+ * own IP: 5 failures lock that username *from that IP*, while a much higher per-username
+ * ceiling still stops a distributed guessing run.
+ */
+export const LOGIN_MAX_FAILURES_PER_USERNAME = 30;
+
+export class LayeredLoginThrottle {
+  constructor(
+    private readonly perSource = new LoginThrottle(),
+    private readonly perUsername = new LoginThrottle(LOGIN_MAX_FAILURES_PER_USERNAME),
+  ) {}
+
+  assertNotLocked(username: string, ip: string): void {
+    this.perSource.assertNotLocked(sourceKey(username, ip));
+    this.perUsername.assertNotLocked(username);
+  }
+
+  recordFailure(username: string, ip: string): void {
+    this.perSource.recordFailure(sourceKey(username, ip));
+    this.perUsername.recordFailure(username);
+  }
+
+  recordSuccess(username: string, ip: string): void {
+    this.perSource.recordSuccess(sourceKey(username, ip));
+    this.perUsername.recordSuccess(username);
+  }
+
+  reset(): void {
+    this.perSource.reset();
+    this.perUsername.reset();
+  }
+}
+
+function sourceKey(username: string, ip: string): string {
+  return `${username}\u0000${ip}`;
+}
+
+export const loginThrottle = new LayeredLoginThrottle();

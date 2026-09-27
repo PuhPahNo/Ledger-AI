@@ -1,6 +1,6 @@
 import { generateSync } from 'otplib';
 import { describe, expect, it } from 'vitest';
-import { LoginThrottle } from './loginThrottle.js';
+import { LoginThrottle, LayeredLoginThrottle } from './loginThrottle.js';
 import { OAUTH_STATE_TTL_MS, signOAuthState, verifyOAuthState } from './oauthState.js';
 import { createTotpSecret, resetTotpReplayCache, verifyTotpForUser } from './totp.js';
 
@@ -89,5 +89,16 @@ describe('verifyTotpForUser', () => {
     const next = generateSync({ secret: totpSecret, epoch: epoch + 30 });
     expect(verifyTotpForUser('user-1', totpSecret, next, epoch + 30)).toBe(true);
     expect(verifyTotpForUser('user-1', totpSecret, '000000', epoch + 60)).toBe(false);
+  });
+});
+
+describe('LayeredLoginThrottle', () => {
+  it('locks a username only from the IP that failed, until the per-username ceiling', () => {
+    const throttle = new LayeredLoginThrottle(new LoginThrottle(5), new LoginThrottle(30));
+    for (let i = 0; i < 5; i += 1) throttle.recordFailure('owner', '203.0.113.9');
+    expect(() => throttle.assertNotLocked('owner', '203.0.113.9')).toThrow();
+    expect(() => throttle.assertNotLocked('owner', '198.51.100.1')).not.toThrow();
+    for (let i = 0; i < 25; i += 1) throttle.recordFailure('owner', `10.0.0.${i}`);
+    expect(() => throttle.assertNotLocked('owner', '198.51.100.1')).toThrow();
   });
 });

@@ -184,7 +184,10 @@ async function handlePlaidWebhook(request: FastifyRequest) {
     updatedAt: new Date(),
   }).where(eq(connections.id, connection.id));
 
-  if (body.webhook_type === 'TRANSACTIONS') {
+  // LOGIN_REPAIRED: the bank login works again, so sync now — a successful sync flips the
+  // connection from 'reauth' back to 'live'.
+  const loginRepaired = body.webhook_type === 'ITEM' && body.webhook_code === 'LOGIN_REPAIRED';
+  if (body.webhook_type === 'TRANSACTIONS' || (loginRepaired && connection.status !== 'disconnected')) {
     await enqueue('plaid.sync', { connectionId: connection.id });
   }
 
