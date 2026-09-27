@@ -47,9 +47,21 @@ export function TagTrendsCard({ from, to, onViewChange }: Props) {
       setSeries([]);
       return;
     }
+    // Toggling chips or the date range fires overlapping requests; only the latest
+    // one may write state, or a slow stale response would repaint the old selection.
+    let cancelled = false;
     getTagTrends({ tagIds: selectedIds, from, to })
-      .then(setSeries)
-      .catch((loadError: Error) => setError(loadError.message));
+      .then((rows) => {
+        if (cancelled) return;
+        setSeries(rows);
+        setError('');
+      })
+      .catch((loadError: Error) => {
+        if (!cancelled) setError(loadError.message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [from, selectedIds, to]);
 
   const toggleTag = (tagId: string) => {

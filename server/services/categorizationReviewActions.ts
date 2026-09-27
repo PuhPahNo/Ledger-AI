@@ -12,15 +12,15 @@ import {
   type CategorizationReviewType,
   type Transaction,
 } from '../db/schema.js';
-import { normalize } from './categorization.js';
+import {
+  PROTECTED_CATEGORY_SOURCES,
+  invalidateAiCategorizationCache,
+  merchantPrefilterSql,
+  normalize,
+} from './categorization.js';
 import { applyTagRulesBestEffort } from './tagging.js';
 
-/** Sources that represent explicit human judgment — never silently overwritten. */
-export const PROTECTED_CATEGORY_SOURCES: ReadonlySet<string> = new Set([
-  'manual',
-  'user_confirmed_rule',
-  'receipt_evidence',
-]);
+export { PROTECTED_CATEGORY_SOURCES };
 
 export async function acceptLearningRule(item: CategorizationReviewItem, userId?: string): Promise<{
   appliedCount: number;
@@ -95,6 +95,12 @@ export async function applyReviewItemCategory(
   item: CategorizationReviewItem,
   source: CategorySource,
   userId?: string,
+  options: {
+    confidence?: number;
+    evidence?: Record<string, unknown>;
+    /** A human picked a category the AI cache may disagree with — drop the stale verdict. */
+    invalidateAiCache?: boolean;
+  } = {},
 ): Promise<number> {
   const categoryId = item.payload.proposedCategoryId;
   const ids = [
@@ -111,13 +117,15 @@ export async function applyReviewItemCategory(
       transaction,
       newCategoryId: categoryId,
       source,
-      confidence: item.payload.confidence ?? 1,
+      confidence: options.confidence ?? item.payload.confidence ?? 1,
       evidence: {
         reviewItemId: item.id,
         ...(item.payload.evidence ?? {}),
+        ...(options.evidence ?? {}),
       },
       userId,
     });
+    if (options.invalidateAiCache) await invalidateAiCategorizationCache(transaction);
     count += 1;
   }
   return count;
@@ -234,38 +242,37 @@ export async function countRuleMatches(
   };
 }
 
-async function upsertMerchantRule(input: {
+/**
+ * Learned merchant rules are one-per-(business, pattern). A single INSERT … ON CONFLICT
+ * against the partial unique index (migration 0023) so two concurrent accepts can't
+ * insert duplicates. Accepting a learn prompt is an explicit human confirmation.
+ */
+export async function upsertMerchantRule(input: {
   businessId: string;
   categoryId: string;
   pattern: string;
 }): Promise<void> {
-  const existing = await db.query.categoryRules.findFirst({
-    where: and(
-      eq(categoryRules.businessId, input.businessId),
-      eq(categoryRules.matchKind, 'merchant_exact'),
-      eq(categoryRules.pattern, input.pattern),
-    ),
-  });
-  if (existing) {
-    await db
-      .update(categoryRules)
-      .set({
+  await db
+    .insert(categoryRules)
+    .values({
+      businessId: input.businessId,
+      categoryId: input.categoryId,
+      matchKind: 'merchant_exact',
+      pattern: input.pattern,
+      priority: 1,
+      createdByAi: false,
+      userConfirmed: true,
+    })
+    .onConflictDoUpdate({
+      target: [categoryRules.businessId, categoryRules.pattern],
+      targetWhere: sql.raw(`match_kind = 'merchant_exact' AND business_id IS NOT NULL`),
+      set: {
         categoryId: input.categoryId,
         priority: 1,
-        createdByAi: false,
+        userConfirmed: true,
         updatedAt: new Date(),
-      })
-      .where(eq(categoryRules.id, existing.id));
-    return;
-  }
-  await db.insert(categoryRules).values({
-    businessId: input.businessId,
-    categoryId: input.categoryId,
-    matchKind: 'merchant_exact',
-    pattern: input.pattern,
-    priority: 1,
-    createdByAi: false,
-  });
+      },
+    });
 }
 
 async function matchingTransactions(businessId: string, normalizedMerchant: string): Promise<Array<{
@@ -275,7 +282,9 @@ async function matchingTransactions(businessId: string, normalizedMerchant: stri
   categorySource: string;
 }>> {
   // Merchant normalization (processor prefixes, store numbers) lives in normalize() and is
-  // too fiddly to mirror in SQL — pull the business's spend and filter in JS instead.
+  // too fiddly to mirror exactly in SQL. SQL narrows to this business's spend whose raw
+  // merchant contains every pattern word (a superset of the true matches); the exact
+  // normalize() comparison then runs in JS on that small set.
   const rows = await db
     .select({
       id: transactions.id,
@@ -289,6 +298,7 @@ async function matchingTransactions(businessId: string, normalizedMerchant: stri
     .where(and(
       eq(transactions.businessId, businessId),
       sql`${transactions.amountCents} < 0`,
+      merchantPrefilterSql(transactions.merchant, normalizedMerchant),
     ))
     .orderBy(desc(transactions.date), asc(transactions.id));
   return rows

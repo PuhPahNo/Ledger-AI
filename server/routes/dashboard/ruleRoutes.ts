@@ -4,10 +4,17 @@ import { z } from 'zod';
 import { requireUser } from '../../auth/session.js';
 import { db } from '../../db/client.js';
 import { businesses, categories, categoryRules, transactions } from '../../db/schema.js';
-import { notFound } from '../../lib/errors.js';
+import { badRequest, notFound } from '../../lib/errors.js';
 import { audit } from '../../services/audit.js';
-import { categoryMatchesTransactionDirection, ruleMatches } from '../../services/categorization.js';
+import {
+  categoryMatchesTransactionDirection,
+  compareRulePrecedence,
+  merchantPrefilterSql,
+  ruleMatches,
+  validateRuleCategory,
+} from '../../services/categorization.js';
 import { PROTECTED_CATEGORY_SOURCES, updateTransactionCategory } from '../../services/categorizationReviewActions.js';
+import { plaidCategoryHints } from '../../services/receiptCategoryEvidence.js';
 
 /**
  * The rules engine was previously write-only: rules were learned from review prompts but
@@ -35,10 +42,13 @@ export function registerRuleRoutes(app: FastifyInstance): void {
         ? or(eq(categoryRules.businessId, selectedBusiness.id), isNull(categoryRules.businessId))
         : sql`true`)
       .orderBy(asc(categoryRules.priority), asc(categories.name));
+    // Same precedence the engine uses, so the list reads top-to-bottom as "first match wins".
+    rows.sort((a, b) => compareRulePrecedence(a.rule, b.rule) || a.categoryName.localeCompare(b.categoryName));
 
-    const spend = await spendTransactionsForStats();
+    const spend = await spendGroupsForStats();
+    const amountRangeStats = await amountRangeHitStats(rows.map(({ rule }) => rule));
     return rows.map(({ rule, categoryName, businessKey, businessName }) => {
-      const stats = ruleHitStats(rule, spend);
+      const stats = amountRangeStats.get(rule.id) ?? ruleHitStats(rule, spend);
       return {
         id: rule.id,
         businessId: rule.businessId,
@@ -50,6 +60,7 @@ export function registerRuleRoutes(app: FastifyInstance): void {
         pattern: rule.pattern,
         priority: rule.priority,
         createdByAi: rule.createdByAi,
+        userConfirmed: rule.userConfirmed,
         createdAt: rule.createdAt.toISOString(),
         updatedAt: rule.updatedAt.toISOString(),
         ...stats,
@@ -57,16 +68,29 @@ export function registerRuleRoutes(app: FastifyInstance): void {
     });
   });
 
+  // Priority is ordering only; trust ('user_confirmed') is its own flag. Re-pointing a
+  // rule at a new category is an explicit human decision, so it confirms the rule.
   app.patch('/categorization/rules/:id', async (request) => {
     const user = await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const body = z.object({
       categoryId: z.string().uuid().optional(),
       priority: z.number().int().min(0).max(1000).optional(),
+      userConfirmed: z.boolean().optional(),
     }).parse(request.body);
+
+    const rule = await db.query.categoryRules.findFirst({ where: eq(categoryRules.id, params.id) });
+    if (!rule) notFound('Rule not found');
+    const categoryChanged = body.categoryId !== undefined && body.categoryId !== rule.categoryId;
+    if (categoryChanged) await assertRuleCategoryValid(rule.businessId, body.categoryId!, rule.categoryId);
+
     const [updated] = await db
       .update(categoryRules)
-      .set({ ...body, createdByAi: false, updatedAt: new Date() })
+      .set({
+        ...body,
+        ...(categoryChanged && body.userConfirmed === undefined ? { userConfirmed: true } : {}),
+        updatedAt: new Date(),
+      })
       .where(eq(categoryRules.id, params.id))
       .returning();
     if (!updated) notFound('Rule not found');
@@ -98,12 +122,15 @@ export function registerRuleRoutes(app: FastifyInstance): void {
     const category = await db.query.categories.findFirst({ where: eq(categories.id, rule.categoryId) });
     if (!category) notFound('Rule category not found');
 
+    const isMerchantRule = rule.matchKind === 'merchant_exact' || rule.matchKind === 'merchant_contains';
     const candidates = await db
       .select()
       .from(transactions)
       .where(and(
         rule.businessId ? eq(transactions.businessId, rule.businessId) : sql`true`,
         sql`${transactions.categoryId} IS DISTINCT FROM ${rule.categoryId}`,
+        // Safe superset prefilter; ruleMatches() below is still the source of truth.
+        isMerchantRule ? merchantPrefilterSql(transactions.merchant, rule.pattern) : sql`true`,
       ));
 
     let appliedCount = 0;
@@ -113,6 +140,7 @@ export function registerRuleRoutes(app: FastifyInstance): void {
         matchKind: rule.matchKind,
         pattern: rule.pattern,
         merchant: transaction.merchant,
+        plaidCategory: plaidCategoryHints(transaction.raw).join(' '),
         amountCents: transaction.amountCents,
       })) continue;
       if (!categoryMatchesTransactionDirection(category, transaction.amountCents)) continue;
@@ -140,31 +168,61 @@ export function registerRuleRoutes(app: FastifyInstance): void {
   });
 }
 
-interface SpendRow {
-  businessId: string;
-  merchant: string;
-  amountCents: number;
-  categoryId: string | null;
+/** Rejects (400) a category the rule can't use: wrong business, archived, or wrong direction. */
+export async function assertRuleCategoryValid(
+  ruleBusinessId: string | null,
+  categoryId: string,
+  previousCategoryId?: string | null,
+): Promise<void> {
+  const [category, previousCategory] = await Promise.all([
+    db.query.categories.findFirst({ where: eq(categories.id, categoryId) }),
+    previousCategoryId ? db.query.categories.findFirst({ where: eq(categories.id, previousCategoryId) }) : null,
+  ]);
+  if (!category) notFound('Category not found');
+  const error = validateRuleCategory({ ruleBusinessId, category, previousCategory });
+  if (error) badRequest(error);
 }
 
-async function spendTransactionsForStats(): Promise<SpendRow[]> {
-  return db
+interface SpendGroup {
+  businessId: string;
+  merchant: string;
+  categoryId: string | null;
+  plaidHints: string;
+  count: number;
+}
+
+/**
+ * Outflows grouped by (business, merchant, category, Plaid hints) — the only inputs the
+ * merchant and plaid_category matchers read — so the rules list scans distinct merchants
+ * instead of shipping every spend row to JS. Amount-range rules are counted in SQL.
+ */
+async function spendGroupsForStats(): Promise<SpendGroup[]> {
+  const plaidHints = sql<string>`concat_ws(' ',
+    (SELECT string_agg(value, ' ') FROM jsonb_array_elements_text(
+      CASE WHEN jsonb_typeof(${transactions.raw}->'category') = 'array' THEN ${transactions.raw}->'category' ELSE '[]'::jsonb END
+    )),
+    ${transactions.raw}->'personal_finance_category'->>'primary',
+    ${transactions.raw}->'personal_finance_category'->>'detailed',
+    ${transactions.raw}->'personal_finance_category'->>'confidence_level'
+  )`;
+  const rows = await db
     .select({
       businessId: transactions.businessId,
       merchant: transactions.merchant,
-      amountCents: transactions.amountCents,
       categoryId: transactions.categoryId,
+      plaidHints,
+      count: sql<number>`count(*)::int`,
     })
     .from(transactions)
-    .where(sql`${transactions.amountCents} < 0`);
+    .where(sql`${transactions.amountCents} < 0`)
+    .groupBy(transactions.businessId, transactions.merchant, transactions.categoryId, plaidHints);
+  return rows.map((row) => ({ ...row, plaidHints: row.plaidHints ?? '', count: Number(row.count) }));
 }
 
-function ruleHitStats(
-  rule: { businessId: string | null; categoryId: string; matchKind: string; pattern: string },
-  spend: SpendRow[],
-): { matchCount: number | null; mismatchCount: number | null } {
-  // plaid_category rules match on Plaid hints we don't keep denormalized — no cheap count.
-  if (rule.matchKind === 'plaid_category') return { matchCount: null, mismatchCount: null };
+type StatsRule = { id: string; businessId: string | null; categoryId: string; matchKind: string; pattern: string };
+type HitStats = { matchCount: number | null; mismatchCount: number | null };
+
+export function ruleHitStats(rule: StatsRule, spend: SpendGroup[]): HitStats {
   let matchCount = 0;
   let mismatchCount = 0;
   for (const row of spend) {
@@ -173,10 +231,39 @@ function ruleHitStats(
       matchKind: rule.matchKind,
       pattern: rule.pattern,
       merchant: row.merchant,
-      amountCents: row.amountCents,
+      plaidCategory: row.plaidHints,
+      amountCents: -1,
     })) continue;
-    matchCount += 1;
-    if (row.categoryId && row.categoryId !== rule.categoryId) mismatchCount += 1;
+    matchCount += row.count;
+    if (row.categoryId && row.categoryId !== rule.categoryId) mismatchCount += row.count;
   }
   return { matchCount, mismatchCount };
+}
+
+async function amountRangeHitStats(rules: StatsRule[]): Promise<Map<string, HitStats>> {
+  const stats = new Map<string, HitStats>();
+  for (const rule of rules) {
+    if (rule.matchKind !== 'amount_range') continue;
+    const [rawMin, rawMax] = rule.pattern.split('..');
+    const min = rawMin ? Number(rawMin) : null;
+    const max = rawMax ? Number(rawMax) : null;
+    if ((min !== null && !Number.isFinite(min)) || (max !== null && !Number.isFinite(max))) {
+      stats.set(rule.id, { matchCount: 0, mismatchCount: 0 });
+      continue;
+    }
+    const [row] = await db
+      .select({
+        matchCount: sql<number>`count(*)::int`,
+        mismatchCount: sql<number>`count(*) FILTER (WHERE ${transactions.categoryId} IS NOT NULL AND ${transactions.categoryId} <> ${rule.categoryId})::int`,
+      })
+      .from(transactions)
+      .where(and(
+        sql`${transactions.amountCents} < 0`,
+        rule.businessId ? eq(transactions.businessId, rule.businessId) : sql`true`,
+        min !== null ? sql`abs(${transactions.amountCents}) >= ${min}` : sql`true`,
+        max !== null ? sql`abs(${transactions.amountCents}) <= ${max}` : sql`true`,
+      ));
+    stats.set(rule.id, { matchCount: Number(row?.matchCount ?? 0), mismatchCount: Number(row?.mismatchCount ?? 0) });
+  }
+  return stats;
 }

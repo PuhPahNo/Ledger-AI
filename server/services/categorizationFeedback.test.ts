@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { canAutoOverwriteCategorySource, receiptEvidenceCanAutoApply } from './categorizationFeedback.js';
+import {
+  acceptedAiSuggestionEvidence,
+  canAutoOverwriteCategorySource,
+  receiptEvidenceCanAutoApply,
+} from './categorizationFeedback.js';
+import { isProtectedCategorySource } from './categorization.js';
 
 describe('receiptEvidenceCanAutoApply', () => {
   it('allows strong receipt evidence to overwrite auto-applied categories', () => {
@@ -41,5 +46,19 @@ describe('receiptEvidenceCanAutoApply', () => {
       categoryConfidence: 0.79,
       categorySource: 'auto_rule',
     })).toBe(false);
+  });
+});
+
+describe('accepting an AI suggestion', () => {
+  it('stores it under a protected source while keeping AI provenance in the evidence', () => {
+    // resolveCategorizationReviewItem applies accepted AI suggestions as 'manual'.
+    expect(isProtectedCategorySource('manual')).toBe(true);
+    expect(canAutoOverwriteCategorySource('manual')).toBe(false);
+    expect(isProtectedCategorySource('ai_suggested')).toBe(false);
+    expect(acceptedAiSuggestionEvidence(0.72)).toEqual({
+      acceptedAiSuggestion: true,
+      aiConfidence: 0.72,
+      source: 'review_center',
+    });
   });
 });

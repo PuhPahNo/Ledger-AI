@@ -1,10 +1,11 @@
-import { asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   categories,
   receipts,
   tagRules,
   tags,
+  transactionTagSuppressions,
   transactionTags,
   transactions,
   type Receipt,
@@ -48,10 +49,21 @@ export function tagRuleMatches(
   return false;
 }
 
+/** Two tag rules are the same rule when their normalized patterns agree. */
+export function tagRuleDedupeKey(rule: Pick<TagRule, 'matchKind' | 'pattern'>): string {
+  return `${rule.matchKind}:${normalize(rule.pattern)}`;
+}
+
+/** Drop tags the user explicitly removed from this transaction. */
+export function withoutSuppressedTags(tagIds: Iterable<string>, suppressedTagIds: ReadonlySet<string>): string[] {
+  return Array.from(tagIds).filter((tagId) => !suppressedTagIds.has(tagId));
+}
+
 /**
  * Evaluate every active tag's rules against one transaction and insert any missing links
  * with source 'auto'. Category and receipt data are loaded only when an active rule needs
- * them. Existing rows are left untouched, so manual tags are never downgraded.
+ * them. Existing rows are left untouched, so manual tags are never downgraded, and tags
+ * the user removed from this transaction (transaction_tag_suppressions) are never re-added.
  */
 export async function applyTagRulesToTransaction(txOrId: Transaction | string): Promise<void> {
   const txn = typeof txOrId === 'string'
@@ -82,9 +94,19 @@ export async function applyTagRulesToTransaction(txOrId: Transaction | string): 
   }
   if (matchedTagIds.size === 0) return;
 
+  const suppressed = await db
+    .select({ tagId: transactionTagSuppressions.tagId })
+    .from(transactionTagSuppressions)
+    .where(and(
+      eq(transactionTagSuppressions.transactionId, txn.id),
+      inArray(transactionTagSuppressions.tagId, Array.from(matchedTagIds)),
+    ));
+  const tagIds = withoutSuppressedTags(matchedTagIds, new Set(suppressed.map((row) => row.tagId)));
+  if (tagIds.length === 0) return;
+
   await db
     .insert(transactionTags)
-    .values(Array.from(matchedTagIds, (tagId) => ({
+    .values(tagIds.map((tagId) => ({
       transactionId: txn.id,
       tagId,
       source: 'auto' as const,
@@ -108,6 +130,9 @@ export async function applyTagRulesBestEffort(txOrId: Transaction | string): Pro
  * history behavior. Inserts are chunked and conflict-safe; manual tags are never touched.
  */
 export async function applyTagRulesToHistory(tagId: string): Promise<number> {
+  // A paused tag's rules are dormant everywhere, history included.
+  const tag = await db.query.tags.findFirst({ where: eq(tags.id, tagId) });
+  if (!tag?.active) return 0;
   const rules = await db.select().from(tagRules).where(eq(tagRules.tagId, tagId));
   if (rules.length === 0) return 0;
 
@@ -122,7 +147,12 @@ export async function applyTagRulesToHistory(tagId: string): Promise<number> {
     })
     .from(transactions)
     .leftJoin(categories, eq(transactions.categoryId, categories.id))
-    .leftJoin(receipts, eq(transactions.receiptId, receipts.id));
+    .leftJoin(receipts, eq(transactions.receiptId, receipts.id))
+    .where(sql`NOT EXISTS (
+      SELECT 1 FROM ${transactionTagSuppressions}
+      WHERE ${transactionTagSuppressions.transactionId} = ${transactions.id}
+        AND ${transactionTagSuppressions.tagId} = ${tagId}
+    )`);
   const matchedIds = rows
     .filter((row) => rules.some((rule) => tagRuleMatches(rule, {
       merchant: row.merchant,

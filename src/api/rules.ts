@@ -11,9 +11,11 @@ export interface CategoryRuleRow {
   pattern: string;
   priority: number;
   createdByAi: boolean;
+  /** A person created or confirmed this rule — its hits are protected from auto-overwrites. */
+  userConfirmed: boolean;
   createdAt: string;
   updatedAt: string;
-  /** Spend transactions this rule currently matches; null when uncountable (plaid_category). */
+  /** Spend transactions this rule currently matches. */
   matchCount: number | null;
   /** Matches whose current category differs from the rule's target. */
   mismatchCount: number | null;
@@ -34,6 +36,7 @@ export function listCategoryRules(biz?: string): Promise<CategoryRuleRow[]> {
         pattern: 'figma',
         priority: 1,
         createdByAi: false,
+        userConfirmed: true,
         createdAt: now,
         updatedAt: now,
         matchCount: 12,
@@ -47,7 +50,7 @@ export function listCategoryRules(biz?: string): Promise<CategoryRuleRow[]> {
 
 export function patchCategoryRule(
   ruleId: string,
-  body: { categoryId?: string; priority?: number },
+  body: { categoryId?: string; priority?: number; userConfirmed?: boolean },
 ): Promise<{ ok: true }> {
   if (useMockApi) return Promise.resolve({ ok: true });
   return http<{ ok: true }>(`/categorization/rules/${ruleId}`, {

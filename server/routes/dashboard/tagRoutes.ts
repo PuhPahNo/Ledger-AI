@@ -3,10 +3,10 @@ import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../../auth/session.js';
 import { db } from '../../db/client.js';
-import { tagRules, tags, transactionTags, transactions } from '../../db/schema.js';
+import { tagRules, tags, transactionTagSuppressions, transactionTags, transactions } from '../../db/schema.js';
 import { badRequest, conflict, notFound } from '../../lib/errors.js';
 import { audit } from '../../services/audit.js';
-import { applyTagRulesToHistory, tagsByTransactionId } from '../../services/tagging.js';
+import { applyTagRulesToHistory, tagRuleDedupeKey, tagsByTransactionId } from '../../services/tagging.js';
 import { dateFromIso, isoDate, parseList } from './helpers.js';
 
 const TRENDS_MAX_TAGS = 10;
@@ -98,14 +98,15 @@ export function registerTagRoutes(app: FastifyInstance): void {
     }).parse(request.body);
     const tag = await db.query.tags.findFirst({ where: eq(tags.id, params.id) });
     if (!tag) notFound('Tag not found');
-    const existing = await db.query.tagRules.findFirst({
-      where: and(
-        eq(tagRules.tagId, params.id),
-        eq(tagRules.matchKind, body.matchKind),
-        eq(tagRules.pattern, body.pattern),
-      ),
-    });
-    if (existing) conflict('An identical rule already exists for this tag');
+    // Rules match on normalized text, so "OpenAI" and "openai." are the same rule.
+    const siblings = await db
+      .select({ matchKind: tagRules.matchKind, pattern: tagRules.pattern })
+      .from(tagRules)
+      .where(and(eq(tagRules.tagId, params.id), eq(tagRules.matchKind, body.matchKind)));
+    const key = tagRuleDedupeKey(body);
+    if (siblings.some((rule) => tagRuleDedupeKey(rule) === key)) {
+      conflict('An identical rule already exists for this tag');
+    }
     const [created] = await db.insert(tagRules).values({
       tagId: params.id,
       matchKind: body.matchKind,
@@ -135,6 +136,7 @@ export function registerTagRoutes(app: FastifyInstance): void {
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
     const tag = await db.query.tags.findFirst({ where: eq(tags.id, params.id) });
     if (!tag) notFound('Tag not found');
+    if (!tag.active) badRequest('This tag is paused — resume it before applying its rules.');
     const tagged = await applyTagRulesToHistory(params.id);
     await audit(request, user, 'apply_tag_rules', 'tag', params.id, { tagged });
     return { tagged };
@@ -220,6 +222,13 @@ export function registerTagRoutes(app: FastifyInstance): void {
         target: [transactionTags.transactionId, transactionTags.tagId],
         set: { source: 'manual' },
       });
+    // Re-adding by hand lifts any earlier "keep this tag off" decision.
+    await db
+      .delete(transactionTagSuppressions)
+      .where(and(
+        eq(transactionTagSuppressions.transactionId, params.id),
+        eq(transactionTagSuppressions.tagId, body.tagId),
+      ));
     await audit(request, user, 'tag_transaction', 'transaction', params.id, { tagId: body.tagId, tagName: tag.name });
 
     const tagsById = await tagsByTransactionId([params.id]);
@@ -227,7 +236,8 @@ export function registerTagRoutes(app: FastifyInstance): void {
   });
 
   // Removes the tag from the transaction regardless of source — an explicit user
-  // removal outranks both rules and prior manual adds.
+  // removal outranks both rules and prior manual adds, and is remembered so the next
+  // rule pass (category change, Plaid update, receipt match) doesn't re-add it.
   app.delete('/transactions/:id/tags/:tagId', async (request, reply) => {
     const user = await requireUser(request);
     const params = z.object({
@@ -242,15 +252,19 @@ export function registerTagRoutes(app: FastifyInstance): void {
       ))
       .returning();
     if (!deleted) notFound('Transaction tag not found');
+    await db
+      .insert(transactionTagSuppressions)
+      .values({ transactionId: params.id, tagId: params.tagId })
+      .onConflictDoNothing();
     await audit(request, user, 'untag_transaction', 'transaction', params.id, { tagId: params.tagId });
     return reply.status(204).send();
   });
 }
 
 /**
- * Tags with usage stats in one grouped query. totalCents is outflow spend —
- * sum(abs(amount_cents)) where amount_cents < 0 — matching /transactions/rollup's
- * outflowCents convention (inflows count toward txnCount but not totalCents).
+ * Tags with usage stats in one grouped query. Both numbers describe the same set —
+ * tagged outflows: txnCount counts them and totalCents is sum(abs(amount_cents)), matching
+ * /transactions/rollup's outflowCents and the tag trends chart.
  */
 async function tagsWithStats(tagId?: string) {
   const rows = await db
@@ -259,7 +273,7 @@ async function tagsWithStats(tagId?: string) {
       name: tags.name,
       color: tags.color,
       active: tags.active,
-      txnCount: sql<number>`count(${transactionTags.transactionId})::int`,
+      txnCount: sql<number>`count(${transactionTags.transactionId}) FILTER (WHERE ${transactions.amountCents} < 0)::int`,
       totalCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 THEN ${transactions.amountCents} ELSE 0 END)), 0)::int`,
     })
     .from(tags)

@@ -6,11 +6,12 @@ import { requireUser } from '../auth/session.js';
 import { db } from '../db/client.js';
 import { accounts, auditLogs, businesses, categories, categoryRules, exportJobs, jobs, receiptUploaders, users } from '../db/schema.js';
 import { getEnv } from '../config/env.js';
-import { badRequest, notFound } from '../lib/errors.js';
+import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { canSetAdminActive } from '../services/adminGuards.js';
 import { getAiUsageSummary } from '../services/aiUsageTelemetry.js';
 import { audit } from '../services/audit.js';
-import { getAiUsage, getAiWebSearchUsage } from '../services/categorization.js';
+import { getAiUsage, getAiWebSearchUsage, normalize } from '../services/categorization.js';
+import { assertRuleCategoryValid } from './dashboard/ruleRoutes.js';
 
 const userPublicColumns = {
   id: users.id,
@@ -298,7 +299,12 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       pattern: z.string().min(1),
       priority: z.number().int().default(100),
     }).parse(request.body);
-    const [row] = await db.insert(categoryRules).values(body).returning();
+    await assertRuleCategoryValid(body.businessId ?? null, body.categoryId);
+    // A rule a person writes by hand is trusted (its hits are protected), whatever its priority.
+    const [row] = await insertOrConflict(() => db
+      .insert(categoryRules)
+      .values({ ...body, pattern: storedRulePattern(body.matchKind, body.pattern), userConfirmed: true })
+      .returning());
     await audit(request, actor, 'create_category_rule', 'category_rule', row.id, body);
     return row;
   });
@@ -313,11 +319,26 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       pattern: z.string().min(1).optional(),
       priority: z.number().int().optional(),
     }).parse(request.body);
-    const [row] = await db
+    const existing = await db.query.categoryRules.findFirst({ where: eq(categoryRules.id, params.id) });
+    if (!existing) notFound('Category rule not found');
+    const nextBusinessId = body.businessId !== undefined ? body.businessId : existing.businessId;
+    const nextCategoryId = body.categoryId ?? existing.categoryId;
+    const categoryChanged = nextCategoryId !== existing.categoryId;
+    if (categoryChanged || nextBusinessId !== existing.businessId) {
+      await assertRuleCategoryValid(nextBusinessId, nextCategoryId, categoryChanged ? existing.categoryId : null);
+    }
+    const nextMatchKind = body.matchKind ?? existing.matchKind;
+    const [row] = await insertOrConflict(() => db
       .update(categoryRules)
-      .set({ ...body, updatedAt: new Date() })
+      .set({
+        ...body,
+        ...(body.pattern !== undefined ? { pattern: storedRulePattern(nextMatchKind, body.pattern) } : {}),
+        // Re-pointing a rule is a human decision; a priority-only edit leaves trust alone.
+        ...(categoryChanged ? { userConfirmed: true } : {}),
+        updatedAt: new Date(),
+      })
       .where(eq(categoryRules.id, params.id))
-      .returning();
+      .returning());
     if (!row) notFound('Category rule not found');
     await audit(request, actor, 'update_category_rule', 'category_rule', params.id, body);
     return row;
@@ -378,4 +399,22 @@ async function resolveBusinessId(value: string | null | undefined): Promise<stri
   const business = await db.query.businesses.findFirst({ where: eq(businesses.key, value) });
   if (!business) badRequest('Choose a valid business for this uploader.');
   return business.id;
+}
+
+/** Merchant patterns are matched normalized; store them normalized so dedupe works. */
+function storedRulePattern(matchKind: string, pattern: string): string {
+  if (matchKind !== 'merchant_exact' && matchKind !== 'merchant_contains') return pattern;
+  return normalize(pattern) || pattern;
+}
+
+/** Map the learned-merchant-rule unique index violation to a 409 instead of a 500. */
+async function insertOrConflict<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (error) {
+    const code = (error as { code?: string; cause?: { code?: string } })?.code
+      ?? (error as { cause?: { code?: string } })?.cause?.code;
+    if (code === '23505') conflict('An exact-merchant rule for this business and pattern already exists.');
+    throw error;
+  }
 }

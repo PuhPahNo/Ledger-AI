@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AI_AUTO_APPLY_CONFIDENCE,
+  PROTECTED_CATEGORY_SOURCES,
+  buildCategorizationPrompt,
+  compareRulePrecedence,
+  containsTerm,
+  merchantPatternTokens,
+  ruleCategorySource,
+  shouldAutoApplyAiSuggestion,
+  validateRuleCategory,
   categorizationRetryDelayMs,
   categorizationWebToolOptions,
   categoryNameForKnownSignals,
@@ -190,5 +199,144 @@ describe('AI categorization cost controls', () => {
     expect(categorizationRetryDelayMs(1)).toBe(7 * 24 * 60 * 60 * 1000);
     expect(categorizationRetryDelayMs(2)).toBe(30 * 24 * 60 * 60 * 1000);
     expect(categorizationRetryDelayMs(8)).toBe(30 * 24 * 60 * 60 * 1000);
+  });
+});
+
+describe('keyword signals use whole words', () => {
+  const signal = (merchant: string, plaidCategory: string[] = []) => categoryNameForKnownSignals({
+    businessId: 'business-1',
+    merchant,
+    amountCents: -5000,
+    plaidCategory,
+  });
+
+  it('does not match a keyword buried inside another word', () => {
+    expect(signal('Policy Surrender Fee')).not.toBe('Cloud');
+    expect(signal('Parent Teacher Assoc')).not.toBe('Rent Or Lease');
+    expect(signal('Concurrent Systems')).not.toBe('Rent Or Lease');
+    expect(containsTerm('first national', 'irs')).toBe(false);
+  });
+
+  it('still matches the keyword as its own word, including simple plurals', () => {
+    expect(signal('Render.com')).toBe('Cloud');
+    expect(signal('Office Rent March')).toBe('Rent Or Lease');
+    expect(signal('Delta', ['TRAVEL', 'AIRLINES_AND_AVIATION_SERVICES'])).toBe('Travel');
+    expect(signal('PG&E', ['RENT_AND_UTILITIES', 'RENT_AND_UTILITIES_GAS_AND_ELECTRICITY'])).toBe('Utilities');
+    expect(signal('Verizon', ['RENT_AND_UTILITIES_TELEPHONE'])).toBe('Utilities');
+  });
+});
+
+describe('rule precedence', () => {
+  const base = { matchKind: 'merchant_contains', userConfirmed: false, updatedAt: new Date('2026-01-01') };
+
+  it('orders by priority first', () => {
+    const rules = [
+      { ...base, id: 'global-1', priority: 1, businessId: null },
+      { ...base, id: 'biz-5', priority: 5, businessId: 'b1' },
+    ].sort(compareRulePrecedence);
+    expect(rules.map((rule) => rule.id)).toEqual(['global-1', 'biz-5']);
+  });
+
+  it('lets a business-specific rule win a priority tie with a global rule', () => {
+    const rules = [
+      { ...base, id: 'global', priority: 100, businessId: null },
+      { ...base, id: 'business', priority: 100, businessId: 'b1' },
+    ].sort(compareRulePrecedence);
+    expect(rules[0].id).toBe('business');
+  });
+
+  it('then prefers user-confirmed and more specific rules', () => {
+    const rules = [
+      { ...base, id: 'contains', priority: 10, businessId: 'b1', matchKind: 'merchant_contains' },
+      { ...base, id: 'exact', priority: 10, businessId: 'b1', matchKind: 'merchant_exact' },
+      { ...base, id: 'trusted', priority: 10, businessId: 'b1', userConfirmed: true, matchKind: 'amount_range' },
+    ].sort(compareRulePrecedence);
+    expect(rules.map((rule) => rule.id)).toEqual(['trusted', 'exact', 'contains']);
+  });
+});
+
+describe('rule trust', () => {
+  it('trusts a user-confirmed rule regardless of priority', () => {
+    expect(ruleCategorySource({ userConfirmed: true })).toBe('user_confirmed_rule');
+    expect(ruleCategorySource({ userConfirmed: false })).toBe('auto_rule');
+  });
+
+  it('treats manual, confirmed-rule and receipt categories as protected', () => {
+    expect([...PROTECTED_CATEGORY_SOURCES].sort()).toEqual(['manual', 'receipt_evidence', 'user_confirmed_rule']);
+    expect(PROTECTED_CATEGORY_SOURCES.has('ai_suggested')).toBe(false);
+  });
+});
+
+describe('validateRuleCategory', () => {
+  const software = { id: 'software', businessId: null, name: 'Software', taxCode: 'other_expense_software' };
+  const revenue = { id: 'revenue', businessId: null, name: 'Revenue', taxCode: 'income' };
+  const transfers = { id: 'transfers', businessId: null, name: 'Transfers', taxCode: 'exclude_transfer' };
+  const bizOnly = { id: 'biz', businessId: 'b1', name: 'Inventory', taxCode: null };
+
+  it('accepts global categories and categories owned by the rule business', () => {
+    expect(validateRuleCategory({ ruleBusinessId: 'b1', category: software })).toBeNull();
+    expect(validateRuleCategory({ ruleBusinessId: 'b1', category: bizOnly })).toBeNull();
+  });
+
+  it('rejects another business category, or a business category on a global rule', () => {
+    expect(validateRuleCategory({ ruleBusinessId: 'b2', category: bizOnly })).toMatch(/different business/);
+    expect(validateRuleCategory({ ruleBusinessId: null, category: bizOnly })).toMatch(/global rule/);
+  });
+
+  it('rejects archived categories', () => {
+    expect(validateRuleCategory({ ruleBusinessId: null, category: { ...software, active: false } })).toMatch(/archived/);
+  });
+
+  it('rejects flipping a rule between spend and income, but allows transfers', () => {
+    expect(validateRuleCategory({ ruleBusinessId: null, category: revenue, previousCategory: software })).toMatch(/files spend/);
+    expect(validateRuleCategory({ ruleBusinessId: null, category: software, previousCategory: revenue })).toMatch(/files income/);
+    expect(validateRuleCategory({ ruleBusinessId: null, category: transfers, previousCategory: software })).toBeNull();
+  });
+});
+
+describe('buildCategorizationPrompt', () => {
+  const categories = [{ id: 'software', businessId: null, name: 'Software', taxCode: 'other_expense_software' }];
+
+  it('keeps the category list ahead of all per-transaction data so the prefix caches', () => {
+    const prompt = buildCategorizationPrompt(
+      { merchant: 'Figma', amountCents: -1500, plaidCategory: [] },
+      categories,
+      [{ merchant: 'Figma' }],
+      false,
+    );
+    const categoriesAt = prompt.indexOf('Categories:');
+    expect(categoriesAt).toBeGreaterThan(-1);
+    expect(prompt.indexOf('Transaction:')).toBeGreaterThan(categoriesAt);
+    expect(prompt.indexOf('Accepted feedback examples:')).toBeGreaterThan(categoriesAt);
+    expect(prompt.trimEnd().split('\n').at(-1)).toMatch(/^Transaction: /);
+  });
+
+  it('shares an identical prefix through the category list across transactions', () => {
+    const a = buildCategorizationPrompt({ merchant: 'Figma', amountCents: -1500 }, categories, [], false);
+    const b = buildCategorizationPrompt({ merchant: 'Refund', amountCents: 2000 }, categories, [{ x: 1 }], true);
+    const prefix = a.slice(0, a.indexOf('Categories:') + JSON.stringify(categories).length + 'Categories: '.length);
+    expect(b.startsWith(prefix)).toBe(true);
+  });
+});
+
+describe('merchantPatternTokens (SQL prefilter safety)', () => {
+  it('only requires words that appear in the raw lowercased merchant of every true match', () => {
+    const merchants = ['SQ *BLUE BOTTLE 402', 'TST* MCDONALDS', 'STARBUCKS 800 4467', 'PAYPAL *SPOTIFY', '7-Eleven #1234'];
+    for (const merchant of merchants) {
+      const pattern = normalize(merchant);
+      for (const token of merchantPatternTokens(pattern)) {
+        expect(merchant.toLowerCase()).toContain(token);
+      }
+    }
+  });
+});
+
+describe('AI auto-apply threshold', () => {
+  it('uses one threshold for sync and the nightly scan', () => {
+    expect(AI_AUTO_APPLY_CONFIDENCE).toBe(0.85);
+    expect(shouldAutoApplyAiSuggestion({ source: 'ai_suggested', confidence: 0.85 })).toBe(true);
+    expect(shouldAutoApplyAiSuggestion({ source: 'ai_suggested', confidence: 0.84 })).toBe(false);
+    expect(shouldAutoApplyAiSuggestion({ source: 'ai_suggested', confidence: null })).toBe(false);
+    expect(shouldAutoApplyAiSuggestion({ source: 'auto_rule', confidence: 1 })).toBe(false);
   });
 });

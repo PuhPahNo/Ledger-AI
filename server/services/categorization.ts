@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { and, asc, desc, eq, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, or, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import { z } from 'zod';
 import { zodTextFormat } from 'openai/helpers/zod';
 import { getEnv } from '../config/env.js';
@@ -9,11 +9,34 @@ import {
   categories,
   categoryRules,
   categorizationFeedback,
-  transactions,
   type CategorySource,
 } from '../db/schema.js';
 import { trackOpenAiCall } from './aiUsageTelemetry.js';
-import { getSetting, setSetting } from './appSettings.js';
+import { decrementDailyCounter, getDailyCounter, incrementDailyCounter } from './appSettings.js';
+
+/**
+ * Sources that represent explicit human judgment — never silently overwritten by rules,
+ * Plaid updates, or receipt evidence. Keep in sync with the SQL CASE in plaid.ts upserts.
+ */
+export const PROTECTED_CATEGORY_SOURCES: ReadonlySet<string> = new Set([
+  'manual',
+  'user_confirmed_rule',
+  'receipt_evidence',
+]);
+
+export function isProtectedCategorySource(source: string | null | undefined): boolean {
+  return source != null && PROTECTED_CATEGORY_SOURCES.has(source);
+}
+
+/**
+ * AI suggestions at or above this confidence are applied automatically (Plaid sync and
+ * the nightly uncategorized scan alike); anything lower goes to the review center.
+ */
+export const AI_AUTO_APPLY_CONFIDENCE = 0.85;
+
+export function shouldAutoApplyAiSuggestion(result: Pick<CategorizeResult, 'source' | 'confidence'>): boolean {
+  return result.source === 'ai_suggested' && (result.confidence ?? 0) >= AI_AUTO_APPLY_CONFIDENCE;
+}
 
 export interface CategorizeInput {
   businessId: string;
@@ -60,11 +83,13 @@ export async function categorizeTransactionWithDetails(input: CategorizeInput): 
         matchKind: categoryRules.matchKind,
         pattern: categoryRules.pattern,
         priority: categoryRules.priority,
-        createdByAi: categoryRules.createdByAi,
+        userConfirmed: categoryRules.userConfirmed,
+        updatedAt: categoryRules.updatedAt,
       })
       .from(categoryRules)
       .where(or(eq(categoryRules.businessId, input.businessId), isNull(categoryRules.businessId)))
-      .orderBy(asc(categoryRules.priority)),
+      .orderBy(asc(categoryRules.priority))
+      .then((rows) => rows.sort(compareRulePrecedence)),
     db
       .select({
         id: categories.id,
@@ -96,9 +121,7 @@ export async function categorizeTransactionWithDetails(input: CategorizeInput): 
     })) {
       return {
         categoryId: rule.categoryId,
-        source: rule.businessId === input.businessId && !rule.createdByAi && rule.priority <= 1
-          ? 'user_confirmed_rule'
-          : 'auto_rule',
+        source: ruleCategorySource(rule),
         confidence: 1,
         evidence: {
           ruleId: rule.id,
@@ -157,67 +180,6 @@ async function fallbackUncategorizedCategory(): Promise<string | null> {
     where: and(isNull(categories.businessId), eq(categories.name, 'Uncategorized')),
   });
   return uncategorized?.id ?? null;
-}
-
-export async function applyCategory(transactionId: string): Promise<void> {
-  const txn = await db.query.transactions.findFirst({ where: eq(transactions.id, transactionId) });
-  if (!txn) return;
-  const result = await categorizeTransactionWithDetails({
-    businessId: txn.businessId,
-    merchant: txn.merchant,
-    amountCents: txn.amountCents,
-  });
-  if (result.categoryId) {
-    await db
-      .update(transactions)
-      .set({
-        categoryId: result.categoryId,
-        categorySource: result.source,
-        categoryConfidence: result.confidence == null ? null : result.confidence.toFixed(4),
-        categoryEvidence: result.evidence,
-        updatedAt: new Date(),
-      })
-      .where(eq(transactions.id, transactionId));
-  }
-}
-
-export async function learnMerchantCategoryRule(input: {
-  businessId: string;
-  merchant: string;
-  categoryId: string;
-}): Promise<void> {
-  const pattern = normalize(input.merchant);
-  if (!pattern || pattern === 'unknown merchant') return;
-
-  const existing = await db.query.categoryRules.findFirst({
-    where: and(
-      eq(categoryRules.businessId, input.businessId),
-      eq(categoryRules.matchKind, 'merchant_exact'),
-      eq(categoryRules.pattern, pattern),
-    ),
-  });
-
-  if (existing) {
-    await db
-      .update(categoryRules)
-      .set({
-        categoryId: input.categoryId,
-        priority: 1,
-        createdByAi: false,
-        updatedAt: new Date(),
-      })
-      .where(eq(categoryRules.id, existing.id));
-    return;
-  }
-
-  await db.insert(categoryRules).values({
-    businessId: input.businessId,
-    categoryId: input.categoryId,
-    matchKind: 'merchant_exact',
-    pattern,
-    priority: 1,
-    createdByAi: false,
-  });
 }
 
 /**
@@ -294,7 +256,7 @@ export function categoryNameForKnownSignals(input: CategorizeInput): string | nu
   if (hasAny(signal, ['office supplies', 'printing', 'postage', 'shipping', 'usps', 'fedex', 'ups store'])) return 'Office Expense';
   if (hasAny(signal, ['wholesale', 'inventory', 'cost of goods', 'supplier', 'product', 'merchandise', 'costco business'])) return 'Inventory';
   if (hasAny(signal, ['electronics', 'hardware', 'equipment', 'computer equipment', 'apple store', 'best buy', 'square hardware'])) return 'Equipment';
-  if (hasAny(signal, ['utilities', 'internet', 'telecom', 'mobile phone', 'comcast', 'verizon', 'at t', 't mobile', 'electric', 'water', 'natural gas'])) return 'Utilities';
+  if (hasAny(signal, ['utilities', 'internet', 'telecom', 'mobile phone', 'comcast', 'verizon', 'at t', 't mobile', 'electric', 'electricity', 'gas and electricity', 'telecommunications', 'telephone', 'water', 'natural gas'])) return 'Utilities';
   if (hasAny(signal, ['rent', 'lease', 'property management'])) return 'Rent Or Lease';
   if (hasAny(signal, ['insurance'])) return 'Insurance';
   if (hasAny(signal, ['tax payment', 'taxes', 'license', 'permit', 'irs', 'department of revenue', 'secretary of state'])) return 'Taxes & Licenses';
@@ -319,8 +281,19 @@ function findPreferredCategoryByName(categories: CategoryCandidate[], name: stri
     ?? null;
 }
 
+/**
+ * Whole-word (token-sequence) match on normalized text, allowing a plural suffix on the
+ * last word ("airline" matches "airlines") — plain substring matching let "render" hit
+ * "surrender" and "rent" hit "parent"/"current".
+ */
+export function containsTerm(normalizedValue: string, term: string): boolean {
+  const needle = normalize(term);
+  if (!needle) return false;
+  return new RegExp(`(?:^| )${needle}(?:s|es)?(?= |$)`).test(normalizedValue);
+}
+
 function hasAny(value: string, terms: string[]): boolean {
-  return terms.some((term) => value.includes(normalize(term)));
+  return terms.some((term) => containsTerm(value, term));
 }
 
 const AI_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -333,48 +306,31 @@ function aiCacheDirection(amountCents: number): string {
   return amountCents > 0 ? 'in' : 'out';
 }
 
-/** Today's AI call count, tracked in app settings (single worker — races are tolerable). */
+/** Today's AI call count, tracked atomically in app settings. */
 export async function getAiUsage(): Promise<{ date: string; calls: number }> {
-  return getDailyUsage(AI_USAGE_SETTING_KEY);
+  return getDailyCounter(AI_USAGE_SETTING_KEY);
 }
 
 /** Today's expensive hosted-web subset of the categorization call count. */
 export async function getAiWebSearchUsage(): Promise<{ date: string; calls: number }> {
-  return getDailyUsage(AI_WEB_SEARCH_USAGE_SETTING_KEY);
+  return getDailyCounter(AI_WEB_SEARCH_USAGE_SETTING_KEY);
 }
 
-async function getDailyUsage(key: string): Promise<{ date: string; calls: number }> {
-  const today = new Date().toISOString().slice(0, 10);
-  try {
-    const raw = await getSetting(key);
-    const parsed = raw ? JSON.parse(raw) as { date?: string; calls?: number } : null;
-    if (parsed?.date === today && typeof parsed.calls === 'number') return { date: today, calls: parsed.calls };
-  } catch {
-    // Corrupt value — treat as a fresh day.
-  }
-  return { date: today, calls: 0 };
-}
-
+/**
+ * Reserve one categorization call against today's budget. Called immediately before the
+ * request is sent so only calls actually made are counted; each increment is a single
+ * atomic SQL statement so concurrent workers can't overspend.
+ */
 async function reserveAiCategorizationCall(webSearch: boolean): Promise<boolean> {
   const env = getEnv();
-  const usage = await getAiUsage();
-  if (usage.calls >= env.OPENAI_CATEGORIZATION_DAILY_LIMIT) return false;
-
-  if (!webSearch) {
-    await setSetting(AI_USAGE_SETTING_KEY, JSON.stringify({ date: usage.date, calls: usage.calls + 1 }));
+  if (!await incrementDailyCounter(AI_USAGE_SETTING_KEY, env.OPENAI_CATEGORIZATION_DAILY_LIMIT)) return false;
+  if (!webSearch) return true;
+  if (await incrementDailyCounter(AI_WEB_SEARCH_USAGE_SETTING_KEY, env.OPENAI_CATEGORIZATION_DAILY_WEB_SEARCH_LIMIT)) {
     return true;
   }
-
-  const webUsage = await getAiWebSearchUsage();
-  if (webUsage.calls >= env.OPENAI_CATEGORIZATION_DAILY_WEB_SEARCH_LIMIT) return false;
-  await Promise.all([
-    setSetting(AI_USAGE_SETTING_KEY, JSON.stringify({ date: usage.date, calls: usage.calls + 1 })),
-    setSetting(AI_WEB_SEARCH_USAGE_SETTING_KEY, JSON.stringify({
-      date: webUsage.date,
-      calls: webUsage.calls + 1,
-    })),
-  ]);
-  return true;
+  // Web budget exhausted — the call won't be made, so hand back the total reservation.
+  await decrementDailyCounter(AI_USAGE_SETTING_KEY);
+  return false;
 }
 
 export function shouldUseCategorizationWebSearch(
@@ -436,14 +392,14 @@ async function suggestCategoryWithAi(
     };
   }
 
-  if (!await reserveAiCategorizationCall(false)) return null;
-
   let feedbackExamples: Awaited<ReturnType<typeof loadFeedbackExamples>>;
   try {
     feedbackExamples = await loadFeedbackExamples(input);
   } catch {
     return null;
   }
+
+  if (!await reserveAiCategorizationCall(false)) return null;
 
   const client = new OpenAI({ apiKey: env.OPENAI_API_KEY });
   let baseSuggestion: CategorySuggestion;
@@ -552,11 +508,6 @@ async function requestCategorySuggestion(
   useWebSearch: boolean,
 ): Promise<CategorySuggestion> {
   const env = getEnv();
-  const direction = input.amountCents > 0
-    ? 'inflow/income'
-    : input.amountCents < 0
-      ? 'outflow/expense'
-      : 'zero amount';
   const response = await trackOpenAiCall(
     useWebSearch ? 'categorization_web' : 'categorization_base',
     env.OPENAI_CATEGORIZATION_MODEL,
@@ -567,23 +518,7 @@ async function requestCategorySuggestion(
         role: 'user',
         content: [{
           type: 'input_text',
-          text: [
-            'You are categorizing a business transaction for Ledger AI.',
-            'Choose exactly one categoryId from the provided category list, or null if none fit.',
-            `Transaction direction: ${direction}. Never contradict the direction.`,
-            'Prefer tax-oriented Schedule C categories over miscellaneous internal categories.',
-            'Do not create new categories or tax codes. Accepted feedback is authoritative.',
-            useWebSearch
-              ? 'Use the one available web search to identify the exact merchant or domain and what it sells. Reject fuzzy, partial-name, fictional-character, and unrelated matches. If an exact business identity is not supported, return null with confidence at or below 0.5. Set needsWebSearch=false because this is already the web pass, and briefly cite the evidence in reason.'
-              : 'Do not use web search. Set needsWebSearch=true only when the merchant identity is unfamiliar or ambiguous and identifying it would materially change the category. Otherwise set it false. Do not guess an identity.',
-            `Transaction: ${JSON.stringify({
-              merchant: input.merchant,
-              amountCents: input.amountCents,
-              plaidCategory: input.plaidCategory ?? [],
-            })}`,
-            `Accepted feedback examples: ${JSON.stringify(feedbackExamples)}`,
-            `Categories: ${JSON.stringify(availableCategories)}`,
-          ].join('\n'),
+          text: buildCategorizationPrompt(input, availableCategories, feedbackExamples, useWebSearch),
         }],
       }],
       text: {
@@ -595,6 +530,63 @@ async function requestCategorySuggestion(
   const message = response.output.find((item) => item.type === 'message');
   const parsed = message?.content.find((item) => item.type === 'output_text')?.parsed;
   return categorySuggestionSchema.parse(parsed);
+}
+
+/**
+ * Static instructions and the (per-business, rarely changing) category list come first
+ * and the per-transaction data last, so OpenAI's automatic prefix caching can reuse the
+ * long shared prefix across calls.
+ */
+export function buildCategorizationPrompt(
+  input: Pick<CategorizeInput, 'merchant' | 'amountCents' | 'plaidCategory'>,
+  availableCategories: CategoryCandidate[],
+  feedbackExamples: unknown[],
+  useWebSearch: boolean,
+): string {
+  const direction = input.amountCents > 0
+    ? 'inflow/income'
+    : input.amountCents < 0
+      ? 'outflow/expense'
+      : 'zero amount';
+  return [
+    'You are categorizing a business transaction for Ledger AI.',
+    'Choose exactly one categoryId from the provided category list, or null if none fit.',
+    'Never contradict the transaction direction given below.',
+    'Prefer tax-oriented Schedule C categories over miscellaneous internal categories.',
+    'Do not create new categories or tax codes. Accepted feedback is authoritative.',
+    `Categories: ${JSON.stringify(availableCategories)}`,
+    useWebSearch
+      ? 'Use the one available web search to identify the exact merchant or domain and what it sells. Reject fuzzy, partial-name, fictional-character, and unrelated matches. If an exact business identity is not supported, return null with confidence at or below 0.5. Set needsWebSearch=false because this is already the web pass, and briefly cite the evidence in reason.'
+      : 'Do not use web search. Set needsWebSearch=true only when the merchant identity is unfamiliar or ambiguous and identifying it would materially change the category. Otherwise set it false. Do not guess an identity.',
+    `Accepted feedback examples: ${JSON.stringify(feedbackExamples)}`,
+    `Transaction direction: ${direction}.`,
+    `Transaction: ${JSON.stringify({
+      merchant: input.merchant,
+      amountCents: input.amountCents,
+      plaidCategory: input.plaidCategory ?? [],
+    })}`,
+  ].join('\n');
+}
+
+/**
+ * A human just decided this merchant's category: drop the cached AI verdict for the
+ * (business, merchant, direction) so the next AI call re-judges with the new feedback
+ * instead of replaying the stale answer for up to 30 days.
+ */
+export async function invalidateAiCategorizationCache(input: {
+  businessId: string;
+  merchant: string;
+  amountCents: number;
+}): Promise<void> {
+  const normalizedMerchant = normalize(input.merchant);
+  if (!normalizedMerchant) return;
+  await db
+    .delete(aiCategorizationCache)
+    .where(and(
+      eq(aiCategorizationCache.businessId, input.businessId),
+      eq(aiCategorizationCache.normalizedMerchant, normalizedMerchant),
+      eq(aiCategorizationCache.direction, aiCacheDirection(input.amountCents)),
+    ));
 }
 
 async function saveAiCategorizationResult(input: {
@@ -801,4 +793,89 @@ function matchesAmountRange(amountCents: number, pattern: string): boolean {
   const max = rawMax ? Number(rawMax) : Number.POSITIVE_INFINITY;
   const abs = Math.abs(amountCents);
   return abs >= min && abs <= max;
+}
+
+const MATCH_KIND_SPECIFICITY: Record<string, number> = {
+  merchant_exact: 0,
+  merchant_contains: 1,
+  plaid_category: 2,
+  amount_range: 3,
+};
+
+/**
+ * Rule precedence, first match wins:
+ *   1. lower priority number
+ *   2. business-specific before global
+ *   3. user-confirmed before machine/seeded
+ *   4. more specific match kind (exact > contains > plaid category > amount range)
+ *   5. most recently updated
+ */
+export function compareRulePrecedence(
+  a: { priority: number; businessId: string | null; userConfirmed?: boolean; matchKind: string; updatedAt?: Date },
+  b: { priority: number; businessId: string | null; userConfirmed?: boolean; matchKind: string; updatedAt?: Date },
+): number {
+  if (a.priority !== b.priority) return a.priority - b.priority;
+  const aGlobal = a.businessId == null ? 1 : 0;
+  const bGlobal = b.businessId == null ? 1 : 0;
+  if (aGlobal !== bGlobal) return aGlobal - bGlobal;
+  const aTrusted = a.userConfirmed ? 0 : 1;
+  const bTrusted = b.userConfirmed ? 0 : 1;
+  if (aTrusted !== bTrusted) return aTrusted - bTrusted;
+  const specificity = (MATCH_KIND_SPECIFICITY[a.matchKind] ?? 9) - (MATCH_KIND_SPECIFICITY[b.matchKind] ?? 9);
+  if (specificity !== 0) return specificity;
+  return (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0);
+}
+
+/** A rule a human created or confirmed is trusted regardless of its priority. */
+export function ruleCategorySource(rule: { userConfirmed: boolean }): CategorySource {
+  return rule.userConfirmed ? 'user_confirmed_rule' : 'auto_rule';
+}
+
+/**
+ * Rule writes must point at a category the rule can actually use: owned by the rule's
+ * business (or global), and — when the rule is being re-pointed — on the same side of the
+ * income/spend line as its current target (transfer categories are allowed either way).
+ * Returns an error message, or null when valid.
+ */
+export function validateRuleCategory(input: {
+  ruleBusinessId: string | null;
+  category: CategoryCandidate & { active?: boolean };
+  previousCategory?: CategoryCandidate | null;
+}): string | null {
+  const { category } = input;
+  if (category.active === false) return `"${category.name}" is archived.`;
+  if (category.businessId !== null && category.businessId !== input.ruleBusinessId) {
+    return input.ruleBusinessId === null
+      ? `"${category.name}" belongs to one business — a global rule needs a global category.`
+      : `"${category.name}" belongs to a different business.`;
+  }
+  const previous = input.previousCategory;
+  if (
+    previous
+    && !isExcludedFromSpendCategory(previous)
+    && !isExcludedFromSpendCategory(category)
+    && isIncomeCategory(previous) !== isIncomeCategory(category)
+  ) {
+    return isIncomeCategory(previous)
+      ? `This rule files income; "${category.name}" is a spend category.`
+      : `This rule files spend; "${category.name}" is an income category.`;
+  }
+  return null;
+}
+
+/**
+ * Words every merchant matched by a normalized merchant pattern must contain. Each token
+ * of normalize(merchant) is a substring of lower(merchant), so if the pattern equals or is
+ * contained in the normalized merchant, every pattern token appears in lower(merchant).
+ * That makes an ILIKE-per-token SQL prefilter safe: it can only drop non-matches.
+ */
+export function merchantPatternTokens(pattern: string): string[] {
+  return normalize(pattern).split(' ').filter(Boolean);
+}
+
+/** SQL prefilter for rows whose merchant could match a normalized merchant pattern. */
+export function merchantPrefilterSql(merchantColumn: SQLWrapper, pattern: string): SQL {
+  const tokens = merchantPatternTokens(pattern);
+  if (tokens.length === 0) return sql`true`;
+  return sql.join(tokens.map((token) => sql`${merchantColumn} ILIKE ${`%${token}%`}`), sql` AND `);
 }
