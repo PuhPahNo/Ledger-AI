@@ -196,6 +196,63 @@ export function TransactionsTable({
     );
   };
 
+  // Phones get a stacked row (merchant + amount, then date · business · category) instead of a
+  // 1000px table that hides the amount off-screen.
+  const renderMobileRow = (transaction: Transaction) => {
+    const rowBusiness = businessById.get(transaction.biz);
+    const tag = categorySourceTag(transaction.categorySource, transaction.categoryConfidence);
+    return (
+      <li key={transaction.id} className="flex items-start gap-3 border-b border-ink2/8 px-3 py-3 last:border-b-0">
+        {selectable && (
+          <input
+            type="checkbox"
+            aria-label={`Select ${transaction.merchant}`}
+            checked={selectedIds!.has(transaction.id)}
+            onChange={() => onToggleSelect!(transaction.id)}
+            className="mt-1 h-4 w-4 shrink-0 accent-ink"
+          />
+        )}
+        <button
+          type="button"
+          onClick={() => onSelectTransaction(transaction)}
+          className="grid min-w-0 flex-1 gap-1 text-left"
+        >
+          <span className="flex min-w-0 items-baseline justify-between gap-3">
+            <span className="truncate font-bold text-ink">{transaction.merchant}</span>
+            <span
+              className={cn(
+                'shrink-0 font-display font-bold tabular-nums',
+                transaction.amount > 0 ? 'text-sage-ink' : 'text-ink',
+              )}
+            >
+              {fmt$(transaction.amount)}
+            </span>
+          </span>
+          <span className="flex min-w-0 items-center justify-between gap-3">
+            <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-dim">
+              {!groupByDate && <span className="shrink-0 font-mono">{transaction.date}</span>}
+              <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: rowBusiness?.color ?? '#ccc' }} />
+              <span className="shrink-0 font-mono uppercase">{rowBusiness?.short ?? transaction.biz}</span>
+              <span className="truncate">· {transaction.cat}{tag ? ` · ${tag}` : ''}</span>
+            </span>
+            <ReceiptPill status={transaction.receipt} />
+          </span>
+        </button>
+        {onAttachReceipt && transaction.receipt === 'missing' && transaction.amount < 0 && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="-mr-1 h-10 w-10 shrink-0 text-dim hover:text-ink"
+            aria-label={`Attach a receipt to ${transaction.merchant}`}
+            onClick={() => onAttachReceipt(transaction)}
+          >
+            <Paperclip className="h-4 w-4" />
+          </Button>
+        )}
+      </li>
+    );
+  };
+
   const groups = groupByDate ? groupRowsByDay(rows) : [];
 
   return (
@@ -207,7 +264,31 @@ export function TransactionsTable({
           <>
             {/* min-w keeps the flexible Merchant column from collapsing to 0px when the
                 fixed columns alone exceed the container; the wrapper scrolls instead. */}
-            <Table className={cn('table-fixed', groupByDate ? 'min-w-[960px]' : 'min-w-[1060px]')}>
+            <div className="md:hidden">
+              {selectable && rows.length > 0 && (
+                <label className="flex items-center gap-3 border-b border-ink2/10 px-3 py-2 text-xs font-bold text-dim">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={() => onToggleSelectAll?.()}
+                    className="h-4 w-4 accent-ink"
+                  />
+                  Select all
+                </label>
+              )}
+              {groupByDate
+                ? groups.map((group) => (
+                  <section key={group.date}>
+                    <div className="sticky top-0 z-10 flex items-baseline justify-between gap-3 bg-cream px-3 py-1.5">
+                      <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-dim">{dayLabel(group.date)}</span>
+                      {group.outflow > 0 && <span className="text-[11px] tabular-nums text-dim">{fmt$(group.outflow)} out</span>}
+                    </div>
+                    <ul>{group.rows.map(renderMobileRow)}</ul>
+                  </section>
+                ))
+                : <ul>{rows.map(renderMobileRow)}</ul>}
+            </div>
+            <Table className={cn('hidden table-fixed md:table', groupByDate ? 'min-w-[960px]' : 'min-w-[1060px]')}>
               <TableHeader className="sticky top-0 z-10 bg-paper [&_th]:text-dim">
                 <TableRow>
                   {selectable && (

@@ -211,10 +211,11 @@ export function TransactionDrawer({ transaction, businesses, categories, allTags
                 {addableTags.length > 0 && (
                   <Select value="" onValueChange={handleAddTag} disabled={tagBusy}>
                     <SelectTrigger className="h-8 w-44 text-xs">
-                      <span className="inline-flex items-center gap-1 text-dim">
+                      {/* div, not span: SelectTrigger line-clamps direct <span> children, which breaks the icon row. */}
+                      <div className="flex items-center gap-1 text-dim">
                         <Plus className="h-3 w-3" />
                         Add tag
-                      </span>
+                      </div>
                     </SelectTrigger>
                     <SelectContent>
                       {addableTags.map((tag) => (

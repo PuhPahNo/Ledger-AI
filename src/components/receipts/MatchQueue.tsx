@@ -530,7 +530,9 @@ export function MatchQueue({ biz, unmatched, reloadKey = 0, onRemainingChange, o
           ) : (
             <>
               <div className="flex items-baseline justify-between gap-2 px-1">
-                <h3 className="text-sm font-bold text-ink">Which transaction is this?</h3>
+                <h3 className="text-sm font-bold text-ink">
+                  {candidates.some((c) => c.suggested) ? 'Which transaction is this?' : 'No strong match — closest transactions'}
+                </h3>
                 <span className="text-[11px] text-dim">{candidates.length === 1 ? '1 match' : `Top ${candidates.length}`}</span>
               </div>
               <ol className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2">
@@ -539,7 +541,7 @@ export function MatchQueue({ biz, unmatched, reloadKey = 0, onRemainingChange, o
                     <CandidateCard
                       candidate={candidate}
                       slot={index + 1}
-                      primary={index === 0}
+                      primary={index === 0 && Boolean(candidate.suggested)}
                       receiptCents={receipt.totalCents}
                       onPair={() => pairSlot(index)}
                     />
