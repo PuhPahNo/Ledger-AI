@@ -9,6 +9,10 @@ const envSchema = z.object({
   APP_ENCRYPTION_KEY: z.string().min(16),
   FRONTEND_ORIGIN: z.string().default('http://localhost:5173'),
   PUBLIC_APP_URL: z.string().default('http://localhost:8787'),
+  // Number of reverse-proxy hops in front of the app whose X-Forwarded-For entry is
+  // trusted for request.ip (Render: 1). 0 disables proxy trust. Defaults to 1 in
+  // production and 0 elsewhere.
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).optional(),
   RUN_WORKER_IN_WEB: z.enum(['true', 'false']).default('false'),
   STORAGE_DRIVER: z.enum(['local', 'r2']).default('local'),
   LOCAL_STORAGE_DIR: z.string().default('./storage'),
@@ -32,8 +36,9 @@ const envSchema = z.object({
   PLAID_CLIENT_ID: z.string().optional().default(''),
   PLAID_SECRET: z.string().optional().default(''),
   PLAID_WEBHOOK_URL: z.string().optional().default(''),
-  // When set, /webhooks/plaid requires ?secret=<value> — configure the same value in
-  // PLAID_WEBHOOK_URL. Empty (default) keeps the endpoint open for existing setups.
+  // Optional shared secret: /webhooks/plaid accepts ?secret=<value> (configure the same
+  // value in PLAID_WEBHOOK_URL). Independently, Plaid's signed Plaid-Verification JWT is
+  // always accepted; in production with Plaid configured, one of the two is required.
   PLAID_WEBHOOK_SECRET: z.string().optional().default(''),
   GOOGLE_CLIENT_ID: z.string().optional().default(''),
   GOOGLE_CLIENT_SECRET: z.string().optional().default(''),
@@ -44,7 +49,7 @@ const envSchema = z.object({
   LEDGER_ADMIN_PASSWORD: z.string().default('change-me-before-production'),
 });
 
-export type Env = z.infer<typeof envSchema>;
+export type Env = Omit<z.infer<typeof envSchema>, 'TRUST_PROXY_HOPS'> & { TRUST_PROXY_HOPS: number };
 
 let cached: Env | null = null;
 
@@ -59,6 +64,7 @@ export function getEnv(): Env {
   }
   cached = {
     ...parsed.data,
+    TRUST_PROXY_HOPS: parsed.data.TRUST_PROXY_HOPS ?? (parsed.data.NODE_ENV === 'production' ? 1 : 0),
     LOCAL_STORAGE_DIR: path.resolve(parsed.data.LOCAL_STORAGE_DIR),
   };
   return cached;

@@ -10,7 +10,7 @@ import { sha256Buffer } from '../lib/crypto.js';
 import { badRequest, notFound } from '../lib/errors.js';
 import { audit } from '../services/audit.js';
 import { matchReceipt, receiptMatchCandidates } from '../services/matching.js';
-import { storage } from '../services/storage.js';
+import { storage, storedFileSecurityHeaders } from '../services/storage.js';
 import { toApiReceipt, toApiTransaction } from './mappers.js';
 
 export async function receiptRoutes(app: FastifyInstance): Promise<void> {
@@ -122,7 +122,7 @@ export async function receiptRoutes(app: FastifyInstance): Promise<void> {
     reply
       .header('Content-Type', textMimeTypeWithCharset(mimeType))
       .header('Content-Disposition', `${query.download ? 'attachment' : 'inline'}; filename="${headerSafeFileName(fileName)}"`)
-      .header('X-Content-Type-Options', 'nosniff');
+      .headers(storedFileSecurityHeaders(mimeType));
 
     return reply.send(await storage().getStream(receipt.fileKey));
   });
