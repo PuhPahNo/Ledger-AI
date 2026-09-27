@@ -79,7 +79,9 @@ export async function buildApp() {
     credentials: true,
   });
   await app.register(fastifyCookie, { secret: env.SESSION_SECRET });
-  await app.register(fastifyRateLimit, { max: 300, timeWindow: '1 minute' });
+  // Generous per-IP ceiling: a single page (Home, Settings) fans out to 15-20 API calls, so 300/min
+  // throttled an accountant clicking through quickly. Login routes keep their own strict limits.
+  await app.register(fastifyRateLimit, { max: 900, timeWindow: '1 minute' });
   await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
   await app.register(fastifySwagger, {
     openapi: {

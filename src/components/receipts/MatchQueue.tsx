@@ -507,7 +507,7 @@ export function MatchQueue({ biz, unmatched, reloadKey = 0, onRemainingChange, o
         </section>
 
         {/* Candidates */}
-        <section className="grid min-w-0 content-start gap-3" aria-label="Matching transactions">
+        <section className="grid min-w-0 grid-cols-[minmax(0,1fr)] content-start gap-3" aria-label="Matching transactions">
           {blockedReason === 'extraction_pending' ? (
             <StatusPanel
               icon={<Loader2 className="h-5 w-5 animate-spin" />}
@@ -533,7 +533,7 @@ export function MatchQueue({ biz, unmatched, reloadKey = 0, onRemainingChange, o
                 <h3 className="text-sm font-bold text-ink">Which transaction is this?</h3>
                 <span className="text-[11px] text-dim">{candidates.length === 1 ? '1 match' : `Top ${candidates.length}`}</span>
               </div>
-              <ol className="grid gap-2">
+              <ol className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2">
                 {candidates.map((candidate, index) => (
                   <li key={candidate.transaction.id}>
                     <CandidateCard
@@ -620,7 +620,7 @@ function CandidateCard({
   return (
     <div
       className={cn(
-        'grid gap-2 rounded-xl border bg-paper p-3 shadow-sm transition-colors',
+        'grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 rounded-xl border bg-paper p-3 shadow-sm transition-colors',
         candidate.suggested ? 'border-ink/30' : 'border-ink2/10',
       )}
     >
