@@ -4,6 +4,7 @@ import { Boxes, Calendar, ChevronDown, ChevronUp, CreditCard, Landmark, Wallet }
 import type { Account, ReceiptStatus, TransactionRollup } from '@/types/domain';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/cn';
+import { shiftIsoDays, shiftIsoMonths, startOfMonthIso, todayIso } from '@/lib/dates';
 
 export function FacetGroup({
   label,
@@ -178,29 +179,23 @@ export function toggle<T>(value: T, values: T[]): T[] {
 }
 
 export function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIso();
 }
 
 export function startOfMonth(): string {
-  return `${new Date().toISOString().slice(0, 7)}-01`;
+  return startOfMonthIso();
 }
 
 export function ninetyDaysAgo(): string {
-  const date = new Date();
-  date.setDate(date.getDate() - 90);
-  return date.toISOString().slice(0, 10);
+  return shiftIsoDays(todayIso(), -90);
 }
 
 export function shiftDays(value: string, delta: number): string {
-  const date = new Date(`${value}T00:00:00`);
-  date.setDate(date.getDate() + delta);
-  return date.toISOString().slice(0, 10);
+  return shiftIsoDays(value, delta);
 }
 
 export function shiftMonths(value: string, delta: number): string {
-  const date = new Date(`${value}T00:00:00`);
-  date.setMonth(date.getMonth() + delta);
-  return date.toISOString().slice(0, 10);
+  return shiftIsoMonths(value, delta);
 }
 
 export function defaultFrom(): string {

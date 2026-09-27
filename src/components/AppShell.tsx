@@ -2,11 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Bell,
+  Bot,
+  Inbox as InboxIcon,
   LayoutDashboard,
+  Lightbulb,
+  Menu,
   Receipt,
   Search,
   Settings,
-  Sparkles,
   Table as TableIcon,
   TrendingUp,
   Upload,
@@ -14,10 +17,12 @@ import {
 } from 'lucide-react';
 import type { Business, CategorizationReviewItem, CurrentUser } from '@/types/domain';
 import type { AppView } from '@/types/navigation';
-import { listCategorizationReviewItems, listReceipts } from '@/api';
+import { listCategorizationReviewItems } from '@/api';
+import { inboxAttentionCount, useInbox } from '@/hooks/useInbox';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { cn } from '@/lib/cn';
 import { CategorizationReviewCenter } from './CategorizationReviewCenter';
 import { LogoMark } from './LogoMark';
@@ -31,12 +36,13 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'inbox', label: 'Inbox', icon: InboxIcon },
   { id: 'transactions', label: 'Transactions', icon: TableIcon },
   { id: 'cash-flow', label: 'Cash Flow', icon: TrendingUp },
-  { id: 'insights', label: 'Insights', icon: Sparkles },
+  { id: 'insights', label: 'Insights', icon: Lightbulb },
   { id: 'receipts', label: 'Receipts', icon: Receipt },
   { id: 'balances', label: 'Balances', icon: Wallet },
-  { id: 'assistant', label: 'Assistant', icon: Sparkles },
+  { id: 'assistant', label: 'Assistant', icon: Bot },
 ];
 
 interface AppShellProps {
@@ -88,7 +94,9 @@ export function AppShell({
   const fileInput = useRef<HTMLInputElement>(null);
   const [internalReviewOpen, setInternalReviewOpen] = useState(false);
   const [internalReviewItems, setInternalReviewItems] = useState<CategorizationReviewItem[]>([]);
-  const [unmatchedReceiptCount, setUnmatchedReceiptCount] = useState(0);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const { data: inbox } = useInbox();
+  const inboxCount = inboxAttentionCount(inbox);
   const usesExternalReviewCenter = Boolean(onOpenReviewCenter);
 
   const refreshInternalReviewItems = () => {
@@ -109,40 +117,52 @@ export function AppShell({
     };
   }, [usesExternalReviewCenter]);
 
-  useEffect(() => {
-    let mounted = true;
-    listReceipts({ status: 'pending' })
-      .then((rows) => mounted && setUnmatchedReceiptCount(rows.length))
-      .catch(() => mounted && setUnmatchedReceiptCount(0));
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
   const displayedReviewCount = usesExternalReviewCenter ? (reviewCount ?? 0) : internalReviewItems.length;
   // The bell routes to the Notifications page (the one place that shows everything waiting);
   // the modal remains only as a fallback for shells rendered without navigation.
   const openReviewCenter = onViewChange
     ? () => onViewChange('inbox')
     : onOpenReviewCenter ?? (() => setInternalReviewOpen(true));
-  // When the bell leads to Notifications it counts everything waiting there;
-  // the fallback modal only shows review items, so its badge only counts those.
-  const bellCount = onViewChange ? displayedReviewCount + unmatchedReceiptCount : displayedReviewCount;
+  // When the bell leads to the Inbox it counts exactly what the Inbox lists (same shared
+  // data, same counting rule); the fallback modal only shows review items, so it counts those.
+  const bellCount = onViewChange ? inboxCount : displayedReviewCount;
+  const navigate = onViewChange
+    ? (view: AppView) => {
+        setMobileNavOpen(false);
+        onViewChange(view);
+      }
+    : undefined;
 
   return (
     <div className="min-h-screen bg-bg text-ink">
       <div className="mx-auto flex max-w-[1600px] gap-3 p-3 lg:p-4">
-        <Sidebar
-          currentView={currentView}
-          onViewChange={onViewChange}
-          user={user}
-          onLogout={onLogout}
-          search={search}
-          unmatchedReceiptCount={unmatchedReceiptCount}
-        />
+        <aside className="sticky top-3 hidden h-[calc(100vh-24px)] w-[220px] shrink-0 flex-col rounded-xl border border-ink2/10 bg-paper shadow-sm md:flex">
+          <SidebarContent
+            currentView={currentView}
+            onViewChange={navigate}
+            user={user}
+            onLogout={onLogout}
+            search={search}
+            inboxCount={inboxCount}
+          />
+        </aside>
+        <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+          <SheetContent side="left" className="w-[260px] gap-0 p-0" hideClose onOpenAutoFocus={(event) => event.preventDefault()}>
+            <SheetTitle className="sr-only">Navigation</SheetTitle>
+            <SidebarContent
+              currentView={currentView}
+              onViewChange={navigate}
+              user={user}
+              onLogout={onLogout}
+              search={search}
+              inboxCount={inboxCount}
+            />
+          </SheetContent>
+        </Sheet>
 
         <main className="flex min-w-0 flex-1 flex-col gap-3">
           <ContextBar
+            onOpenMobileNav={onViewChange ? () => setMobileNavOpen(true) : undefined}
             title={contextTitle}
             eyebrow={contextEyebrow}
             leading={contextLeading}
@@ -192,12 +212,13 @@ interface SidebarProps {
   user?: CurrentUser;
   onLogout?: () => void;
   search?: { query: string; onQueryChange: (value: string) => void; placeholder?: string };
-  unmatchedReceiptCount: number;
+  inboxCount: number;
 }
 
-function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedReceiptCount }: SidebarProps) {
+/** Sidebar body — rendered in the desktop rail and in the mobile nav sheet. */
+function SidebarContent({ currentView, onViewChange, user, onLogout, search, inboxCount }: SidebarProps) {
   return (
-    <aside className="sticky top-3 hidden h-[calc(100vh-24px)] w-[220px] shrink-0 flex-col rounded-xl border border-ink2/10 bg-paper shadow-sm md:flex">
+    <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2.5 border-b border-ink2/10 px-4 py-3">
         <LogoMark className="h-9 w-9" />
         <div className="min-w-0">
@@ -225,6 +246,7 @@ function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedR
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
           const active = currentView === item.id;
+          const badgeCount = item.id === 'inbox' ? inboxCount : 0;
           return (
             <button
               key={item.id}
@@ -237,20 +259,16 @@ function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedR
             >
               <Icon className={cn('h-4 w-4', active ? 'text-inverse-foreground' : 'text-dim group-hover:text-ink')} />
               <span>{item.label}</span>
-              {(() => {
-                const badgeCount = item.id === 'receipts' ? unmatchedReceiptCount : 0;
-                if (badgeCount <= 0) return null;
-                return (
-                  <span
-                    className={cn(
-                      'ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none',
-                      active ? 'bg-inverse-foreground text-inverse' : 'bg-coral text-on-coral',
-                    )}
-                  >
-                    {badgeCount > 9 ? '9+' : badgeCount}
-                  </span>
-                );
-              })()}
+              {badgeCount > 0 && (
+                <span
+                  className={cn(
+                    'ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none',
+                    active ? 'bg-inverse-foreground text-inverse' : 'bg-coral text-on-coral',
+                  )}
+                >
+                  {badgeCount > 9 ? '9+' : badgeCount}
+                </span>
+              )}
             </button>
           );
         })}
@@ -270,11 +288,12 @@ function Sidebar({ currentView, onViewChange, user, onLogout, search, unmatchedR
         </button>
         <ProfileFooter user={user} onLogout={onLogout} />
       </div>
-    </aside>
+    </div>
   );
 }
 
 interface ContextBarProps {
+  onOpenMobileNav?: () => void;
   title?: ReactNode;
   eyebrow?: ReactNode;
   leading?: ReactNode;
@@ -288,6 +307,7 @@ interface ContextBarProps {
 }
 
 function ContextBar({
+  onOpenMobileNav,
   title,
   eyebrow,
   leading,
@@ -303,6 +323,11 @@ function ContextBar({
   return (
     <header className="flex flex-wrap items-center gap-3 rounded-xl border border-ink2/10 bg-paper px-3 py-2 shadow-sm">
       <div className="flex min-w-0 items-center gap-2">
+        {onOpenMobileNav && (
+          <Button variant="ghost" size="icon-sm" className="md:hidden" onClick={onOpenMobileNav} title="Menu" aria-label="Open navigation">
+            <Menu className="h-4 w-4" />
+          </Button>
+        )}
         {eyebrow && (
           <>
             <span className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">{eyebrow}</span>
@@ -316,7 +341,7 @@ function ContextBar({
       <div className="ml-auto flex flex-wrap items-center gap-2">
         {showBusinessSwitcher && (
           <Select value={selectedBusiness ?? 'all'} onValueChange={(value) => onBusinessChange?.(value)}>
-            <SelectTrigger className="h-9 w-44 rounded-full border-transparent bg-cream/70 text-xs font-bold">
+            <SelectTrigger className="h-9 w-36 rounded-full sm:w-44 border-transparent bg-cream/70 text-xs font-bold">
               <SelectValue placeholder="Business" />
             </SelectTrigger>
             <SelectContent align="end" className="w-56">

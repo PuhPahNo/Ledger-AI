@@ -52,12 +52,12 @@ export function Donut({ categories, strokeColor, labelColor, size = 112 }: Props
             <path
               key={c.name}
               d={`M${x0},${y0} A${r},${r} 0 ${large} 1 ${x1},${y1} L${xi1},${yi1} A${ri},${ri} 0 ${large} 0 ${xi0},${yi0} Z`}
-              fill={accentRamp[i % accentRamp.length]}
               stroke={strokeColor}
               strokeWidth={1.5}
               onMouseEnter={(event) => show(data, event)}
               onMouseMove={(event) => show(data, event)}
-              style={{ cursor: 'pointer' }}
+              // CSS-variable colors only resolve through `style`, not the fill attribute.
+              style={{ cursor: 'pointer', fill: accentRamp[i % accentRamp.length] }}
             />
           );
         })}

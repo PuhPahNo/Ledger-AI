@@ -1,23 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, FileWarning, Inbox as InboxIcon, PlugZap, Receipt, Sparkles } from 'lucide-react';
+import { ArrowRight, Copy, FileWarning, Inbox as InboxIcon, PlugZap, Receipt, Sparkles, TrendingUp, X } from 'lucide-react';
 import {
-  getTransactionRollup,
+  dismissAlert,
   listBusinesses,
-  listCategorizationReviewItems,
-  listConnections,
-  listReceipts,
   resolveCategorizationReviewItem,
+  type AlertItem,
 } from '@/api';
 import type { AppView, TransactionViewFilters } from '@/types/navigation';
 import type {
   Business,
   CategorizationReviewItem,
-  Connection,
   CurrentUser,
-  ReceiptInboxItem,
 } from '@/types/domain';
 import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
+import { inboxAttentionCount, useInbox } from '@/hooks/useInbox';
 import { AppShell } from './AppShell';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -41,53 +38,32 @@ type ReviewFilter = 'all' | CategorizationReviewItem['type'];
  */
 export function InboxPage({ user, onViewChange, onOpenTransactions, onLogout }: Props) {
   const { toast } = useToast();
-  const [receipts, setReceipts] = useState<ReceiptInboxItem[]>([]);
-  const [reviewItems, setReviewItems] = useState<CategorizationReviewItem[]>([]);
+  const { data: inbox, loading, refresh: reloadInbox } = useInbox();
+  const { receipts, reviewItems, troubledConnections, alerts } = inbox;
+  const missingReceipts = inbox.missingReceipts;
   const [businesses, setBusinesses] = useState<Business[]>([]);
-  const [connections, setConnections] = useState<Connection[]>([]);
-  const [missingReceipts, setMissingReceipts] = useState<{ rows: number; outflowCents: number } | null>(null);
   const [reviewFilter, setReviewFilter] = useState<ReviewFilter>('all');
   const [resolving, setResolving] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     let mounted = true;
-    setLoading(true);
-    Promise.allSettled([
-      listReceipts({ status: 'pending', unmatched: true, limit: 100 }),
-      listCategorizationReviewItems(),
-      listBusinesses(),
-      listConnections(),
-      getTransactionRollup({ receipts: ['missing'] }),
-    ]).then(([receiptsResult, reviewResult, businessesResult, connectionsResult, rollupResult]) => {
-      if (!mounted) return;
-      if (receiptsResult.status === 'fulfilled') setReceipts(receiptsResult.value);
-      if (reviewResult.status === 'fulfilled') setReviewItems(reviewResult.value);
-      if (businessesResult.status === 'fulfilled') setBusinesses(businessesResult.value);
-      if (connectionsResult.status === 'fulfilled') setConnections(connectionsResult.value);
-      if (rollupResult.status === 'fulfilled') {
-        setMissingReceipts({ rows: rollupResult.value.rows, outflowCents: rollupResult.value.outflowCents });
-      }
-      setLoading(false);
-    });
+    listBusinesses()
+      .then((rows) => mounted && setBusinesses(rows))
+      .catch(() => undefined);
     return () => {
       mounted = false;
     };
-  }, [refreshKey]);
+  }, []);
 
-  const refresh = () => setRefreshKey((key) => key + 1);
+  const refresh = () => {
+    void reloadInbox();
+  };
   const businessByKey = useMemo(() => new Map(businesses.map((business) => [business.id, business])), [businesses]);
 
   const oldestReceipts = useMemo(() => (
     [...receipts].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(0, 6)
   ), [receipts]);
   const stuckReceipts = receipts.filter((receipt) => receiptNeedsDetails(receipt) || receipt.extractionError);
-  const troubledConnections = connections.filter((connection) => (
-    connection.status !== 'live'
-    || (connection.health?.failedJobCount ?? 0) > 0
-    || Boolean(connection.health?.lastJobError)
-  ));
   const filteredReviewItems = reviewFilter === 'all'
     ? reviewItems
     : reviewItems.filter((item) => item.type === reviewFilter);
@@ -132,11 +108,24 @@ export function InboxPage({ user, onViewChange, onOpenTransactions, onLogout }: 
     }
   };
 
-  const allClear = !loading
-    && receipts.length === 0
-    && reviewItems.length === 0
-    && (missingReceipts?.rows ?? 0) === 0
-    && troubledConnections.length === 0;
+  const handleDismissAlert = async (alert: AlertItem) => {
+    setResolving(alert.id);
+    try {
+      await dismissAlert(alert.id);
+      refresh();
+    } catch (error) {
+      toast({
+        variant: 'destructive',
+        title: 'Could not dismiss',
+        description: error instanceof Error ? error.message : 'Try again.',
+      });
+    } finally {
+      setResolving(null);
+    }
+  };
+
+  const attentionCount = inboxAttentionCount(inbox);
+  const allClear = !loading && attentionCount === 0;
 
   return (
     <AppShell
@@ -152,6 +141,39 @@ export function InboxPage({ user, onViewChange, onOpenTransactions, onLogout }: 
           <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">Workspace</div>
           <h1 className="font-display text-3xl font-bold tracking-tight">Needs attention</h1>
         </div>
+
+        {alerts.length > 0 && (
+          <section className="rounded-xl border border-ink2/10 bg-paper shadow-sm">
+            <div className="flex items-center gap-2 border-b border-ink2/10 px-4 py-3">
+              <TrendingUp className="h-4 w-4 text-dim" />
+              <h2 className="font-display text-lg font-bold">Spend alerts</h2>
+              <Badge variant="warning">{alerts.length}</Badge>
+            </div>
+            <div className="divide-y divide-ink2/10">
+              {alerts.map((alert) => (
+                <div key={alert.id} className="flex items-start gap-3 px-4 py-2.5 text-sm">
+                  {alert.kind === 'dup'
+                    ? <Copy className="mt-0.5 h-4 w-4 shrink-0 text-coral-ink" />
+                    : <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-dim" />}
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold">{alert.title}</div>
+                    <div className="text-xs text-dim">{alert.detail}</div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={resolving === alert.id}
+                    onClick={() => void handleDismissAlert(alert)}
+                    title="Dismiss — it won't come back"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Dismiss
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {allClear && (
           <EmptyState
@@ -233,13 +255,13 @@ export function InboxPage({ user, onViewChange, onOpenTransactions, onLogout }: 
           </section>
         )}
 
-        {(missingReceipts?.rows ?? 0) > 0 && (
+        {missingReceipts.rows > 0 && (
           <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-ink2/10 bg-paper px-4 py-3 shadow-sm">
             <div className="text-sm">
-              <span className="font-bold">{missingReceipts!.rows} transaction{missingReceipts!.rows === 1 ? '' : 's'}</span>
-              <span className="text-dim"> still missing a receipt ({fmt$(Math.abs(missingReceipts!.outflowCents) / 100)} of spend)</span>
+              <span className="font-bold">{missingReceipts.rows} transaction{missingReceipts.rows === 1 ? '' : 's'}</span>
+              <span className="text-dim"> still missing a receipt ({fmt$(Math.abs(missingReceipts.outflowCents) / 100)} of spend)</span>
             </div>
-            <Button variant="outline" size="sm" onClick={() => onOpenTransactions?.({ receipts: ['missing'] })}>
+            <Button variant="outline" size="sm" onClick={() => onOpenTransactions?.({ receipts: ['missing'], direction: 'operating-outflow' })}>
               Review in Transactions
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>

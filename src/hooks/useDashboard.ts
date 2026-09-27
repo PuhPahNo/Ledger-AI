@@ -7,7 +7,10 @@ import {
   getSummary,
   listAccounts,
   listCategoryComparisons,
+  getSummaryBreakdowns,
+  type SummaryBreakdowns,
 } from '@/api';
+import { currentMonthKey, monthBounds as calendarMonthBounds } from '@/lib/dates';
 import type {
   Business,
   Category,
@@ -20,7 +23,10 @@ import type {
 
 export interface DashboardData {
   businesses: Business[];
+  /** Most recent transactions for the activity feed only — never summed for totals. */
   transactions: Transaction[];
+  /** Server-side spend by business / account / receipt status (matches the hero totals). */
+  breakdowns: SummaryBreakdowns;
   categories: Category[];
   categoryComparisons: CategoryComparison[];
   connections: Connection[];
@@ -148,6 +154,7 @@ async function fetchDashboardData(params: DashboardParams): Promise<DashboardDat
   const [
     businesses,
     transactions,
+    breakdowns,
     categories,
     categoryComparisons,
     connections,
@@ -161,7 +168,14 @@ async function fetchDashboardData(params: DashboardParams): Promise<DashboardDat
       accountIds,
       from: window.from,
       to: window.to,
-      limit: 2000,
+      limit: 100,
+    }),
+    getSummaryBreakdowns({
+      biz: params.business ?? 'all',
+      q: params.query || undefined,
+      accountIds,
+      from: window.from,
+      to: window.to,
     }),
     listCategories({
       period: params.period,
@@ -196,6 +210,7 @@ async function fetchDashboardData(params: DashboardParams): Promise<DashboardDat
   return {
     businesses,
     transactions,
+    breakdowns,
     categories,
     categoryComparisons,
     connections,
@@ -223,15 +238,5 @@ function dashboardCacheKey(params: DashboardParams): string {
 }
 
 function monthBounds(period?: string): { from: string; to: string } {
-  const selected = period ?? new Date().toISOString().slice(0, 7);
-  const start = new Date(`${selected}-01T00:00:00`);
-  const end = new Date(start.getFullYear(), start.getMonth() + 1, 0);
-  return {
-    from: isoDate(start),
-    to: isoDate(end),
-  };
-}
-
-function isoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  return calendarMonthBounds(period ?? currentMonthKey());
 }

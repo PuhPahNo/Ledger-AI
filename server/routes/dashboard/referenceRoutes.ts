@@ -1,11 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { and, desc, eq, gte, ilike, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { requireUser } from '../../auth/session.js';
 import { db } from '../../db/client.js';
 import { accounts, alerts, businesses, categories, connections, transactions } from '../../db/schema.js';
 import { notFound } from '../../lib/errors.js';
 import { audit } from '../../services/audit.js';
+import { GENERATED_ALERT_KINDS } from '../../services/insights.js';
 import { listCategorizationReviewItems, resolveCategorizationReviewItem } from '../../services/categorizationFeedback.js';
 import {
   toApiAlert,
@@ -15,11 +16,12 @@ import {
   toApiConnection,
 } from '../mappers.js';
 import {
+  categoryIsNotIncome,
   categoryIsVisibleSpend,
   dateWindow,
   joinedTransactionSpendFilter,
   parseAccountIds,
-  spendCategoryFilter,
+  resolveSelectedBusiness,
 } from './helpers.js';
 import { connectionHealthById } from './connectionHealth.js';
 
@@ -39,12 +41,14 @@ export function registerReferenceRoutes(app: FastifyInstance): void {
       biz: z.string().optional(),
       q: z.string().optional(),
       accounts: z.string().optional(),
+      // Cash Flow's "Include transfers" toggle: keep transfer categories in the outflow mix.
+      includeTransfers: z.enum(['true', 'false']).default('false'),
     }).parse(request.query);
     const accountIds = parseAccountIds(query.accounts);
+    const includeTransfers = query.includeTransfers === 'true';
+    const outflowCategoryFilter = includeTransfers ? categoryIsNotIncome : categoryIsVisibleSpend;
     const { from, to } = dateWindow(query.period, query.from, query.to);
-    const selectedBusiness = query.biz && query.biz !== 'all'
-      ? await db.query.businesses.findFirst({ where: eq(businesses.key, query.biz) })
-      : null;
+    const selectedBusiness = await resolveSelectedBusiness(query.biz);
     const rows = await db
       .select({
         id: categories.id,
@@ -64,13 +68,13 @@ export function registerReferenceRoutes(app: FastifyInstance): void {
         gte(transactions.date, from),
         lte(transactions.date, to),
         sql`${transactions.amountCents} < 0`,
-        spendCategoryFilter(),
+        outflowCategoryFilter(),
         selectedBusiness ? eq(transactions.businessId, selectedBusiness.id) : sql`true`,
       ))
       .leftJoin(accounts, eq(transactions.accountId, accounts.id))
       .where(and(
         eq(categories.active, true),
-        categoryIsVisibleSpend(),
+        outflowCategoryFilter(),
         selectedBusiness ? or(eq(categories.businessId, selectedBusiness.id), sql`${categories.businessId} IS NULL`) : sql`true`,
         joinedTransactionSpendFilter(accountIds),
         query.q ? ilike(categories.name, `%${query.q}%`) : sql`true`,
@@ -116,22 +120,34 @@ export function registerReferenceRoutes(app: FastifyInstance): void {
   app.get('/alerts', async (request) => {
     await requireUser(request);
     const query = z.object({ status: z.enum(['open', 'dismissed']).optional(), biz: z.string().optional() }).parse(request.query);
+    const selectedBusiness = await resolveSelectedBusiness(query.biz);
     const rows = await db
-      .select({ alert: alerts })
+      .select({ alert: alerts, businessKey: businesses.key })
       .from(alerts)
       .leftJoin(businesses, eq(alerts.businessId, businesses.id))
       .where(and(
         eq(alerts.status, query.status ?? 'open'),
-        query.biz && query.biz !== 'all' ? eq(businesses.key, query.biz) : sql`true`,
+        // Missing/orphan receipt alerts duplicate Inbox sections; only anomaly kinds surface.
+        inArray(alerts.kind, [...GENERATED_ALERT_KINDS]),
+        // Cross-business alerts (duplicate subscriptions) have no business and always show.
+        selectedBusiness ? or(eq(alerts.businessId, selectedBusiness.id), isNull(alerts.businessId)) : sql`true`,
       ))
       .orderBy(desc(alerts.createdAt));
-    return rows.map((row) => toApiAlert(row.alert));
+    return rows.map((row) => ({
+      ...toApiAlert(row.alert),
+      biz: row.businessKey ?? null,
+      createdAt: row.alert.createdAt.toISOString(),
+    }));
   });
 
   app.post('/alerts/:id/dismiss', async (request, reply) => {
     await requireUser(request);
     const params = z.object({ id: z.string().uuid() }).parse(request.params);
-    await db.update(alerts).set({ status: 'dismissed', dismissedAt: new Date() }).where(eq(alerts.id, params.id));
+    const updated = await db.update(alerts)
+      .set({ status: 'dismissed', dismissedAt: new Date() })
+      .where(eq(alerts.id, params.id))
+      .returning({ id: alerts.id });
+    if (!updated.length) notFound('Alert not found');
     return reply.status(204).send();
   });
 

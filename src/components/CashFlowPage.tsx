@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Download } from 'lucide-react';
-import { getCashFlow, listAccounts, listBusinesses, listCategories, uploadReceipt } from '@/api';
+import { getCashFlow, listAccounts, listBusinesses, listCashFlowCategoryMix, uploadReceipt } from '@/api';
 import type { Account, Business, CashFlowSummary, Category, CurrentUser } from '@/types/domain';
 import type { AppView } from '@/types/navigation';
 import { accountLabel } from '@/lib/account';
 import { useToast } from '@/hooks/useToast';
+import { currentMonthKey, parseLocalIsoDate, toLocalIsoDate, todayIso, trailingMonthsFrom } from '@/lib/dates';
+import { DateRangePill } from './transactions/TransactionPageParts';
 import { AppShell } from './AppShell';
 import {
   BusinessBreakdown,
@@ -89,27 +91,28 @@ export function CashFlowPage({ user, onViewChange, onLogout }: Props) {
       .finally(() => setLoading(false));
   }, [accountIds, business, from, includeTransfers, refreshKey, to]);
 
-  // Pull category mix for the currently selected month (latest period in the response).
+  // Category mix for the focused (latest) period of the range, honoring the transfers toggle
+  // so it adds up to the same outflow as the cards above it.
+  const latestPeriod = summary.periods.at(-1);
   useEffect(() => {
-    const latest = summary.periods.at(-1);
-    if (!latest) {
+    if (!latestPeriod) {
       setCategories([]);
       return;
     }
-    listCategories({
-      from: latest.from,
-      to: latest.to,
+    let cancelled = false;
+    listCashFlowCategoryMix({
+      from: latestPeriod.from,
+      to: latestPeriod.to,
       biz: business,
       accountIds,
+      includeTransfers,
     })
-      .then((rows) =>
-        [...rows]
-          .sort((a, b) => (b.amountCents ?? Math.round(b.amount * 100)) - (a.amountCents ?? Math.round(a.amount * 100)))
-          .slice(0, 8),
-      )
-      .then(setCategories)
-      .catch(() => setCategories([]));
-  }, [accountIds, business, summary.periods]);
+      .then((rows) => !cancelled && setCategories(rows.filter((row) => row.amount > 0).slice(0, 8)))
+      .catch(() => !cancelled && setCategories([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [accountIds, business, includeTransfers, latestPeriod?.from, latestPeriod?.to]);
 
   const selectedBusinessDbId = business === 'all' ? undefined : businesses.find((item) => item.id === business)?.dbId;
 
@@ -127,10 +130,19 @@ export function CashFlowPage({ user, onViewChange, onLogout }: Props) {
     }
   };
 
-  // Periods are returned chronologically (oldest first). Newest = "this month".
+  // Periods are returned chronologically (oldest first). The newest one is the focus — it is
+  // only "this month" when the selected range actually ends in the current month.
   const periods = summary.periods;
   const thisMonth = periods.at(-1) ?? null;
   const lastMonth = periods.length >= 2 ? periods.at(-2)! : null;
+  const focusIsCurrentMonth = Boolean(thisMonth && thisMonth.to.slice(0, 7) === currentMonthKey());
+  const focusIsPartial = Boolean(thisMonth && thisMonth.to < monthEnd(thisMonth.to));
+  const focusLabel = thisMonth
+    ? focusIsCurrentMonth ? (focusIsPartial ? 'This month to date' : 'This month') : thisMonth.label
+    : '';
+  const rangeLabel = periods.length
+    ? periods.length === 1 ? periods[0].label : `${periods[0].label} – ${periods.at(-1)!.label}`
+    : '';
 
   const moDelta = lastMonth && lastMonth.netCents !== 0
     ? Math.round(((thisMonth!.netCents - lastMonth.netCents) / Math.abs(lastMonth.netCents)) * 100)
@@ -141,8 +153,8 @@ export function CashFlowPage({ user, onViewChange, onLogout }: Props) {
     if (!thisMonth) return [];
     return [
       {
-        label: 'This month',
-        sub: `${thisMonth.label} · net cash`,
+        label: focusLabel,
+        sub: `${thisMonth.label}${focusIsPartial ? ' (partial)' : ''} · net cash`,
         inflowCents: thisMonth.inflowCents,
         outflowCents: thisMonth.outflowCents,
         netCents: thisMonth.netCents,
@@ -151,8 +163,8 @@ export function CashFlowPage({ user, onViewChange, onLogout }: Props) {
         yoyDelta,
       },
       {
-        label: 'Last month',
-        sub: lastMonth ? `${lastMonth.label} · net cash` : 'no prior month',
+        label: 'Prior month',
+        sub: lastMonth ? `${lastMonth.label} · net cash` : 'not in selected range',
         inflowCents: lastMonth?.inflowCents ?? 0,
         outflowCents: lastMonth?.outflowCents ?? 0,
         netCents: lastMonth?.netCents ?? 0,
@@ -167,7 +179,7 @@ export function CashFlowPage({ user, onViewChange, onLogout }: Props) {
         current: false,
       },
     ];
-  }, [thisMonth, lastMonth, moDelta, yoyDelta]);
+  }, [thisMonth, lastMonth, moDelta, yoyDelta, focusLabel, focusIsPartial]);
 
   const focusedTitle = thisMonth ? `How does ${thisMonth.label} compare?` : 'Cash flow';
 
@@ -208,7 +220,7 @@ export function CashFlowPage({ user, onViewChange, onLogout }: Props) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <RangePicker from={from} to={to} onChange={({ from: f, to: t }) => { setFrom(f); setTo(t); }} />
+            <DateRangePill from={from} to={to} onChange={({ from: f, to: t }) => { setFrom(f); setTo(t); }} />
             <Button variant="outline" size="sm" onClick={() => exportCashFlowCsv(summary)}>
               <Download className="h-3.5 w-3.5" />
               Export
@@ -256,12 +268,15 @@ export function CashFlowPage({ user, onViewChange, onLogout }: Props) {
           </Card>
         ) : null}
 
-        {/* 12-month trend chart */}
+        {/* Trend chart over the selected range */}
         <Card className="p-5">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="font-mono text-[10px] font-medium uppercase tracking-[0.18em] text-dim">Trend</div>
-              <h2 className="font-display text-xl font-bold text-ink">12-month cash movement</h2>
+              <h2 className="font-display text-xl font-bold text-ink">
+                {periods.length > 1 ? `${periods.length}-month cash movement` : 'Cash movement'}
+              </h2>
+              {rangeLabel && <div className="text-xs text-dim">{rangeLabel}</div>}
             </div>
             <ChartLegend periods={periods} />
           </div>
@@ -318,34 +333,6 @@ function FilterChip({
   );
 }
 
-function RangePicker({
-  from,
-  to,
-  onChange,
-}: {
-  from: string;
-  to: string;
-  onChange: (range: { from: string; to: string }) => void;
-}) {
-  return (
-    <div className="flex items-center gap-1.5 rounded-full border border-ink2/15 bg-paper px-2 py-1 text-xs">
-      <input
-        type="date"
-        value={from}
-        onChange={(event) => onChange({ from: event.target.value, to })}
-        className="h-7 rounded-md border-transparent bg-transparent px-2 text-xs"
-      />
-      <span className="text-dim">→</span>
-      <input
-        type="date"
-        value={to}
-        onChange={(event) => onChange({ from, to: event.target.value })}
-        className="h-7 rounded-md border-transparent bg-transparent px-2 text-xs"
-      />
-    </div>
-  );
-}
-
 function exportCashFlowCsv(summary: CashFlowSummary) {
   const headers = ['period', 'from', 'to', 'inflow_cents', 'outflow_cents', 'transfer_cents', 'net_cents', 'prev_inflow_cents', 'prev_outflow_cents', 'prev_net_cents', 'net_delta_pct'];
   const lines = [headers.join(',')];
@@ -377,12 +364,14 @@ function toggle<T>(value: T, values: T[]): T[] {
 }
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIso();
 }
 
 function defaultFrom(): string {
-  const start = new Date();
-  start.setMonth(start.getMonth() - 11);
-  start.setDate(1);
-  return start.toISOString().slice(0, 10);
+  return trailingMonthsFrom(todayIso(), 12);
+}
+
+function monthEnd(isoDay: string): string {
+  const date = parseLocalIsoDate(isoDay);
+  return toLocalIsoDate(new Date(date.getFullYear(), date.getMonth() + 1, 0));
 }

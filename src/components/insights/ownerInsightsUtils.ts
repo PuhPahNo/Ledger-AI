@@ -1,3 +1,4 @@
+import { startOfMonthIso, todayIso, trailingMonthsFrom } from '@/lib/dates';
 import type { OwnerInsightsSummary } from '@/types/domain';
 
 export function exportInsightsCsv(summary: OwnerInsightsSummary) {
@@ -28,18 +29,15 @@ export function exportInsightsCsv(summary: OwnerInsightsSummary) {
 }
 
 export function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIso();
 }
 
 export function startOfMonth(): string {
-  return `${new Date().toISOString().slice(0, 7)}-01`;
+  return startOfMonthIso();
 }
 
 export function trailing12From(to: string): string {
-  const date = new Date(`${to}T00:00:00`);
-  date.setMonth(date.getMonth() - 11);
-  date.setDate(1);
-  return date.toISOString().slice(0, 10);
+  return trailingMonthsFrom(to, 12);
 }
 
 function csvCell(value: string): string {

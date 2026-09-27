@@ -3,6 +3,7 @@ import { isSpendTransaction, isTransferTransaction } from '@/lib/calc';
 import { http, useMockApi } from './client';
 import { mapTransaction, type ApiTransaction } from './mapper';
 import { BUSINESSES, TRANSACTIONS, visibleMockTransactions } from './mocks';
+import { todayIso } from '@/lib/dates';
 
 export interface OwnerInsightsParams {
   from?: string;
@@ -82,5 +83,5 @@ function centsTotal(rows: Transaction[]): number {
 }
 
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayIso();
 }

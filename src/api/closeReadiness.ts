@@ -1,5 +1,20 @@
-import type { BusinessId, CloseReadiness } from '@/types/domain';
+import type { BusinessId, CloseReadiness as BaseCloseReadiness } from '@/types/domain';
+import { singleMonthOfRange } from '@/lib/dates';
 import { http, useMockApi } from './client';
+
+/**
+ * Month-close state. Sign-off is keyed by business + calendar month, so it applies to any
+ * range inside that month and doesn't vanish when "to" moves forward.
+ */
+export interface CloseReadiness extends BaseCloseReadiness {
+  /** YYYY-MM the viewed range belongs to; null when the range spans several months. */
+  closeMonth?: string | null;
+  /** Transactions in the signed-off month created or edited after sign-off. */
+  changedSinceSignOff?: number;
+}
+
+/** Mock-mode sign-offs, keyed like the server: `<biz>:<YYYY-MM>`. */
+const mockSignoffs = new Map<string, string>();
 
 export interface CloseReadinessParams {
   from: string;
@@ -20,13 +35,10 @@ export function getCloseReadiness(params: CloseReadinessParams): Promise<CloseRe
 
 export function signOffClosePeriod(params: CloseReadinessParams): Promise<CloseReadiness> {
   if (useMockApi) {
-    return Promise.resolve({
-      ...mockCloseReadiness(params),
-      signedOff: true,
-      signedOffAt: new Date().toISOString(),
-      canSignOff: false,
-      items: [],
-    });
+    const month = singleMonthOfRange(params.from, params.to);
+    if (!month) return Promise.reject(new Error('Month close covers one calendar month — pick a range inside a single month.'));
+    mockSignoffs.set(`${params.biz ?? 'all'}:${month}`, new Date().toISOString());
+    return Promise.resolve(mockCloseReadiness(params));
   }
   return http<CloseReadiness>('/close-readiness/sign-off', {
     method: 'POST',
@@ -40,12 +52,29 @@ export function signOffClosePeriod(params: CloseReadinessParams): Promise<CloseR
 }
 
 function mockCloseReadiness(params: CloseReadinessParams): CloseReadiness {
+  const closeMonth = singleMonthOfRange(params.from, params.to);
+  const signedOffAt = closeMonth ? mockSignoffs.get(`${params.biz ?? 'all'}:${closeMonth}`) ?? null : null;
+  if (signedOffAt) {
+    return {
+      from: params.from,
+      to: params.to,
+      biz: params.biz ?? 'all',
+      closeMonth,
+      signedOff: true,
+      signedOffAt,
+      changedSinceSignOff: 0,
+      canSignOff: false,
+      items: [],
+    };
+  }
   return {
     from: params.from,
     to: params.to,
     biz: params.biz ?? 'all',
+    closeMonth,
     signedOff: false,
     signedOffAt: null,
+    changedSinceSignOff: 0,
     canSignOff: false,
     items: [
       {

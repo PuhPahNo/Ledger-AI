@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowUpRight,
   Check,
   CheckCircle,
   ChevronRight,
   Download,
   ExternalLink,
-  Sparkles,
+  FileText,
 } from 'lucide-react';
 import {
   getCashFlow,
@@ -17,21 +18,23 @@ import {
   signOffClosePeriod,
   uploadReceipt,
 } from '@/api';
+import type { CloseReadiness } from '@/api';
 import type {
   Business,
   CashFlowSummary,
   Category,
-  CloseReadiness,
   CloseReadinessItem,
   CurrentUser,
   OwnerInsightsSummary,
 } from '@/types/domain';
+import { formatMonthLabel } from '@/lib/dates';
 import type { AppView, TransactionViewFilters } from '@/types/navigation';
 import { fmt$ } from '@/lib/format';
 import { useToast } from '@/hooks/useToast';
 import { AppShell } from './AppShell';
 import { BusinessScorecard, Delta, Sparkline, buildBriefing, iconForCloseItem } from './insights/OwnerInsightsBriefing';
 import { exportInsightsCsv, startOfMonth, today, trailing12From } from './insights/ownerInsightsUtils';
+import { DateRangePill } from './transactions/TransactionPageParts';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/cn';
@@ -78,11 +81,15 @@ const emptyCloseReadiness: CloseReadiness = {
   from: '',
   to: '',
   biz: 'all',
+  closeMonth: null,
   signedOff: false,
   signedOffAt: null,
+  changedSinceSignOff: 0,
   canSignOff: false,
   items: [],
 };
+
+type Section = 'insights' | 'cashFlow' | 'categories' | 'close';
 
 export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLogout }: Props) {
   const { toast } = useToast();
@@ -96,7 +103,10 @@ export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLo
   const [to, setTo] = useState(today());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // One failed call only blanks its own section, not the whole page.
+  const [sectionErrors, setSectionErrors] = useState<Partial<Record<Section, string>>>({});
   const [refreshKey, setRefreshKey] = useState(0);
+  const requestSeq = useRef(0);
 
   useEffect(() => {
     listBusinesses()
@@ -105,9 +115,9 @@ export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLo
   }, []);
 
   useEffect(() => {
+    const requestId = ++requestSeq.current;
     setLoading(true);
-    setError('');
-    Promise.all([
+    Promise.allSettled([
       getOwnerInsights({ from, to, biz: business }),
       getCashFlow({
         from: trailing12From(to),
@@ -118,14 +128,25 @@ export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLo
       listCategories({ from, to, biz: business }),
       getCloseReadiness({ from, to, biz: business }),
     ])
-      .then(([insightsResult, cashFlowResult, categoryRows, closeResult]) => {
-        setSummary(insightsResult);
-        setCashFlow(cashFlowResult);
-        setCategories(categoryRows);
-        setCloseReadiness(closeResult);
-      })
-      .catch((loadError: Error) => setError(loadError.message))
-      .finally(() => setLoading(false));
+      .then(([insightsResult, cashFlowResult, categoryResult, closeResult]) => {
+        if (requestSeq.current !== requestId) return;
+        const errors: Partial<Record<Section, string>> = {};
+        const failed = (result: PromiseSettledResult<unknown>) => (
+          result.status === 'rejected'
+            ? (result.reason instanceof Error ? result.reason.message : 'Could not load.')
+            : undefined
+        );
+        if (insightsResult.status === 'fulfilled') setSummary(insightsResult.value);
+        else { setSummary(emptyInsights); errors.insights = failed(insightsResult); }
+        if (cashFlowResult.status === 'fulfilled') setCashFlow(cashFlowResult.value);
+        else { setCashFlow(emptyCashFlow); errors.cashFlow = failed(cashFlowResult); }
+        if (categoryResult.status === 'fulfilled') setCategories(categoryResult.value);
+        else { setCategories([]); errors.categories = failed(categoryResult); }
+        if (closeResult.status === 'fulfilled') setCloseReadiness(closeResult.value);
+        else { setCloseReadiness(emptyCloseReadiness); errors.close = failed(closeResult); }
+        setSectionErrors(errors);
+        setLoading(false);
+      });
   }, [business, from, refreshKey, to]);
 
   const selectedBusinessDbId = business === 'all' ? undefined : businesses.find((item) => item.id === business)?.dbId;
@@ -159,11 +180,16 @@ export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLo
     onViewChange?.(item.actionView);
   };
 
+  const closeMonthLabel = closeReadiness.closeMonth ? formatMonthLabel(closeReadiness.closeMonth) : null;
   const handleSignOff = async () => {
     try {
       const result = await signOffClosePeriod({ from, to, biz: business });
       setCloseReadiness(result);
-      toast({ variant: 'success', title: 'Period signed off', description: `${from} to ${to}` });
+      toast({
+        variant: 'success',
+        title: `${result.closeMonth ? formatMonthLabel(result.closeMonth) : 'Month'} signed off`,
+        description: 'Later edits in this month will be flagged here.',
+      });
     } catch (signOffError) {
       toast({
         variant: 'destructive',
@@ -206,32 +232,21 @@ export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLo
           <div className="rounded-xl border border-coral/30 bg-coral/10 p-4 text-sm font-bold text-coral-ink">{error}</div>
         )}
 
-        {/* Date selector */}
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-ink2/10 bg-paper px-3 py-2 shadow-sm">
-          <span className="font-mono text-[10px] font-medium uppercase tracking-wider text-dim">Period</span>
-          <input
-            type="date"
-            value={from}
-            onChange={(event) => setFrom(event.target.value)}
-            className="h-8 rounded-md border border-ink2/10 bg-paper px-2 text-xs"
-          />
-          <span className="text-dim">→</span>
-          <input
-            type="date"
-            value={to}
-            onChange={(event) => setTo(event.target.value)}
-            className="h-8 rounded-md border border-ink2/10 bg-paper px-2 text-xs"
-          />
+        {/* Period selector — same picker as Transactions / Cash Flow */}
+        <div className="flex flex-wrap items-center gap-2">
+          <DateRangePill from={from} to={to} onChange={({ from: f, to: t }) => { setFrom(f); setTo(t); }} />
         </div>
 
-        {/* HERO: magazine-style headline + AI narrative + KPI sidecards */}
+        {sectionErrors.insights && <SectionError message={`Brief unavailable: ${sectionErrors.insights}`} />}
+
+        {/* HERO: headline + summary narrative (templated from the numbers) + KPI sidecards */}
         <div className="grid gap-3 lg:grid-cols-[1.5fr_1fr]">
           <div className="overflow-hidden rounded-2xl border border-ink2/10 bg-strong p-7 text-strong-foreground shadow-md">
             <div className="flex items-center gap-3">
               <span className="rounded-full bg-strong-foreground/10 px-2.5 py-1 font-mono text-[10px] font-bold uppercase tracking-wider text-strong-foreground/80">
                 {briefDate.tag}
               </span>
-              <span className="font-mono text-[10px] uppercase tracking-wider text-strong-foreground/60">Morning brief</span>
+              <span className="font-mono text-[10px] uppercase tracking-wider text-strong-foreground/60">Period brief</span>
             </div>
             <h1 className="mt-4 font-display text-4xl font-bold leading-[1.05] tracking-tight">
               {briefing.headlinePrefix}{' '}
@@ -243,7 +258,7 @@ export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLo
               )}
             </h1>
             <div className="mt-5 flex items-start gap-3 rounded-xl bg-strong-foreground/5 p-4">
-              <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-lemon" />
+              <FileText className="mt-0.5 h-4 w-4 shrink-0 text-strong-foreground/60" aria-label="Summary" />
               <div className="flex-1 text-sm leading-relaxed text-strong-foreground/85">{briefing.narrative}</div>
             </div>
             <div className="mt-5 flex flex-wrap items-center gap-2">
@@ -357,7 +372,9 @@ export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLo
               <h3 className="font-display text-xl font-bold text-ink">By business, vs prior period</h3>
             </div>
           </div>
-          <BusinessScorecard cashFlow={cashFlow} insights={summary} />
+          {sectionErrors.cashFlow
+            ? <SectionError message={`Scorecard unavailable: ${sectionErrors.cashFlow}`} />
+            : <BusinessScorecard cashFlow={cashFlow} insights={summary} />}
         </Card>
 
         {/* Bottom: top purchases + close queue */}
@@ -388,7 +405,7 @@ export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLo
                       <span className="inline-flex items-center gap-1.5 text-xs">
                         <span
                           className="h-1.5 w-1.5 rounded-full"
-                          style={{ background: biz?.color ?? '#ccc' }}
+                          style={{ background: biz?.color ?? 'hsl(var(--color-dim))' }}
                         />
                         <span className="truncate text-dim">{biz?.name ?? purchase.biz}</span>
                       </span>
@@ -409,16 +426,22 @@ export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLo
                   Close queue
                 </div>
                 <h3 className="font-display text-lg font-bold text-ink">
-                  {closeReadiness.signedOff ? 'Signed off' : `${closeReadiness.items.length} item${closeReadiness.items.length === 1 ? '' : 's'} left`}
+                  {closeReadiness.signedOff
+                    ? `${closeMonthLabel ?? 'Month'} signed off`
+                    : `${closeReadiness.items.length} item${closeReadiness.items.length === 1 ? '' : 's'} left`}
                 </h3>
-                {closeReadiness.signedOffAt && (
+                {closeReadiness.signedOffAt ? (
                   <div className="text-xs text-dim">Signed {new Date(closeReadiness.signedOffAt).toLocaleString()}</div>
+                ) : closeMonthLabel ? (
+                  <div className="text-xs text-dim">Month close · {closeMonthLabel}</div>
+                ) : (
+                  <div className="text-xs text-dim">Pick a range inside one month to sign it off</div>
                 )}
               </div>
               {closeReadiness.canSignOff ? (
                 <Button size="sm" onClick={handleSignOff}>
                   <CheckCircle className="h-3.5 w-3.5" />
-                  Sign off
+                  Sign off {closeMonthLabel ?? ''}
                 </Button>
               ) : closeReadiness.items.length > 0 && (
                 <Button size="sm" onClick={() => handleCloseItem(closeReadiness.items[0])}>
@@ -426,10 +449,24 @@ export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLo
                 </Button>
               )}
             </div>
-            {closeReadiness.signedOff ? (
-              <div className="rounded-lg bg-sage/15 p-4 text-sm font-bold text-sage-ink">
-                <CheckCircle className="mb-2 inline h-4 w-4" /> This period has been signed off.
-              </div>
+            {sectionErrors.close ? (
+              <SectionError message={`Close queue unavailable: ${sectionErrors.close}`} />
+            ) : closeReadiness.signedOff ? (
+              (closeReadiness.changedSinceSignOff ?? 0) > 0 ? (
+                <div className="rounded-lg bg-coral/15 p-4 text-sm text-coral-ink">
+                  <div className="flex items-center gap-2 font-bold">
+                    <AlertTriangle className="h-4 w-4" />
+                    {closeReadiness.changedSinceSignOff} transaction{closeReadiness.changedSinceSignOff === 1 ? '' : 's'} changed since sign-off
+                  </div>
+                  <div className="mt-1 text-xs">
+                    Added or edited after {closeMonthLabel ?? 'this month'} was signed off — worth a look before filing.
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg bg-sage/15 p-4 text-sm font-bold text-sage-ink">
+                  <CheckCircle className="mb-2 inline h-4 w-4" /> {closeMonthLabel ?? 'This month'} is signed off. No changes since.
+                </div>
+              )
             ) : closeReadiness.items.length === 0 ? (
               <div className="rounded-lg bg-sage/15 p-4 text-sm font-bold text-sage-ink">
                 <CheckCircle className="mb-2 inline h-4 w-4" /> Everything is clean for this period.
@@ -468,5 +505,11 @@ export function OwnerInsightsPage({ user, onViewChange, onOpenTransactions, onLo
         )}
       </div>
     </AppShell>
+  );
+}
+
+function SectionError({ message }: { message: string }) {
+  return (
+    <div className="rounded-xl border border-coral/30 bg-coral/10 p-3 text-sm font-bold text-coral-ink">{message}</div>
   );
 }

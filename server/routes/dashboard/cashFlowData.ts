@@ -183,3 +183,81 @@ export function sumCashFlowPeriods(rows: Array<{
     netDeltaPct: totals.previousNetCents !== 0 ? Math.round((netDeltaCents / Math.abs(totals.previousNetCents)) * 100) : 0,
   };
 }
+
+export interface DailyBusinessMovementRow {
+  date: string;
+  businessId: string;
+  businessName: string;
+  color: string;
+  outflowCents: number;
+  inflowCents: number;
+}
+
+/**
+ * One grouped query for everything /summary needs: operating outflow and inflow per
+ * (day, business) across the whole span. Windows are then summed in memory instead of
+ * issuing a pair of queries per bucket / trailing month / business breakdown.
+ */
+export async function dailyBusinessMovement(
+  from: string,
+  to: string,
+  filters: readonly SQL[],
+): Promise<DailyBusinessMovementRow[]> {
+  const rows = await db.select({
+    date: transactions.date,
+    businessId: businesses.key,
+    businessName: businesses.name,
+    color: businesses.color,
+    outflowCents: sql<number>`coalesce(abs(sum(CASE WHEN ${transactions.amountCents} < 0 AND ${categoryIsVisibleSpend()} THEN ${transactions.amountCents} ELSE 0 END)), 0)::bigint`,
+    inflowCents: sql<number>`coalesce(sum(CASE WHEN ${transactions.amountCents} > 0 AND NOT (${transferCategoryFilter()}) THEN ${transactions.amountCents} ELSE 0 END), 0)::bigint`,
+  }).from(transactions)
+    .innerJoin(businesses, eq(transactions.businessId, businesses.id))
+    .leftJoin(accounts, eq(transactions.accountId, accounts.id))
+    .leftJoin(categories, eq(transactions.categoryId, categories.id))
+    .where(and(gte(transactions.date, from), lte(transactions.date, to), ...filters))
+    .groupBy(transactions.date, businesses.key, businesses.name, businesses.color);
+  return rows.map((row) => ({
+    date: String(row.date),
+    businessId: row.businessId,
+    businessName: row.businessName,
+    color: row.color,
+    outflowCents: Number(row.outflowCents ?? 0),
+    inflowCents: Number(row.inflowCents ?? 0),
+  }));
+}
+
+export interface WindowMovement extends MovementSummaryCents {
+  outflowBusinessCents: Array<{ businessId: string; businessName: string; color: string; cents: number }>;
+  inflowBusinessCents: Array<{ businessId: string; businessName: string; color: string; cents: number }>;
+}
+
+/** Sum daily per-business rows into a [from, to] window (inclusive, ISO date strings). */
+export function movementForWindow(rows: DailyBusinessMovementRow[], from: string, to: string): WindowMovement {
+  let outflowCents = 0;
+  let inflowCents = 0;
+  const outflow = new Map<string, { businessId: string; businessName: string; color: string; cents: number }>();
+  const inflow = new Map<string, { businessId: string; businessName: string; color: string; cents: number }>();
+  for (const row of rows) {
+    if (row.date < from || row.date > to) continue;
+    outflowCents += row.outflowCents;
+    inflowCents += row.inflowCents;
+    if (row.outflowCents) {
+      const entry = outflow.get(row.businessId) ?? { businessId: row.businessId, businessName: row.businessName, color: row.color, cents: 0 };
+      entry.cents += row.outflowCents;
+      outflow.set(row.businessId, entry);
+    }
+    if (row.inflowCents) {
+      const entry = inflow.get(row.businessId) ?? { businessId: row.businessId, businessName: row.businessName, color: row.color, cents: 0 };
+      entry.cents += row.inflowCents;
+      inflow.set(row.businessId, entry);
+    }
+  }
+  const sorted = (map: typeof outflow) => [...map.values()].filter((row) => row.cents > 0).sort((a, b) => b.cents - a.cents);
+  return {
+    outflowCents,
+    inflowCents,
+    netCents: inflowCents - outflowCents,
+    outflowBusinessCents: sorted(outflow),
+    inflowBusinessCents: sorted(inflow),
+  };
+}

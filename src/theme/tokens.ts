@@ -51,13 +51,25 @@ export const shadows = {
   xl: '0 30px 80px rgba(21, 20, 15, 0.18), 0 12px 24px rgba(21, 20, 15, 0.08)',
 } as const;
 
-/** Same accent ramp the categories donut and tiles draw from. */
-export const accentRamp = [
-  colors.coral,
-  colors.sky,
-  colors.plum,
-  colors.sage,
-  colors.pink,
-  colors.purple,
-  colors.cream,
+/**
+ * Categorical chart palette, as theme-aware CSS colors (see --chart-* in global.css).
+ * Every step is a mid-tone that reads on white, cream, lemon tiles and the dark theme —
+ * the old ramp's plum vanished on dark surfaces and cream vanished on light ones.
+ * Use in `style` (background / fill / stroke), not SVG presentation attributes.
+ */
+export const chartPalette = [
+  'hsl(var(--chart-1))',
+  'hsl(var(--chart-2))',
+  'hsl(var(--chart-3))',
+  'hsl(var(--chart-4))',
+  'hsl(var(--chart-5))',
+  'hsl(var(--chart-6))',
+  'hsl(var(--chart-7))',
+  'hsl(var(--chart-8))',
 ] as const;
+
+/** Same ramp the categories donut and tiles draw from. */
+export const accentRamp = chartPalette;
+
+/** Muted comparison series ("previous period") — follows the theme's ink. */
+export const chartMuted = 'hsl(var(--chart-muted))';
