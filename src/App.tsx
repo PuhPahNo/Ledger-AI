@@ -9,11 +9,41 @@ import { AssistantPage } from './components/AssistantPage';
 import { SettingsPage } from './components/settings/SettingsPage';
 import { clearHomeCache } from './hooks/useHome';
 import { clearInboxCache } from './hooks/useInbox';
+import { toast } from './hooks/useToast';
 import { clearConversation } from './components/assistant/conversationStorage';
 import { parseHash, resolveNavTarget, routeToHash } from './lib/routes';
 import { LEDGER_DATA_CHANGED_EVENT } from './types/assistant';
 import type { CurrentUser } from './types/domain';
 import type { AppRoute, NavTarget, TransactionViewFilters } from './types/navigation';
+
+const OAUTH_ERROR_TEXT: Record<string, string> = {
+  already_connected: 'That QuickBooks company is already connected to another business.',
+  access_denied: 'QuickBooks access was not granted.',
+};
+
+/**
+ * Gmail and QuickBooks OAuth callbacks land on /?connected=… or /?quickbooks_error=…. Show the
+ * outcome once, open Settings where the connection lives, and strip the query from the URL.
+ */
+function consumeOAuthResult(): void {
+  if (typeof window === 'undefined') return;
+  const params = new URLSearchParams(window.location.search);
+  const connected = params.get('connected');
+  const qboError = params.get('quickbooks_error');
+  if (!connected && !qboError) return;
+  if (connected === 'quickbooks') {
+    toast({ variant: 'success', title: 'QuickBooks connected', description: 'The first sync is running; mappings will appear shortly.' });
+  } else if (connected === 'gmail') {
+    toast({ variant: 'success', title: 'Gmail connected', description: 'Receipts will start arriving as they are found.' });
+  } else if (qboError) {
+    toast({
+      variant: 'destructive',
+      title: 'QuickBooks connection failed',
+      description: params.get('message') ?? OAUTH_ERROR_TEXT[qboError] ?? 'Try connecting again.',
+    });
+  }
+  window.history.replaceState(null, '', `${window.location.pathname}#settings`);
+}
 
 function routeFromLocation(): AppRoute {
   if (typeof window === 'undefined') return { view: 'home' };
@@ -69,6 +99,7 @@ export default function App() {
       writeRouteHash(next, 'replace');
       setRouteState(next);
     };
+    consumeOAuthResult();
     syncRoute();
     window.addEventListener('hashchange', syncRoute);
     window.addEventListener('popstate', syncRoute);
